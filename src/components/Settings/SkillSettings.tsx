@@ -14,6 +14,12 @@ const RECOMMENDED_SKILLS = [
   'GitHub', '编程代理', 'windows-control',
   '内容摘要', 'find-skills', 'tavily',
   'Self-Improving Agent (With Self-Reflection)',
+  // from ClawX
+  'Notion', 'Obsidian', '技能创建器', '会话日志',
+  '视频帧提取', 'Oracle',
+  // from ClawHub
+  'multi-search-engine', 'agent-browser', 'mog',
+  'gembox-skill', '纳米PDF',
 ]
 
 const KEY_URLS: Record<string, string> = {
@@ -26,6 +32,8 @@ const KEY_URLS: Record<string, string> = {
   'GOOGLE_PLACES_API_KEY': 'https://console.cloud.google.com/',
   'EMAIL_PASS': 'https://service.mail.qq.com/detail/0/75',
   'TAVILY_API_KEY': 'https://tavily.com/',
+  'OPENAI_API_KEY': 'https://platform.openai.com/api-keys',
+  'GEMINI_API_KEY': 'https://aistudio.google.com/apikey',
 }
 
 const KEY_TIPS: Record<string, string> = {
@@ -69,6 +77,7 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState<TabKey>('recommended')
   const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [installing, setInstalling] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -120,6 +129,32 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
       s.name === name ? { ...s, apiKey: value } : s
     ))
     setStatus(null)
+  }, [])
+
+  const handleInstallDep = useCallback(async (skillName: string) => {
+    setInstalling(prev => ({ ...prev, [skillName]: true }))
+    setStatus(null)
+    try {
+      const check = await window.electronAPI.skills.canInstall(skillName)
+      if (!check.canInstall) {
+        setStatus({ type: 'error', message: check.reason ?? '无法自动安装' })
+        return
+      }
+      setStatus({ type: 'success', message: `正在安装 ${skillName} 依赖...` })
+      const result = await window.electronAPI.skills.installDep(skillName)
+      if (result.ok) {
+        setStatus({ type: 'success', message: `${skillName} 依赖安装成功，刷新中...` })
+        // 重新扫描技能列表
+        const list = await window.electronAPI.skills.list()
+        setSkills(list)
+      } else {
+        setStatus({ type: 'error', message: result.error ?? '安装失败' })
+      }
+    } catch {
+      setStatus({ type: 'error', message: '安装过程出错' })
+    } finally {
+      setInstalling(prev => ({ ...prev, [skillName]: false }))
+    }
   }, [])
 
   const handleSave = useCallback(async () => {
@@ -243,6 +278,15 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
                     <span className={`skill-status-badge ${statusClass(skill)}`}>
                       {statusLabel(skill)}
                     </span>
+                    {skill.status === 'missing' && skill.missingReason?.startsWith('需安装') && (
+                      <button
+                        className="skill-install-btn"
+                        disabled={installing[skill.name]}
+                        onClick={e => { e.stopPropagation(); handleInstallDep(skill.name) }}
+                      >
+                        {installing[skill.name] ? '安装中...' : '一键安装'}
+                      </button>
+                    )}
                     {tab === 'recommended' && getSkillTags(skill).map(tag => (
                       <span key={tag} className={`skill-tag${tag === '需要 API Key' ? ' skill-tag-warn' : ''}`}>
                         {tag}

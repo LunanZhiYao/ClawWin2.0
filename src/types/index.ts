@@ -59,6 +59,8 @@ interface ElectronConfig {
   saveTimeout: (ms: number) => Promise<{ ok: boolean; error?: string }>
   getSkipUpdate: () => Promise<boolean>
   saveSkipUpdate: (skip: boolean) => Promise<{ ok: boolean; error?: string }>
+  getAutoCompact: () => Promise<boolean>
+  saveAutoCompact: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
 }
 
 interface ElectronSessions {
@@ -80,6 +82,8 @@ interface ElectronSkills {
   list: () => Promise<SkillInfo[]>
   getConfig: () => Promise<SkillsConfig>
   saveConfig: (config: SkillsConfig) => Promise<{ ok: boolean; error?: string }>
+  canInstall: (skillName: string) => Promise<{ canInstall: boolean; reason?: string }>
+  installDep: (skillName: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 interface ElectronPairing {
@@ -103,6 +107,18 @@ interface ElectronOllama {
   setModelsDir: (dir: string) => Promise<void>
   onProgress: (callback: (state: LocalModelState) => void) => () => void
   onStatusChange: (callback: (status: OllamaStatus) => void) => () => void
+}
+
+interface ElectronCww {
+  login: (params: { serverUrl: string; email: string; password: string }) => Promise<{ token: string; user: { id: string; email: string; nickname: string; credits: number } }>
+  register: (params: { serverUrl: string; email: string; password: string; nickname?: string; code: string }) => Promise<{ token: string; user: { id: string; email: string; nickname: string; credits: number } }>
+  sendCode: (params: { serverUrl: string; email: string }) => Promise<{ message: string }>
+  fetchModels: (params: { serverUrl: string; token: string }) => Promise<{ models: Array<{ id: string; name: string; provider: string; inputRate: number; outputRate: number; vision: boolean }> }>
+  getProfile: (params: { serverUrl: string; token: string }) => Promise<{ user: { email: string; nickname: string; credits: number } }>
+  createOrder: (params: { serverUrl: string; token: string; amount: number; payType: string }) => Promise<{ orderNo: string; payUrl: string; credits: number }>
+  checkOrder: (params: { serverUrl: string; token: string; orderNo: string }) => Promise<{ order: { status: string; credits: number } }>
+  getState: () => Promise<{ email?: string; nickname?: string; credits?: number; serverUrl?: string } | null>
+  saveState: (state: { email: string; nickname: string; credits: number; serverUrl: string }) => Promise<{ ok: boolean }>
 }
 
 export interface UpdateInfo {
@@ -146,6 +162,7 @@ interface ElectronAPI {
   skills: ElectronSkills
   pairing: ElectronPairing
   ollama: ElectronOllama
+  cww: ElectronCww
 }
 
 declare global {
@@ -179,6 +196,7 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  thinking?: string
   attachments?: ChatAttachment[]
   timestamp: number
   status?: 'sending' | 'queued' | 'streaming' | 'done' | 'error'

@@ -4,6 +4,7 @@ import os from 'node:os'
 import { execSync } from 'node:child_process'
 import { getOpenclawPath } from './node-runtime'
 import { getOpenclawConfigPath } from './setup-wizard'
+import { getLocalNpmBinDir, getBundledBinDir } from './skills-installer'
 
 export interface SkillInfo {
   name: string
@@ -34,11 +35,38 @@ export type SkillsConfig = Record<string, SkillEntryConfig>
 // Cache binary existence checks for the lifetime of the process
 const binExistsCache = new Map<string, boolean>()
 
+/** 清除二进制检测缓存（安装新依赖后调用） */
+export function clearBinCache(): void {
+  binExistsCache.clear()
+}
+
 /**
  * 检查系统是否安装了指定的命令行工具
+ * 同时检查本地 skill-bins 目录
  */
 function binExists(name: string): boolean {
   if (binExistsCache.has(name)) return binExistsCache.get(name)!
+
+  // 1. 检查本地 npm skill-bins 目录
+  const localBinDir = getLocalNpmBinDir()
+  const ext = os.platform() === 'win32' ? '.cmd' : ''
+  const localBinPath = path.join(localBinDir, name + ext)
+  if (fs.existsSync(localBinPath)) {
+    binExistsCache.set(name, true)
+    return true
+  }
+
+  // 2. 检查 bundled 预装目录 (如 bundled/agent-browser/)
+  const bundledBinDir = getBundledBinDir(name)
+  if (bundledBinDir) {
+    const bundledBinPath = path.join(bundledBinDir, name + ext)
+    if (fs.existsSync(bundledBinPath)) {
+      binExistsCache.set(name, true)
+      return true
+    }
+  }
+
+  // 3. 检查系统 PATH
   try {
     const cmd = os.platform() === 'win32' ? `where ${name}` : `which ${name}`
     execSync(cmd, { stdio: 'ignore', timeout: 3000 })
@@ -192,6 +220,10 @@ const FALLBACK_REQUIREMENTS: Record<string, { bins?: string[]; anyBins?: string[
   'wacli': { bins: ['wacli'] },
   'weather': {},
   'windows-control': { os: ['win32'] },
+  'multi-search-engine': {},
+  'agent-browser': {},
+  'mog': { bins: ['mog'] },
+  'gembox-skill': { bins: ['dotnet'] },
 }
 
 /**

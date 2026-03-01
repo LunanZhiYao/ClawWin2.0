@@ -193,7 +193,7 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
     const setup = config as unknown as SetupConfig
     const now = (config._now as string) || new Date().toISOString()
     const gatewayToken = setup.gatewayToken || generateToken()
-    const gatewayPort = setup.gatewayPort || 39527
+    const gatewayPort = setup.gatewayPort || 18888
     const workspace = resolveWorkspace(setup.workspace)
     const apiFormat = setup.apiFormat || 'openai-completions'
     const providerModelKey = `${setup.provider}/${setup.modelId}`

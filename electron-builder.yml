@@ -19,6 +19,10 @@ extraResources:
     to: bundled/openclaw/
     filter:
       - "**/*"
+  - from: bundled/agent-browser/
+    to: bundled/agent-browser/
+    filter:
+      - "**/*"
   - from: assets/icon.ico
     to: assets/icon.ico
 

@@ -7,11 +7,19 @@ import { LocalModelSettings } from './LocalModelSettings'
 interface ModelSettingsProps {
   currentProvider?: string
   currentModel?: string
+  initialTab?: 'cloud' | 'clawwin' | 'local'
   onClose: () => void
   onSaved: () => void
+  onCwwStateChange?: (state: {
+    loggedIn: boolean
+    email: string
+    nickname: string
+    credits: number
+  }) => void
 }
 
 const PROVIDER_TAGS: Record<string, { label: string; className: string }> = {
+  clawwinweb: { label: '免Key·积分制', className: 'tag-recommended' },
   minimax: { label: '国内直连', className: 'tag-domestic' },
   deepseek: { label: '国内直连', className: 'tag-domestic' },
   anthropic: { label: '需科学上网', className: 'tag-international' },
@@ -56,10 +64,12 @@ const PROVIDER_TUTORIAL_URLS: Record<string, string> = {
 export const ModelSettings: React.FC<ModelSettingsProps> = ({
   currentProvider,
   currentModel,
+  initialTab,
   onClose,
   onSaved,
+  onCwwStateChange,
 }) => {
-  const [activeTab, setActiveTab] = useState<'cloud' | 'local'>('cloud')
+  const [activeTab, setActiveTab] = useState<'cloud' | 'clawwin' | 'local'>(initialTab ?? 'clawwin')
   const [selectedProvider, setSelectedProvider] = useState<string>(currentProvider ?? '')
   const [selectedModel, setSelectedModel] = useState<string>(currentModel ?? '')
   const [apiKey, setApiKey] = useState<string>('')
@@ -74,6 +84,24 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
   const [customModelName, setCustomModelName] = useState('')
   const [customFormat, setCustomFormat] = useState('openai-completions')
   const [isCustom, setIsCustom] = useState(false)
+
+  // ClawWinWeb state
+  const [cwwView, setCwwView] = useState<'login' | 'register' | 'logged-in' | 'recharge'>('login')
+  const [cwwEmail, setCwwEmail] = useState('')
+  const [cwwPassword, setCwwPassword] = useState('')
+  const [cwwNickname, setCwwNickname] = useState('')
+  const [cwwCode, setCwwCode] = useState('')
+  const [cwwToken, setCwwToken] = useState('')
+  const [cwwCredits, setCwwCredits] = useState(0)
+  const [cwwModels, setCwwModels] = useState<Array<{id:string;name:string;provider:string;inputRate:number;outputRate:number}>>([])
+  const [cwwError, setCwwError] = useState('')
+  const [cwwLoading, setCwwLoading] = useState(false)
+  const [cwwCodeCountdown, setCwwCodeCountdown] = useState(0)
+  const cwwServerUrl = 'https://www.mybotworld.com'
+  const [rechargeAmount, setRechargeAmount] = useState(30)
+  const [rechargeStatus, setRechargeStatus] = useState<'idle' | 'paying' | 'success'>('idle')
+  const [showCustomRecharge, setShowCustomRecharge] = useState(false)
+  const [customRechargeInput, setCustomRechargeInput] = useState('')
 
   // Load current API key when provider changes
   useEffect(() => {
@@ -125,6 +153,202 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
     return () => { cancelled = true }
   }, [currentProvider])
 
+  // ClawWinWeb: restore login state when clawwin tab selected
+  useEffect(() => {
+    if (activeTab !== 'clawwin') return
+    setSelectedProvider('clawwinweb')
+    let cancelled = false
+
+    const restore = async () => {
+      try {
+        const state = await window.electronAPI.cww.getState()
+        const savedKey = await window.electronAPI.config.getApiKey('clawwinweb:default')
+        if (cancelled) return
+        if (state && state.email && savedKey) {
+          setCwwEmail(state.email || '')
+          setCwwNickname(state.nickname || '')
+          setCwwCredits(state.credits || 0)
+          setCwwToken(savedKey)
+          setApiKey(savedKey)
+          setCwwView('logged-in')
+          fetchCwwModelsAndProfile(savedKey)
+        }
+      } catch {
+        // no saved state
+      }
+    }
+    restore()
+
+    return () => { cancelled = true }
+  }, [activeTab])
+
+  // ClawWinWeb: countdown timer for verification code
+  useEffect(() => {
+    if (cwwCodeCountdown <= 0) return
+    const timer = setTimeout(() => setCwwCodeCountdown((c) => c - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [cwwCodeCountdown])
+
+  const fetchCwwModelsAndProfile = useCallback(async (token: string) => {
+    try {
+      const [modelsRes, profileRes] = await Promise.all([
+        window.electronAPI.cww.fetchModels({ serverUrl: cwwServerUrl, token }),
+        window.electronAPI.cww.getProfile({ serverUrl: cwwServerUrl, token }),
+      ])
+      setCwwModels(modelsRes.models || [])
+      setCwwCredits(profileRes.user?.credits ?? 0)
+      setCwwNickname(profileRes.user?.nickname ?? '')
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.includes('401') || message.toLowerCase().includes('unauthorized')) {
+        setCwwToken('')
+        setApiKey('')
+        setCwwView('login')
+        setCwwError('登录已过期，请重新登录')
+      }
+    }
+  }, [])
+
+  const handleCwwLogin = useCallback(async () => {
+    setCwwError('')
+    setCwwLoading(true)
+    try {
+      const res = await window.electronAPI.cww.login({
+        serverUrl: cwwServerUrl,
+        email: cwwEmail,
+        password: cwwPassword,
+      })
+      const token = res.token
+      setCwwToken(token)
+      setApiKey(token)
+      setCwwCredits(res.user?.credits ?? 0)
+      setCwwNickname(res.user?.nickname ?? '')
+      setCwwView('logged-in')
+      await window.electronAPI.cww.saveState({
+        email: cwwEmail,
+        nickname: res.user?.nickname ?? '',
+        credits: res.user?.credits ?? 0,
+        serverUrl: cwwServerUrl,
+      })
+      onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: res.user?.nickname ?? '', credits: res.user?.credits ?? 0 })
+      fetchCwwModelsAndProfile(token)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setCwwError(message || '登录失败')
+    } finally {
+      setCwwLoading(false)
+    }
+  }, [cwwEmail, cwwPassword, fetchCwwModelsAndProfile])
+
+  const handleCwwRegister = useCallback(async () => {
+    setCwwError('')
+    setCwwLoading(true)
+    try {
+      const res = await window.electronAPI.cww.register({
+        serverUrl: cwwServerUrl,
+        email: cwwEmail,
+        password: cwwPassword,
+        nickname: cwwNickname,
+        code: cwwCode,
+      })
+      const token = res.token
+      setCwwToken(token)
+      setApiKey(token)
+      setCwwCredits(res.user?.credits ?? 0)
+      setCwwNickname(res.user?.nickname ?? '')
+      setCwwView('logged-in')
+      await window.electronAPI.cww.saveState({
+        email: cwwEmail,
+        nickname: res.user?.nickname ?? '',
+        credits: res.user?.credits ?? 0,
+        serverUrl: cwwServerUrl,
+      })
+      onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: res.user?.nickname ?? '', credits: res.user?.credits ?? 0 })
+      fetchCwwModelsAndProfile(token)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setCwwError(message || '注册失败')
+    } finally {
+      setCwwLoading(false)
+    }
+  }, [cwwEmail, cwwPassword, cwwNickname, cwwCode, fetchCwwModelsAndProfile])
+
+  const handleCwwSendCode = useCallback(async () => {
+    setCwwError('')
+    try {
+      await window.electronAPI.cww.sendCode({ serverUrl: cwwServerUrl, email: cwwEmail })
+      setCwwCodeCountdown(60)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setCwwError(message || '发送验证码失败')
+    }
+  }, [cwwEmail])
+
+  const handleCwwLogout = useCallback(() => {
+    setCwwToken('')
+    setCwwModels([])
+    setCwwCredits(0)
+    setApiKey('')
+    setCwwView('login')
+    setCwwEmail('')
+    setCwwPassword('')
+    setCwwError('')
+    window.electronAPI.cww.saveState({ email: '', nickname: '', credits: 0, serverUrl: cwwServerUrl }).catch(() => {})
+    onCwwStateChange?.({ loggedIn: false, email: '', nickname: '', credits: 0 })
+  }, [])
+
+  const handleRecharge = useCallback(async () => {
+    setCwwError('')
+    setRechargeStatus('paying')
+    try {
+      const res = await window.electronAPI.cww.createOrder({
+        serverUrl: cwwServerUrl,
+        token: cwwToken,
+        amount: rechargeAmount,
+        payType: 'alipay',
+      })
+      if (res.payUrl) {
+        window.electronAPI.shell.openExternal(res.payUrl)
+      }
+      // Poll for payment status
+      const pollInterval = setInterval(async () => {
+        try {
+          const checkRes = await window.electronAPI.cww.checkOrder({
+            serverUrl: cwwServerUrl,
+            token: cwwToken,
+            orderNo: res.orderNo,
+          })
+          if (checkRes.order?.status === 'paid') {
+            clearInterval(pollInterval)
+            setRechargeStatus('success')
+            // Refresh credits
+            try {
+              const profileRes = await window.electronAPI.cww.getProfile({ serverUrl: cwwServerUrl, token: cwwToken })
+              setCwwCredits(profileRes.user?.credits ?? 0)
+              await window.electronAPI.cww.saveState({
+                email: cwwEmail,
+                nickname: cwwNickname,
+                credits: profileRes.user?.credits ?? 0,
+                serverUrl: cwwServerUrl,
+              })
+              onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: cwwNickname, credits: profileRes.user?.credits ?? 0 })
+            } catch {}
+          }
+        } catch {
+          clearInterval(pollInterval)
+          setRechargeStatus('idle')
+          setCwwError('查询订单状态失败')
+        }
+      }, 3000)
+      // Auto-stop polling after 5 minutes
+      setTimeout(() => clearInterval(pollInterval), 300000)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setCwwError(message || '创建订单失败')
+      setRechargeStatus('idle')
+    }
+  }, [cwwToken, rechargeAmount, cwwEmail, cwwNickname])
+
   const getProviderById = useCallback(
     (id: string): ModelProvider | undefined => {
       if (id === 'custom' && isCustom) {
@@ -142,9 +366,24 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
           }],
         }
       }
+      if (id === 'clawwinweb' && cwwModels.length > 0) {
+        return {
+          id: 'clawwinweb',
+          name: 'ClawWinWeb',
+          baseUrl: `${cwwServerUrl}/api/v1`,
+          apiFormat: 'openai-completions',
+          models: cwwModels.map((m) => ({
+            id: m.id,
+            name: m.name,
+            reasoning: false,
+            contextWindow: 128000,
+            maxTokens: 32768,
+          })),
+        }
+      }
       return MODEL_PROVIDERS.find((p) => p.id === id)
     },
-    [isCustom, customUrl, customFormat, customModelId, customModelName]
+    [isCustom, customUrl, customFormat, customModelId, customModelName, cwwModels]
   )
 
   const getModelById = useCallback(
@@ -243,6 +482,12 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
         <div className="settings-header">
           <div className="model-settings-tabs">
             <button
+              className={`model-settings-tab${activeTab === 'clawwin' ? ' active' : ''}`}
+              onClick={() => setActiveTab('clawwin')}
+            >
+              ClawWin模型
+            </button>
+            <button
               className={`model-settings-tab${activeTab === 'cloud' ? ' active' : ''}`}
               onClick={() => setActiveTab('cloud')}
             >
@@ -278,7 +523,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
 
           {/* Provider card grid with inline model sub-list */}
           <div className="model-settings-provider-grid">
-            {MODEL_PROVIDERS.map((provider) => {
+            {MODEL_PROVIDERS.filter(p => p.id !== 'clawwinweb').map((provider) => {
               const isSelected = selectedProvider === provider.id
               return (
                 <div
@@ -412,7 +657,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
 
         {/* Fixed footer: API Key + Save */}
         <div className="model-settings-footer">
-          {selectedProvider && selectedModel ? (
+          {selectedProvider && selectedProvider !== 'clawwinweb' && selectedModel ? (
             <>
               <div className="model-settings-apikey-row">
                 <input
@@ -462,6 +707,207 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
             <div className="model-settings-footer-hint">请选择一个厂商和模型</div>
           )}
         </div>
+          </>
+        ) : activeTab === 'clawwin' ? (
+          <>
+            <div className="model-settings-body">
+              {/* 当前模型 */}
+              <div className="model-settings-current">
+                <div className="model-settings-current-label">当前模型</div>
+                <div className="model-settings-current-value">
+                  {currentProviderObj
+                    ? `${currentProviderObj.name} / ${currentModelObj?.name ?? currentModel ?? '未选择'}`
+                    : '未配置'}
+                </div>
+              </div>
+
+              {/* ===== 登录视图 ===== */}
+              {cwwView === 'login' && (
+                <div className="cww-login-panel cww-panel-center">
+                  <div className="cww-panel-title">登录 ClawWinWeb</div>
+                  <input type="email" placeholder="邮箱" value={cwwEmail}
+                    onChange={(e) => setCwwEmail(e.target.value)} />
+                  <input type="password" placeholder="密码" value={cwwPassword}
+                    onChange={(e) => setCwwPassword(e.target.value)} />
+                  {cwwError && <div className="cww-error">{cwwError}</div>}
+                  <div className="cww-login-actions">
+                    <button className="btn-primary" onClick={handleCwwLogin}
+                      disabled={cwwLoading || !cwwEmail.trim() || !cwwPassword.trim()}>
+                      {cwwLoading ? '登录中...' : '登录'}
+                    </button>
+                  </div>
+                  <div className="cww-login-link"
+                    onClick={() => { setCwwView('register'); setCwwError('') }}>
+                    没有账号？注册
+                  </div>
+                </div>
+              )}
+
+              {/* ===== 注册视图 ===== */}
+              {cwwView === 'register' && (
+                <div className="cww-login-panel cww-panel-center">
+                  <div className="cww-panel-title">注册 ClawWinWeb</div>
+                  <input type="email" placeholder="邮箱" value={cwwEmail}
+                    onChange={(e) => setCwwEmail(e.target.value)} />
+                  <input type="password" placeholder="密码" value={cwwPassword}
+                    onChange={(e) => setCwwPassword(e.target.value)} />
+                  <input type="text" placeholder="昵称" value={cwwNickname}
+                    onChange={(e) => setCwwNickname(e.target.value)} />
+                  <div className="cww-code-row">
+                    <input type="text" placeholder="验证码" value={cwwCode}
+                      onChange={(e) => setCwwCode(e.target.value)} />
+                    <button className="btn-secondary" onClick={handleCwwSendCode}
+                      disabled={cwwCodeCountdown > 0 || !cwwEmail.trim()}>
+                      {cwwCodeCountdown > 0 ? `${cwwCodeCountdown}s` : '发送验证码'}
+                    </button>
+                  </div>
+                  {cwwError && <div className="cww-error">{cwwError}</div>}
+                  <div className="cww-login-actions">
+                    <button className="btn-primary" onClick={handleCwwRegister}
+                      disabled={cwwLoading || !cwwEmail.trim() || !cwwPassword.trim() || !cwwCode.trim()}>
+                      {cwwLoading ? '注册中...' : '注册'}
+                    </button>
+                  </div>
+                  <div className="cww-login-link"
+                    onClick={() => { setCwwView('login'); setCwwError('') }}>
+                    已有账号？登录
+                  </div>
+                </div>
+              )}
+
+              {/* ===== 已登录视图 ===== */}
+              {cwwView === 'logged-in' && (
+                <div>
+                  <div className="cww-user-info">
+                    <span className="cww-user-name">{cwwNickname || cwwEmail}</span>
+                    <span className="cww-credits">积分: {cwwCredits}</span>
+                    <button className="cww-btn-small"
+                      onClick={() => { setCwwView('recharge'); setRechargeStatus('idle') }}>
+                      充值
+                    </button>
+                    <button className="cww-btn-small" onClick={handleCwwLogout}>退出</button>
+                  </div>
+                  {cwwError && <div className="cww-error">{cwwError}</div>}
+                  {(() => {
+                    const rates = cwwModels.map(m => (m.inputRate + m.outputRate) / 2).sort((a, b) => a - b)
+                    const low = rates[Math.floor(rates.length / 3)] ?? 0
+                    const high = rates[Math.floor(rates.length * 2 / 3)] ?? 0
+                    return cwwModels.map((model) => {
+                      const avg = (model.inputRate + model.outputRate) / 2
+                      const costLevel = avg > high ? '大' : avg > low ? '中' : '小'
+                      const costClass = avg > high ? 'high' : avg > low ? 'mid' : 'low'
+                      return (
+                        <div key={model.id}
+                          className={`model-settings-model-item${selectedModel === model.id ? ' selected' : ''}`}
+                          onClick={() => handleModelSelect(model.id)}>
+                          <div className="model-settings-model-name">{model.name}</div>
+                          <div className="model-settings-model-meta">
+                            <span>{model.provider}</span>
+                            <span className={`cost-badge cost-${costClass}`}>积分消耗: {costLevel}</span>
+                          </div>
+                        </div>
+                      )
+                    })
+                  })()}
+                </div>
+              )}
+
+              {/* ===== 充值视图（扩展版） ===== */}
+              {cwwView === 'recharge' && (
+                <div className="cww-recharge-panel">
+                  {rechargeStatus === 'idle' && (
+                    <>
+                      <div className="cww-amount-grid">
+                        {[10, 30, 50, 100, 500, 1000, 2000].map((amt) => (
+                          <div key={amt}
+                            className={`cww-amount-btn${rechargeAmount === amt && !showCustomRecharge ? ' selected' : ''}`}
+                            onClick={() => { setRechargeAmount(amt); setShowCustomRecharge(false) }}>
+                            {amt} 元
+                          </div>
+                        ))}
+                        <div
+                          className={`cww-amount-btn${showCustomRecharge ? ' selected' : ''}`}
+                          onClick={() => setShowCustomRecharge(true)}>
+                          自定义
+                        </div>
+                      </div>
+                      {showCustomRecharge && (
+                        <input type="number" className="input-field"
+                          placeholder="输入金额 (1-10000)"
+                          value={customRechargeInput}
+                          onChange={(e) => {
+                            setCustomRechargeInput(e.target.value)
+                            const val = parseInt(e.target.value, 10)
+                            if (val >= 1 && val <= 10000) setRechargeAmount(val)
+                          }}
+                          min={1} max={10000}
+                          style={{ marginBottom: '12px' }}
+                        />
+                      )}
+                      {cwwError && <div className="cww-error">{cwwError}</div>}
+                      <div className="cww-login-actions">
+                        <button className="btn-primary" onClick={handleRecharge}>
+                          充值 {rechargeAmount} 元
+                        </button>
+                        <button className="btn-secondary" onClick={() => setCwwView('logged-in')}>
+                          返回
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {rechargeStatus === 'paying' && (
+                    <>
+                      <div className="cww-recharge-info">请在浏览器中完成支付，支付完成后将自动更新积分...</div>
+                      <div className="cww-login-actions">
+                        <button className="btn-secondary"
+                          onClick={() => { setRechargeStatus('idle'); setCwwView('logged-in') }}>
+                          返回
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {rechargeStatus === 'success' && (
+                    <>
+                      <div className="cww-recharge-success">充值成功！当前积分: {cwwCredits}</div>
+                      <div className="cww-login-actions">
+                        <button className="btn-primary"
+                          onClick={() => { setRechargeStatus('idle'); setCwwView('logged-in') }}>
+                          返回
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ClawWin Tab Footer */}
+            <div className="model-settings-footer">
+              {cwwView === 'logged-in' && selectedModel ? (
+                <>
+                  <div className="model-settings-apikey-row">
+                    <span className="cww-footer-info">
+                      已登录: {cwwNickname || cwwEmail} · 积分: {cwwCredits}
+                    </span>
+                    <button className="btn-primary" onClick={handleSave} disabled={saving}>
+                      {saving ? '保存中...' : '保存并应用'}
+                    </button>
+                  </div>
+                  {saveResult?.ok && (
+                    <div className="model-settings-status success">配置已保存，正在重启网关...</div>
+                  )}
+                  {saveResult && !saveResult.ok && (
+                    <div className="model-settings-status error">
+                      {saveResult.error || '保存失败，请重试'}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="model-settings-footer-hint">
+                  {cwwView === 'logged-in' ? '请选择一个模型' : '请先登录 ClawWinWeb'}
+                </div>
+              )}
+            </div>
           </>
         ) : (
           <LocalModelSettings onSaved={onSaved} />

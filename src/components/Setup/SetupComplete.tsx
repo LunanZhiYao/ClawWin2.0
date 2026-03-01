@@ -45,15 +45,19 @@ export const SetupComplete: React.FC<SetupCompleteProps> = ({
       <div className="complete-summary">
         <div className="summary-item">
           <span className="summary-label">服务提供商</span>
-          <span className="summary-value">{providerName}</span>
+          <span className="summary-value">{providerName || '未配置'}</span>
         </div>
         <div className="summary-item">
           <span className="summary-label">AI 模型</span>
-          <span className="summary-value">{modelName}</span>
+          <span className="summary-value">{modelName || '未配置'}</span>
         </div>
         <div className="summary-item">
           <span className="summary-label">API Key</span>
-          <span className="summary-value summary-mono">{maskApiKey(apiKey)}</span>
+          <span className="summary-value summary-mono">
+            {apiKey
+              ? (providerName === 'ClawWinWeb' ? 'ClawWin 账号：已登录' : maskApiKey(apiKey))
+              : '未配置（可稍后在设置中配置）'}
+          </span>
         </div>
         <div className="summary-item">
           <span className="summary-label">工作空间</span>

@@ -2,6 +2,15 @@ import { useState, useEffect, useCallback } from 'react'
 import type { SetupConfig, ModelProvider } from '../types'
 
 export const MODEL_PROVIDERS: ModelProvider[] = [
+  {
+    id: 'clawwinweb',
+    name: 'ClawWinWeb',
+    baseUrl: 'https://www.mybotworld.com/api/v1',
+    apiFormat: 'openai-completions',
+    models: [
+      { id: 'gpt-5.2', name: 'GPT-5.2', reasoning: false, contextWindow: 128000, maxTokens: 32768 },
+    ],
+  },
   // ── 国内直连 ──
   {
     id: 'zhipu',
@@ -11,17 +20,8 @@ export const MODEL_PROVIDERS: ModelProvider[] = [
     models: [
       { id: 'glm-5', name: 'GLM-5', reasoning: false, contextWindow: 128000, maxTokens: 8192 },
       { id: 'glm-4-plus', name: 'GLM-4 Plus', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
-      { id: 'glm-4-flash', name: 'GLM-4 Flash', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
-    ],
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    baseUrl: 'https://api.deepseek.com',
-    apiFormat: 'openai-completions',
-    models: [
-      { id: 'deepseek-chat', name: 'DeepSeek V3', reasoning: false, contextWindow: 128000, maxTokens: 8192 },
-      { id: 'deepseek-reasoner', name: 'DeepSeek R1', reasoning: true, contextWindow: 128000, maxTokens: 8192 },
+      { id: 'glm-4.7-flash', name: 'GLM-4.7-Flash (免费)', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
+      { id: 'glm-4.6v-flash', name: 'GLM-4.6V-Flash (免费·多模态)', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
     ],
   },
   {
@@ -34,6 +34,16 @@ export const MODEL_PROVIDERS: ModelProvider[] = [
       { id: 'qwen-plus', name: 'Qwen Plus', reasoning: false, contextWindow: 131072, maxTokens: 8192 },
       { id: 'qwen-turbo', name: 'Qwen Turbo', reasoning: false, contextWindow: 131072, maxTokens: 8192 },
       { id: 'qwq-plus', name: 'QwQ Plus', reasoning: true, contextWindow: 131072, maxTokens: 16384 },
+    ],
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com',
+    apiFormat: 'openai-completions',
+    models: [
+      { id: 'deepseek-chat', name: 'DeepSeek V3', reasoning: false, contextWindow: 128000, maxTokens: 8192 },
+      { id: 'deepseek-reasoner', name: 'DeepSeek R1', reasoning: true, contextWindow: 128000, maxTokens: 8192 },
     ],
   },
   {
@@ -71,10 +81,8 @@ export const MODEL_PROVIDERS: ModelProvider[] = [
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     apiFormat: 'openai-completions',
     models: [
-      { id: 'deepseek-ai/deepseek-r1', name: 'DeepSeek R1', reasoning: true, contextWindow: 128000, maxTokens: 8192 },
       { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', reasoning: false, contextWindow: 131072, maxTokens: 8192 },
       { id: 'meta/llama-3.1-8b-instruct', name: 'Llama 3.1 8B', reasoning: false, contextWindow: 131072, maxTokens: 8192 },
-      { id: 'moonshotai/kimi-k2.5', name: 'Kimi K2.5', reasoning: false, contextWindow: 128000, maxTokens: 8192 },
       { id: 'nvidia/llama-3.1-nemotron-ultra-253b-v1', name: 'Nemotron Ultra 253B', reasoning: true, contextWindow: 131072, maxTokens: 8192 },
       { id: 'mistralai/mistral-small-24b-instruct-2501', name: 'Mistral Small 24B', reasoning: false, contextWindow: 32768, maxTokens: 8192 },
     ],
@@ -131,7 +139,7 @@ export const MODEL_PROVIDERS: ModelProvider[] = [
   },
 ]
 
-export type SetupStep = 'welcome' | 'model' | 'apikey' | 'workspace' | 'gateway' | 'complete'
+export type SetupStep = 'welcome' | 'clawwin' | 'workspace' | 'gateway' | 'complete'
 
 /**
  * Generate a random 48-character hex token for gateway authentication.
@@ -172,7 +180,7 @@ interface UseSetupReturn {
 export function useSetup(): UseSetupReturn {
   const [step, setStep] = useState<SetupStep>('welcome')
   const [config, setConfig] = useState<Partial<SetupConfig>>(() => ({
-    gatewayPort: 39527,
+    gatewayPort: 18888,
     gatewayToken: generateGatewayToken(),
   }))
   const [isFirstRun, setIsFirstRun] = useState(false)

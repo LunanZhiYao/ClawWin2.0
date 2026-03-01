@@ -2,8 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { ChatArea } from './components/Chat/ChatArea'
 import { SessionList } from './components/Sidebar/SessionList'
 import { WelcomePage } from './components/Setup/WelcomePage'
-import { ModelSelect } from './components/Setup/ModelSelect'
-import { ApiKeyInput } from './components/Setup/ApiKeyInput'
+import { ClawWinSetup } from './components/Setup/ClawWinSetup'
 import { WorkspaceSetup } from './components/Setup/WorkspaceSetup'
 import { GatewaySetup } from './components/Setup/GatewaySetup'
 import { SetupComplete } from './components/Setup/SetupComplete'
@@ -15,12 +14,13 @@ import { ModelSettings } from './components/Settings/ModelSettings'
 import { ChannelSettings } from './components/Settings/ChannelSettings'
 import { SkillSettings } from './components/Settings/SkillSettings'
 import { CronManager } from './components/Settings/CronManager'
+import { UserCenter } from './components/Settings/UserCenter'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, type SetupStep } from './hooks/useSetup'
-import type { ChatMessage, ChatSession, ChatAttachment, ModelProvider, ModelInfo, UpdateInfo } from './types'
+import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo } from './types'
 
-const SETUP_STEPS: SetupStep[] = ['welcome', 'model', 'apikey', 'workspace', 'gateway', 'complete']
+const SETUP_STEPS: SetupStep[] = ['welcome', 'clawwin', 'workspace', 'gateway', 'complete']
 
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -34,8 +34,6 @@ function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [showSetup, setShowSetup] = useState(false)
-  const [selectedProviderObj, setSelectedProviderObj] = useState<ModelProvider | null>(null)
-  const [selectedModelObj, setSelectedModelObj] = useState<ModelInfo | null>(null)
   const [isWaiting, setIsWaiting] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showSkills, setShowSkills] = useState(false)
@@ -55,8 +53,12 @@ function App() {
   const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(null)
   const [skipUpdateCheck, setSkipUpdateCheck] = useState(false)
   const [showCloseDialog, setShowCloseDialog] = useState(false)
+  const [showUserCenter, setShowUserCenter] = useState(false)
+  const [modelSettingsTab, setModelSettingsTab] = useState<'cloud' | 'clawwin' | 'local' | undefined>(undefined)
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [autoCompact, setAutoCompact] = useState(true)
+  const isAutoCompactingRef = useRef(false)
 
   // 使用 ref 追踪最新的 activeSessionId，避免回调闭包中拿到旧值
   const activeSessionIdRef = useRef<string | null>(null)
@@ -135,6 +137,8 @@ function App() {
     }).catch(() => {})
     // Load skip-update-check preference
     window.electronAPI.config.getSkipUpdate().then(setSkipUpdateCheck).catch(() => {})
+    // Load auto-compact preference
+    window.electronAPI.config.getAutoCompact().then(setAutoCompact).catch(() => {})
     // Load app version
     window.electronAPI.app.getVersion().then(setAppVersion).catch(() => {})
   }, [])
@@ -237,6 +241,28 @@ function App() {
     [] // 不再依赖 activeSessionId，通过 ref 获取最新值
   )
 
+  // 自动压缩上下文：usage 超 70% 时自动发 /compact
+  const autoCompactRef = useRef(autoCompact)
+  autoCompactRef.current = autoCompact
+  const ctxWindowRef = useRef(setup.config.contextWindow ?? 0)
+  ctxWindowRef.current = setup.config.contextWindow ?? 0
+
+  ws.onFinalUsage.current = useCallback(({ input }: { input: number }) => {
+    if (!autoCompactRef.current) return
+    if (isAutoCompactingRef.current) return
+    const ctxWindow = ctxWindowRef.current
+    if (ctxWindow <= 0) return
+    if (input / ctxWindow < 0.7) return
+    const sid = activeSessionIdRef.current
+    if (!sid) return
+    isAutoCompactingRef.current = true
+    ws.sendMessage(sid, '/compact')
+  }, [ws])
+
+  ws.onCompactionEnd.current = useCallback(() => {
+    isAutoCompactingRef.current = false
+  }, [])
+
   // Get active session
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
 
@@ -337,25 +363,6 @@ function App() {
     [activeSessionId, ws, startWaiting]
   )
 
-  // Setup wizard handlers
-  const handleModelSelect = useCallback(
-    (provider: ModelProvider, model: ModelInfo) => {
-      setSelectedProviderObj(provider)
-      setSelectedModelObj(model)
-      setup.updateConfig({
-        provider: provider.id,
-        modelId: model.id,
-        modelName: model.name,
-        baseUrl: provider.baseUrl,
-        apiFormat: provider.apiFormat,
-        reasoning: model.reasoning,
-        contextWindow: model.contextWindow,
-        maxTokens: model.maxTokens,
-      })
-    },
-    [setup]
-  )
-
   const handleSetupComplete = useCallback(async () => {
     try {
       const ok = await setup.saveConfig()
@@ -431,31 +438,24 @@ function App() {
           </div>
 
           {setup.step === 'welcome' && (
-            <WelcomePage onNext={() => setup.setStep('model')} />
+            <WelcomePage onNext={() => setup.setStep('clawwin')} />
           )}
 
-          {setup.step === 'model' && (
-            <ModelSelect
-              providers={setup.providers}
-              selectedProvider={setup.config.provider}
-              selectedModel={setup.config.modelId}
-              onSelect={handleModelSelect}
+          {setup.step === 'clawwin' && (
+            <ClawWinSetup
               onBack={() => setup.setStep('welcome')}
-              onNext={() => setup.setStep('apikey')}
-              onSkip={() => setup.setStep('apikey')}
-            />
-          )}
-
-          {setup.step === 'apikey' && (
-            <ApiKeyInput
-              providerName={selectedProviderObj?.name ?? ''}
-              modelName={selectedModelObj?.name ?? ''}
-              baseUrl={selectedProviderObj?.baseUrl ?? ''}
-              apiFormat={selectedProviderObj?.apiFormat ?? ''}
-              modelId={selectedModelObj?.id ?? ''}
-              onBack={() => setup.setStep('model')}
-              onNext={(apiKey) => {
-                setup.updateConfig({ apiKey })
+              onNext={(token) => {
+                setup.updateConfig({
+                  provider: 'clawwinweb',
+                  modelId: 'gpt-5.2',
+                  modelName: 'GPT-5.2',
+                  baseUrl: 'https://www.mybotworld.com/api/v1',
+                  apiFormat: 'openai-completions',
+                  apiKey: token,
+                  reasoning: false,
+                  contextWindow: 128000,
+                  maxTokens: 32768,
+                })
                 setup.setStep('workspace')
               }}
               onSkip={() => setup.setStep('workspace')}
@@ -465,7 +465,7 @@ function App() {
           {setup.step === 'workspace' && (
             <WorkspaceSetup
               workspace={setup.config.workspace ?? '~/openclaw'}
-              onBack={() => setup.setStep('apikey')}
+              onBack={() => setup.setStep('clawwin')}
               onNext={(workspace) => {
                 setup.updateConfig({ workspace })
                 setup.setStep('gateway')
@@ -476,7 +476,7 @@ function App() {
 
           {setup.step === 'gateway' && (
             <GatewaySetup
-              port={setup.config.gatewayPort ?? 39527}
+              port={setup.config.gatewayPort ?? 18888}
               token={setup.config.gatewayToken ?? ''}
               onBack={() => setup.setStep('workspace')}
               onNext={(port) => {
@@ -489,11 +489,11 @@ function App() {
 
           {setup.step === 'complete' && (
             <SetupComplete
-              providerName={selectedProviderObj?.name ?? ''}
-              modelName={selectedModelObj?.name ?? ''}
+              providerName={setup.config.provider === 'clawwinweb' ? 'ClawWinWeb' : (setup.config.provider ?? '')}
+              modelName={setup.config.modelName ?? ''}
               apiKey={setup.config.apiKey ?? ''}
               workspace={setup.config.workspace ?? '~/openclaw'}
-              gatewayPort={setup.config.gatewayPort ?? 39527}
+              gatewayPort={setup.config.gatewayPort ?? 18888}
               saving={setup.isSaving}
               error={setup.saveError}
               onBack={() => {
@@ -585,6 +585,15 @@ function App() {
                 </div>
                 <span className="system-icon-label">设置</span>
               </div>
+              <div className="system-icon-item" style={{animationDelay: '0.25s'}} onClick={() => setShowUserCenter(true)}>
+                <div className="system-icon-circle">
+                  <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </div>
+                <span className="system-icon-label">用户中心</span>
+              </div>
             </div>
           </div>
           <div className="sidebar">
@@ -658,12 +667,11 @@ function App() {
               <div className="settings-section">
                 <h3>模型</h3>
                 <p className="settings-value">
-                  {selectedProviderObj?.name
-                    ?? setup.providers.find(p => p.id === setup.config.provider)?.name
+                  {setup.providers.find(p => p.id === setup.config.provider)?.name
                     ?? setup.config.provider
                     ?? '未配置'}
                   {' / '}
-                  {selectedModelObj?.name ?? setup.config.modelName ?? '未选择'}
+                  {setup.config.modelName ?? '未选择'}
                 </p>
               </div>
               <div className="settings-section">
@@ -698,6 +706,21 @@ function App() {
                       : `${responseTimeout / 1000}秒`}
                   </span>
                 </div>
+              </div>
+              <div className="settings-section">
+                <h3>自动压缩上下文</h3>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={autoCompact}
+                    onChange={(e) => {
+                      const val = e.target.checked
+                      setAutoCompact(val)
+                      window.electronAPI.config.saveAutoCompact(val).catch(() => {})
+                    }}
+                  />
+                  <span>上下文使用超过 70% 时自动压缩消息历史</span>
+                </label>
               </div>
               <div className="settings-section">
                 <h3>消息渠道</h3>
@@ -780,9 +803,11 @@ function App() {
         <ModelSettings
           currentProvider={setup.config.provider}
           currentModel={setup.config.modelId}
-          onClose={() => setShowModelSettings(false)}
+          initialTab={modelSettingsTab}
+          onClose={() => { setShowModelSettings(false); setModelSettingsTab(undefined) }}
           onSaved={() => {
             setShowModelSettings(false)
+            setModelSettingsTab(undefined)
             // 重新读取配置以更新前端状态（当前模型显示等）
             window.electronAPI.config.readConfig().then((savedConfig) => {
               if (savedConfig) {
@@ -821,6 +846,12 @@ function App() {
           client={ws.client}
           connected={ws.connected}
           onClose={() => setShowCronManager(false)}
+        />
+      )}
+
+      {showUserCenter && (
+        <UserCenter
+          onClose={() => setShowUserCenter(false)}
         />
       )}
 

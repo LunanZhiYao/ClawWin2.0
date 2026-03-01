@@ -16,8 +16,8 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onNext }) => {
         <div className="feature-item">
           <span className="feature-icon">&#9889;</span>
           <div>
-            <strong>多模型支持</strong>
-            <p>DeepSeek、MiniMax、Claude、GPT 等主流模型</p>
+            <strong>ClawWin 云模型</strong>
+            <p>注册即用 20+ 顶级 AI，免 API Key，比云厂商便宜 10~20%</p>
           </div>
         </div>
         <div className="feature-item">

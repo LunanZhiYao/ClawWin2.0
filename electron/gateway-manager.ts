@@ -4,6 +4,7 @@ import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import { getAllBundledBinPaths, getLocalNpmBinDir, detectSystemBrowser } from './skills-installer'
 
 export type GatewayState = 'starting' | 'ready' | 'error' | 'stopped' | 'restarting'
 
@@ -20,7 +21,7 @@ export class GatewayManager {
   private state: GatewayState = 'stopped'
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null
   private consecutiveFailures = 0
-  private readonly MAX_FAILURES = 12
+  private readonly MAX_FAILURES = 30
   private readonly HEALTH_CHECK_INTERVAL = 5000
   private readonly SHUTDOWN_TIMEOUT = 5000
   private stopping = false
@@ -270,6 +271,19 @@ export class GatewayManager {
     // and derives state dir as $OPENCLAW_HOME/.openclaw/
     env.OPENCLAW_HOME = os.homedir()
 
+    // 将 bundled 技能 bin 目录和本地安装的 skill-bins 加入 PATH
+    // 这样 gateway 子进程中运行 agent-browser 等命令时能找到它们
+    const extraPaths = [...getAllBundledBinPaths(), getLocalNpmBinDir()]
+    const sep = os.platform() === 'win32' ? ';' : ':'
+    const currentPath = env.PATH || env.Path || ''
+    env.PATH = [...extraPaths, currentPath].join(sep)
+
+    // 让 agent-browser (playwright) 使用系统已有的 Edge/Chrome，无需额外下载 Chromium
+    const systemBrowser = detectSystemBrowser()
+    if (systemBrowser) {
+      env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = systemBrowser
+    }
+
     this.log('info', `node: ${this.opts.nodePath}`)
     this.log('info', `entry: ${entryScript}`)
     this.log('info', `cwd: ${this.opts.openclawPath}`)
@@ -340,13 +354,13 @@ export class GatewayManager {
     this.consecutiveFailures = 0
     this.stopHealthCheck()
 
-    // 如果是外部 Gateway，立即检查；重启时旧进程已干净关闭，只需短延迟；冷启动需要较长等待
-    const initialDelay = this.externalGateway ? 500 : this.isRestarting ? 3000 : 10000
+    // 启动后快速轮询健康检查，1秒后开始，每秒检查一次
+    const initialDelay = this.externalGateway ? 500 : 1000
     setTimeout(() => {
       this.performHealthCheck()
       this.healthCheckTimer = setInterval(() => {
         this.performHealthCheck()
-      }, this.HEALTH_CHECK_INTERVAL)
+      }, 1000)
     }, initialDelay)
   }
 

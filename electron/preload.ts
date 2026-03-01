@@ -130,6 +130,9 @@ const electronAPI = {
     getSkipUpdate: (): Promise<boolean> => ipcRenderer.invoke('config:getSkipUpdate'),
     saveSkipUpdate: (skip: boolean): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('config:saveSkipUpdate', skip),
+    getAutoCompact: (): Promise<boolean> => ipcRenderer.invoke('config:getAutoCompact'),
+    saveAutoCompact: (enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('config:saveAutoCompact', enabled),
   },
 
   // Sessions persistence
@@ -159,6 +162,10 @@ const electronAPI = {
     getConfig: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('skills:getConfig'),
     saveConfig: (config: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('skills:saveConfig', config),
+    canInstall: (skillName: string): Promise<{ canInstall: boolean; reason?: string }> =>
+      ipcRenderer.invoke('skills:canInstall', skillName),
+    installDep: (skillName: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('skills:installDep', skillName),
   },
 
   // Pairing
@@ -197,6 +204,28 @@ const electronAPI = {
       ipcRenderer.on('ollama:statusChange', handler)
       return () => ipcRenderer.removeListener('ollama:statusChange', handler)
     },
+  },
+
+  // ClawWinWeb API proxy
+  cww: {
+    login: (params: { serverUrl: string; email: string; password: string }) =>
+      ipcRenderer.invoke('cww:login', params),
+    register: (params: { serverUrl: string; email: string; password: string; nickname?: string; code: string }) =>
+      ipcRenderer.invoke('cww:register', params),
+    sendCode: (params: { serverUrl: string; email: string }) =>
+      ipcRenderer.invoke('cww:sendCode', params),
+    fetchModels: (params: { serverUrl: string; token: string }) =>
+      ipcRenderer.invoke('cww:fetchModels', params),
+    getProfile: (params: { serverUrl: string; token: string }) =>
+      ipcRenderer.invoke('cww:getProfile', params),
+    createOrder: (params: { serverUrl: string; token: string; amount: number; payType: string }) =>
+      ipcRenderer.invoke('cww:createOrder', params),
+    checkOrder: (params: { serverUrl: string; token: string; orderNo: string }) =>
+      ipcRenderer.invoke('cww:checkOrder', params),
+    getState: () =>
+      ipcRenderer.invoke('cww:getState'),
+    saveState: (state: { email: string; nickname: string; credits: number; serverUrl: string }) =>
+      ipcRenderer.invoke('cww:saveState', state),
   },
 }
 

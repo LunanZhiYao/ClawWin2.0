@@ -6,7 +6,8 @@ import { GatewayManager } from './gateway-manager'
 import { isFirstRun, getOpenclawConfigPath, writeSetupConfig, validateApiKey } from './setup-wizard'
 import { getNodePath, getOpenclawPath } from './node-runtime'
 import { signDeviceAuth, type DeviceAuthParams } from './device-identity'
-import { scanSkills, getSkillsConfig, saveSkillsConfig } from './skills-scanner'
+import { scanSkills, getSkillsConfig, saveSkillsConfig, clearBinCache } from './skills-scanner'
+import { installSkillDep, canInstallSkill, getSkillInstallInfo } from './skills-installer'
 import { OllamaManager } from './ollama-manager'
 import { checkForUpdate, downloadUpdate, installUpdate, cancelDownload, type UpdateInfo } from './update-checker'
 import { listAllChannelPairings, approvePairingCode, getEnabledChannels } from './pairing-manager'
@@ -255,7 +256,7 @@ function setupIPC() {
 
   // Get gateway port
   ipcMain.handle('gateway:getPort', () => {
-    return gatewayManager?.getPort() ?? 39527
+    return gatewayManager?.getPort() ?? 18888
   })
 
   // Open external URL
@@ -716,6 +717,110 @@ function setupIPC() {
     }
   })
 
+  // Get auto-compact setting
+  ipcMain.handle('config:getAutoCompact', () => {
+    try {
+      const ui = readUiConfig()
+      return (ui.autoCompact as boolean) ?? true
+    } catch {
+      return true
+    }
+  })
+
+  // Save auto-compact setting
+  ipcMain.handle('config:saveAutoCompact', (_event, enabled: boolean) => {
+    try {
+      const ui = readUiConfig()
+      ui.autoCompact = !!enabled
+      writeUiConfig(ui)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  // ===== ClawWinWeb API proxy =====
+
+  async function cwwFetch(url: string, options: RequestInit = {}): Promise<unknown> {
+    const res = await fetch(url, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      signal: AbortSignal.timeout(15000),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error((data as Record<string, unknown>).error as string || `HTTP ${res.status}`)
+    }
+    return data
+  }
+
+  ipcMain.handle('cww:login', async (_event, params: { serverUrl: string; email: string; password: string }) => {
+    return cwwFetch(`${params.serverUrl}/api/auth/login`, {
+      method: 'POST',
+      body: JSON.stringify({ email: params.email, password: params.password }),
+    })
+  })
+
+  ipcMain.handle('cww:register', async (_event, params: { serverUrl: string; email: string; password: string; nickname?: string; code: string }) => {
+    return cwwFetch(`${params.serverUrl}/api/auth/register`, {
+      method: 'POST',
+      body: JSON.stringify({ email: params.email, password: params.password, nickname: params.nickname, code: params.code }),
+    })
+  })
+
+  ipcMain.handle('cww:sendCode', async (_event, params: { serverUrl: string; email: string }) => {
+    return cwwFetch(`${params.serverUrl}/api/auth/send-code`, {
+      method: 'POST',
+      body: JSON.stringify({ email: params.email }),
+    })
+  })
+
+  ipcMain.handle('cww:fetchModels', async (_event, params: { serverUrl: string; token: string }) => {
+    return cwwFetch(`${params.serverUrl}/api/chat/models`, {
+      headers: { Authorization: `Bearer ${params.token}` },
+    })
+  })
+
+  ipcMain.handle('cww:getProfile', async (_event, params: { serverUrl: string; token: string }) => {
+    return cwwFetch(`${params.serverUrl}/api/user/profile`, {
+      headers: { Authorization: `Bearer ${params.token}` },
+    })
+  })
+
+  ipcMain.handle('cww:createOrder', async (_event, params: { serverUrl: string; token: string; amount: number; payType: string }) => {
+    return cwwFetch(`${params.serverUrl}/api/payment/create`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${params.token}` },
+      body: JSON.stringify({ amount: params.amount, payType: params.payType }),
+    })
+  })
+
+  ipcMain.handle('cww:checkOrder', async (_event, params: { serverUrl: string; token: string; orderNo: string }) => {
+    return cwwFetch(`${params.serverUrl}/api/payment/status/${params.orderNo}`, {
+      headers: { Authorization: `Bearer ${params.token}` },
+    })
+  })
+
+  ipcMain.handle('cww:getState', () => {
+    try {
+      const ui = readUiConfig()
+      return (ui.clawwinweb as Record<string, unknown>) ?? null
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('cww:saveState', (_event, state: { email: string; nickname: string; credits: number; serverUrl: string }) => {
+    try {
+      const ui = readUiConfig()
+      ui.clawwinweb = state
+      writeUiConfig(ui)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ===== Sessions persistence =====
 
   const SESSIONS_FILE = path.join(os.homedir(), '.openclaw', 'sessions.json')
@@ -821,6 +926,28 @@ function setupIPC() {
     return saveSkillsConfig(config as Record<string, { enabled?: boolean; apiKey?: string; env?: Record<string, string> }>)
   })
 
+  ipcMain.handle('skills:canInstall', (_event, skillName: string) => {
+    try {
+      const installInfo = getSkillInstallInfo(skillName)
+      if (!installInfo) return { canInstall: false, reason: '该技能无自动安装支持' }
+      return canInstallSkill(skillName)
+    } catch (err) {
+      return { canInstall: false, reason: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('skills:installDep', async (_event, skillName: string) => {
+    try {
+      const result = await installSkillDep(skillName)
+      if (result.ok) {
+        clearBinCache() // 清除缓存以便重新检测
+      }
+      return result
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ===== Pairing IPC handlers =====
   ipcMain.handle('pairing:list', () => {
     try {
@@ -886,7 +1013,7 @@ function initGatewayManager() {
   gatewayManager = new GatewayManager({
     nodePath,
     openclawPath,
-    port: 39527,
+    port: 18888,
     onStateChange: (state) => {
       mainWindow?.webContents.send('gateway:stateChanged', state)
     },

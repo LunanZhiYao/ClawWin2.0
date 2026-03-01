@@ -14,7 +14,7 @@ interface UseGatewayReturn {
 export function useGateway(): UseGatewayReturn {
   const [state, setState] = useState<GatewayState>('stopped')
   const [logs, setLogs] = useState<GatewayLog[]>([])
-  const [port, setPort] = useState(39527)
+  const [port, setPort] = useState(18888)
   const [token, setToken] = useState<string | null>(null)
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 

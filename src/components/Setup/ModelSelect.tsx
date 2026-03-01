@@ -29,6 +29,7 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
   const [customSelected, setCustomSelected] = useState(false)
 
   const PROVIDER_TAGS: Record<string, { label: string; className: string }> = {
+    clawwinweb: { label: '免Key·积分制', className: 'tag-recommended' },
     minimax: { label: '国内直连', className: 'tag-domestic' },
     deepseek: { label: '国内直连', className: 'tag-domestic' },
     anthropic: { label: '需科学上网', className: 'tag-international' },

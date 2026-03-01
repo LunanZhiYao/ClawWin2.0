@@ -22,7 +22,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   isWaiting = false,
   isStreaming = false,
   onStop,
-  gatewayPort = 39527,
+  gatewayPort = 18888,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
@@ -35,7 +35,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   // Auto-scroll to bottom when new messages arrive or typing indicator shows
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
     }
   }, [messages, autoScroll, isWaiting])
 

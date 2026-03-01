@@ -1,4 +1,7 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
 import type { ChatMessage } from '../../types'
 
 function isImageFile(mimeType?: string, fileName?: string): boolean {
@@ -70,17 +73,88 @@ function parseContentWithImages(content: string): ContentSegment[] {
   return segments
 }
 
+/** Code block with copy button and language label */
+function CodeBlock({ className, children }: { className?: string; children: React.ReactNode }) {
+  const [copied, setCopied] = useState(false)
+  const lang = className?.replace('hljs language-', '')?.replace('language-', '') || ''
+  const code = String(children).replace(/\n$/, '')
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }, [code])
+
+  return (
+    <div className="code-block-wrapper">
+      <div className="code-block-header">
+        {lang && <span className="code-block-lang">{lang}</span>}
+        <button className="code-block-copy" onClick={handleCopy}>
+          {copied ? '已复制' : '复制'}
+        </button>
+      </div>
+      <pre><code className={className}>{children}</code></pre>
+    </div>
+  )
+}
+
+/** Markdown components override */
+const markdownComponents = {
+  // Code: distinguish inline vs block
+  code({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'> & { className?: string }) {
+    const isBlock = className?.includes('language-') || className?.includes('hljs')
+    if (isBlock) {
+      return <CodeBlock className={className}>{children}</CodeBlock>
+    }
+    return <code className="inline-code" {...props}>{children}</code>
+  },
+  // Wrap pre to avoid double-nesting when CodeBlock already renders <pre>
+  pre({ children }: React.ComponentPropsWithoutRef<'pre'>) {
+    // If child is already a CodeBlock (has code-block-wrapper), pass through
+    const child = React.Children.only(children) as React.ReactElement<{ className?: string }>
+    if (child?.props?.className?.includes('language-') || child?.props?.className?.includes('hljs')) {
+      // CodeBlock handles its own <pre>, just return children
+      return <>{children}</>
+    }
+    return <pre>{children}</pre>
+  },
+  // Links open externally
+  a({ href, children }: React.ComponentPropsWithoutRef<'a'>) {
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          e.preventDefault()
+          if (href) window.electronAPI?.shell?.openExternal?.(href)
+        }}
+        className="chat-link"
+      >
+        {children}
+      </a>
+    )
+  },
+}
+
 interface MessageBubbleProps {
   message: ChatMessage
   onCopy?: () => void
   onRetry?: () => void
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onCopy, onRetry }) => {
+const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onRetry }) => {
   const isUser = message.role === 'user'
   const isQueued = message.status === 'queued'
   const isStreaming = message.status === 'streaming'
   const isError = message.status === 'error'
+  const streamTextRef = useRef<HTMLSpanElement>(null)
+
+  // 流式阶段: 通过 ref 直接设置 textContent, 绕过 React 协调
+  useLayoutEffect(() => {
+    if (isStreaming && streamTextRef.current) {
+      streamTextRef.current.textContent = message.content
+    }
+  }, [isStreaming, message.content])
 
   const handleFileClick = useCallback((filePath: string) => {
     // Open file with system default application via Electron shell
@@ -93,10 +167,30 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onCopy, o
 
   const displayContent = message.content
 
+  // Streaming: skip heavy rehypeHighlight to reduce DOM churn
+  const rehypePlugins = [rehypeHighlight]
+
+  // Check if content has inline images (only for assistant messages, non-streaming)
+  const hasInlineImages = !isUser && !isStreaming && displayContent
+    ? parseContentWithImages(displayContent).some((s) => s.type === 'image')
+    : false
+
   return (
     <div className={`message-bubble ${isUser ? 'message-user' : 'message-assistant'} ${isStreaming ? 'message-bubble-streaming' : ''} ${isError ? 'message-error-bubble' : ''} ${isQueued ? 'message-queued' : ''}`}>
       <div className="message-body">
-        <div className={`message-content ${isStreaming ? 'message-streaming' : ''} ${isError ? 'message-error-content' : ''}${hasAttachments ? ' has-attachments' : ''}`}>
+        {isStreaming && <div className="streaming-top-bar" />}
+        {isStreaming && message.thinking && !message.content && (
+          <div className="thinking-line">
+            <span className="thinking-line-dot" />
+            <span className="thinking-line-text">
+              {(() => {
+                const t = message.thinking.replace(/\s+/g, ' ').trim()
+                return t.length > 80 ? '...' + t.slice(-80) : t
+              })()}
+            </span>
+          </div>
+        )}
+        <div className={`message-content ${isError ? 'message-error-content' : ''}${hasAttachments ? ' has-attachments' : ''}`}>
           {hasAttachments && (
             <div className={`message-attachments${isSingleAttachment ? ' single' : ''}`}>
               {attachments.filter((a) => a.filePath).map((att, index) => {
@@ -139,23 +233,53 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onCopy, o
           )}
           {(displayContent || isStreaming) && (
             <div className="message-text">
-              {!isUser && displayContent ? (
-                parseContentWithImages(displayContent).map((segment, idx) => {
-                  if (segment.type === 'image') {
+              {isUser ? (
+                // User messages: plain text
+                displayContent || ''
+              ) : isStreaming ? (
+                // 流式阶段: 空 span + ref, textContent 由 useLayoutEffect 维护
+                <span ref={streamTextRef} style={{ whiteSpace: 'pre-wrap' }} />
+              ) : displayContent ? (
+                hasInlineImages ? (
+                  // Assistant with inline images: mixed rendering
+                  parseContentWithImages(displayContent).map((segment, idx) => {
+                    if (segment.type === 'image') {
+                      return (
+                        <img
+                          key={`inline-img-${idx}`}
+                          src={filePathToUrl(segment.value)}
+                          alt="screenshot"
+                          className="message-inline-screenshot"
+                          onClick={() => handleFileClick(segment.value)}
+                        />
+                      )
+                    }
                     return (
-                      <img
-                        key={`inline-img-${idx}`}
-                        src={filePathToUrl(segment.value)}
-                        alt="screenshot"
-                        className="message-inline-screenshot"
-                        onClick={() => handleFileClick(segment.value)}
-                      />
+                      <div key={`md-${idx}`} className="chat-markdown">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          rehypePlugins={rehypePlugins}
+                          components={markdownComponents}
+                        >
+                          {segment.value}
+                        </ReactMarkdown>
+                      </div>
                     )
-                  }
-                  return <span key={`text-${idx}`}>{segment.value}</span>
-                })
+                  })
+                ) : (
+                  // Assistant: always render with ReactMarkdown (streaming + done)
+                  <div className="chat-markdown">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={rehypePlugins}
+                      components={markdownComponents}
+                    >
+                      {displayContent}
+                    </ReactMarkdown>
+                  </div>
+                )
               ) : (
-                displayContent || (isStreaming ? '...' : '')
+                isStreaming ? '...' : null
               )}
               {isStreaming && <span className="streaming-cursor" />}
             </div>
@@ -189,3 +313,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onCopy, o
     </div>
   )
 }
+
+/** Memoized: 按字段值比较, 避免引用不同但内容相同时的无意义重渲染 */
+export const MessageBubble = React.memo(MessageBubbleInner, (prev, next) =>
+  prev.message.id === next.message.id &&
+  prev.message.content === next.message.content &&
+  prev.message.status === next.message.status &&
+  prev.message.thinking === next.message.thinking
+)

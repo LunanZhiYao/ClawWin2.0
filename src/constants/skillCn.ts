@@ -61,4 +61,8 @@ export const SKILL_CN: Record<string, string> = {
   'Self-Improving Agent (With Self-Reflection)': '自我反思与纠错，持续学习改进',
   'find-skills': '搜索发现并安装新技能',
   'tavily': 'AI优化的网页搜索（Tavily API）',
+  'multi-search-engine': '17引擎聚合搜索(8国内+9国际，无需密钥)',
+  'agent-browser': '浏览器自动化(网页操控/截图/数据提取)',
+  'mog': 'Microsoft 365操控(邮件/日历/OneDrive/Excel)',
+  'gembox-skill': 'GemBox .NET组件编码辅助(Excel/Word/PDF)',
 }
