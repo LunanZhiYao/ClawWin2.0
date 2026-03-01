@@ -721,6 +721,10 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                 </div>
               </div>
 
+              <p className="settings-hint" style={{ padding: '0 28px', margin: '0 0 8px' }}>
+                聚合多家模型，价格低于官方 API，按积分计费，无需自备 Key
+              </p>
+
               {/* ===== 登录视图 ===== */}
               {cwwView === 'login' && (
                 <div className="cww-login-panel cww-panel-center">
