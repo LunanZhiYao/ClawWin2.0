@@ -241,7 +241,7 @@ export interface ModelInfo {
   name: string
   reasoning: boolean
   contextWindow: number
-  maxTokens: number
+  maxTokens?: number
 }
 
 export interface SetupConfig {

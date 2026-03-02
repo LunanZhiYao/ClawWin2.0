@@ -491,7 +491,6 @@ function App() {
                   apiKey: token,
                   reasoning: false,
                   contextWindow: 128000,
-                  maxTokens: 32768,
                 })
                 setup.setStep('workspace')
               }}

@@ -525,14 +525,14 @@ function setupIPC() {
       if (!config.models) config.models = { mode: 'merge' }
       if (!config.models.providers) config.models.providers = {}
       const existingProvider = config.models.providers[params.provider] ?? { models: [] }
-      const newModel = {
+      const newModel: Record<string, unknown> = {
         id: params.modelId,
         name: params.modelName,
         reasoning: params.reasoning ?? false,
         input: ['text', 'image'],
         contextWindow: params.contextWindow ?? 200000,
-        maxTokens: params.maxTokens ?? 8192,
       }
+      if (params.maxTokens) newModel.maxTokens = params.maxTokens
       const existingModels: Array<{ id: string;[k: string]: unknown }> = existingProvider.models ?? []
       const idx = existingModels.findIndex((m) => m.id === params.modelId)
       if (idx >= 0) {

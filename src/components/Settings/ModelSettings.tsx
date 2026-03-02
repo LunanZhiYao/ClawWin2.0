@@ -381,7 +381,6 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
             name: m.name,
             reasoning: false,
             contextWindow: 128000,
-            maxTokens: 32768,
           })),
         }
       }
@@ -584,7 +583,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                           <div className="model-settings-model-name">{model.name}</div>
                           <div className="model-settings-model-meta">
                             <span>上下文: {(model.contextWindow / 1000).toFixed(0)}K</span>
-                            <span>最大输出: {(model.maxTokens / 1000).toFixed(0)}K</span>
+                            {model.maxTokens && <span>最大输出: {(model.maxTokens / 1000).toFixed(0)}K</span>}
                             {model.reasoning && <span className="model-badge">推理</span>}
                           </div>
                         </div>
