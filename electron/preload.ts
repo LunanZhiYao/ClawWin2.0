@@ -206,6 +206,14 @@ const electronAPI = {
     },
   },
 
+  // Agents
+  agents: {
+    create: (params: { agentId: string; name: string }): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('agents:create', params),
+    delete: (params: { agentId: string }): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('agents:delete', params),
+  },
+
   // ClawWinWeb API proxy
   cww: {
     login: (params: { serverUrl: string; email: string; password: string }) =>

@@ -64,9 +64,18 @@ function App() {
   const activeSessionIdRef = useRef<string | null>(null)
   activeSessionIdRef.current = activeSessionId
 
+  // 使用 ref 追踪 sessions 实时值，避免回调闭包捕获旧值
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+
   // 使用 ref 追踪 isWaiting 实时值，避免 handleSend 闭包捕获旧值
   const isWaitingRef = useRef(false)
   isWaitingRef.current = isWaiting
+
+  // 追踪 runId → sessionId 的映射，确保 AI 回复路由到正确的会话
+  const runIdSessionMapRef = useRef<Map<string, string>>(new Map())
+  // 追踪最近一次发送消息的 sessionId
+  const lastSendSessionIdRef = useRef<string | null>(null)
 
   // 根据用户配置的超时时间自动取消等待并提示错误
   const startWaiting = useCallback(() => {
@@ -113,7 +122,8 @@ function App() {
   const handleStop = useCallback(() => {
     const sid = activeSessionIdRef.current
     if (sid) {
-      ws.abortSession(sid)
+      const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
+      ws.abortSession(sid, session?.agentId)
     }
     stopWaiting()
   }, [ws, stopWaiting])
@@ -207,12 +217,22 @@ function App() {
 
   ws.onMessageStream.current = useCallback(
     (msg: ChatMessage) => {
-      // 使用 ref 获取最新的 activeSessionId，避免闭包捕获旧值的竞态问题
-      const sid = activeSessionIdRef.current
+      // 通过 runId → sessionId 映射，确保 AI 回复路由到发起请求的会话
+      let sid = runIdSessionMapRef.current.get(msg.id)
+      if (!sid) {
+        // 新 runId：绑定到最近发送消息的会话
+        sid = lastSendSessionIdRef.current ?? activeSessionIdRef.current ?? undefined
+        if (sid) runIdSessionMapRef.current.set(msg.id, sid)
+      }
       console.log('[app] onMessageStream called:', { sid, msgId: msg.id, content: msg.content?.slice(0, 100), status: msg.status })
       if (!sid) {
-        console.warn('[app] DROPPED message: activeSessionId is null!', msg.id)
+        console.warn('[app] DROPPED message: no session for runId', msg.id)
         return
+      }
+
+      // 回复完成或出错时清理映射
+      if (msg.status === 'done' || msg.status === 'error') {
+        runIdSessionMapRef.current.delete(msg.id)
       }
 
       // AI response has started arriving, stop showing waiting indicator
@@ -238,7 +258,7 @@ function App() {
         })
       )
     },
-    [] // 不再依赖 activeSessionId，通过 ref 获取最新值
+    [] // 不依赖外部状态，通过 ref 获取最新值
   )
 
   // 自动压缩上下文：usage 超 70% 时自动发 /compact
@@ -256,7 +276,8 @@ function App() {
     const sid = activeSessionIdRef.current
     if (!sid) return
     isAutoCompactingRef.current = true
-    ws.sendMessage(sid, '/compact')
+    const compactSession = sessionsRef.current.find((s) => s.id === sid)
+    ws.sendMessage(sid, '/compact', undefined, compactSession?.agentId)
   }, [ws])
 
   ws.onCompactionEnd.current = useCallback(() => {
@@ -266,18 +287,27 @@ function App() {
   // Get active session
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
 
+  // 切换当前会话的 agent
+  const handleChangeAgent = useCallback((agentId: string) => {
+    if (!activeSessionId) return
+    setSessions((prev) =>
+      prev.map((s) => s.id === activeSessionId ? { ...s, agentId, updatedAt: Date.now() } : s)
+    )
+  }, [activeSessionId])
+
   // Session management
-  const createSession = useCallback(() => {
+  const createSession = useCallback((agentId?: string) => {
     const session: ChatSession = {
       id: generateId(),
       title: '新对话',
+      agentId: agentId || (ws.agents.length > 0 ? ws.defaultAgentId : undefined),
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }
     setSessions((prev) => [session, ...prev])
     setActiveSessionId(session.id)
-  }, [])
+  }, [ws.agents, ws.defaultAgentId])
 
   const deleteSession = useCallback(
     (id: string) => {
@@ -302,9 +332,11 @@ function App() {
 
       if (!activeSessionId) {
         // Auto-create session
+        const agentId = ws.agents.length > 0 ? ws.defaultAgentId : undefined
         const session: ChatSession = {
           id: generateId(),
           title,
+          agentId,
           messages: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -321,10 +353,11 @@ function App() {
         setSessions((prev) => [session, ...prev])
         // 立即同步更新 ref，确保 gateway 响应到达时回调能拿到正确的 sessionId
         activeSessionIdRef.current = session.id
+        lastSendSessionIdRef.current = session.id
         setActiveSessionId(session.id)
         startWaiting()
         // 每个前端会话用自己的 id 作为 Gateway sessionKey，避免历史污染
-        ws.sendMessage(session.id, content, attachments)
+        ws.sendMessage(session.id, content, attachments, session.agentId)
         return
       }
 
@@ -357,8 +390,12 @@ function App() {
         startWaiting()
       }
 
+      // 记录发送消息的会话，确保 AI 回复路由到正确的会话
+      lastSendSessionIdRef.current = activeSessionId
+
       // 发送消息到后端，后端队列会自动处理（collect 模式）
-      ws.sendMessage(activeSessionId, content, attachments)
+      const currentSession = sessionsRef.current.find((s) => s.id === activeSessionId)
+      ws.sendMessage(activeSessionId, content, attachments, currentSession?.agentId)
     },
     [activeSessionId, ws, startWaiting]
   )
@@ -600,9 +637,12 @@ function App() {
             <SessionList
               sessions={sessions}
               activeSessionId={activeSessionId}
+              agents={ws.agents}
+              defaultAgentId={ws.defaultAgentId}
               onSelectSession={setActiveSessionId}
               onNewSession={createSession}
               onDeleteSession={deleteSession}
+              onRestartGateway={() => gateway.restart()}
             />
           </div>
           <div className="main-content">
@@ -614,6 +654,11 @@ function App() {
               gatewayPort={gateway.port}
               onStop={handleStop}
               isStreaming={ws.isStreaming}
+              agents={ws.agents}
+              currentAgentId={activeSession?.agentId}
+              defaultAgentId={ws.defaultAgentId}
+              onChangeAgent={handleChangeAgent}
+              onRestartGateway={() => gateway.restart()}
             />
           </div>
         </div>

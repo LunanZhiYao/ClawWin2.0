@@ -66,6 +66,7 @@ export function useGateway(): UseGatewayReturn {
 
     // Listen for logs
     const unsubLog = window.electronAPI.gateway.onLog((log: GatewayLog) => {
+      console.log(`[gateway:${log.level}]`, log.message)
       setLogs((prev) => [...prev.slice(-200), log])
     })
 

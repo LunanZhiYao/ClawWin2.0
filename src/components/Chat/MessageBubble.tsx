@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -147,14 +147,46 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
   const isQueued = message.status === 'queued'
   const isStreaming = message.status === 'streaming'
   const isError = message.status === 'error'
-  const streamTextRef = useRef<HTMLSpanElement>(null)
 
-  // 流式阶段: 通过 ref 直接设置 textContent, 绕过 React 协调
-  useLayoutEffect(() => {
-    if (isStreaming && streamTextRef.current) {
-      streamTextRef.current.textContent = message.content
+  // 流式打字机效果：单次 rAF 循环 + 直接 DOM 操作，匀速逐字显示
+  const previewRef = useRef<HTMLDivElement>(null)
+  const targetRef = useRef('')
+  const visibleLenRef = useRef(0)
+  const rafRef = useRef(0)
+  const wasStreamingRef = useRef(false)
+  const [justFinished, setJustFinished] = useState(false)
+
+  // 每次 render 同步最新内容到 ref，不触发 effect
+  targetRef.current = isStreaming ? (message.content || '') : ''
+
+  useEffect(() => {
+    if (!isStreaming) {
+      cancelAnimationFrame(rafRef.current)
+      // 清除直接写入 DOM 的文本，防止 React 复用节点时残留
+      if (previewRef.current) previewRef.current.textContent = ''
+      // streaming → done 时标记，触发淡入动画
+      if (wasStreamingRef.current && message.content) {
+        setJustFinished(true)
+      }
+      visibleLenRef.current = 0
+      wasStreamingRef.current = false
+      return
     }
-  }, [isStreaming, message.content])
+    wasStreamingRef.current = true
+    const step = () => {
+      const target = targetRef.current
+      if (visibleLenRef.current < target.length) {
+        visibleLenRef.current += 1
+        if (previewRef.current) {
+          previewRef.current.textContent = target.slice(0, visibleLenRef.current)
+          previewRef.current.scrollTop = previewRef.current.scrollHeight
+        }
+      }
+      rafRef.current = requestAnimationFrame(step)
+    }
+    rafRef.current = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [isStreaming])
 
   const handleFileClick = useCallback((filePath: string) => {
     // Open file with system default application via Electron shell
@@ -167,7 +199,6 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
 
   const displayContent = message.content
 
-  // Streaming: skip heavy rehypeHighlight to reduce DOM churn
   const rehypePlugins = [rehypeHighlight]
 
   // Check if content has inline images (only for assistant messages, non-streaming)
@@ -237,8 +268,8 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
                 // User messages: plain text
                 displayContent || ''
               ) : isStreaming ? (
-                // 流式阶段: 空 span + ref, textContent 由 useLayoutEffect 维护
-                <span ref={streamTextRef} style={{ whiteSpace: 'pre-wrap' }} />
+                // 流式阶段: rAF 逐字写入 DOM，此处只挂载空容器
+                <div key="streaming" className="streaming-preview" ref={previewRef} />
               ) : displayContent ? (
                 hasInlineImages ? (
                   // Assistant with inline images: mixed rendering
@@ -268,7 +299,7 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
                   })
                 ) : (
                   // Assistant: always render with ReactMarkdown (streaming + done)
-                  <div className="chat-markdown">
+                  <div key="markdown" className={`chat-markdown${justFinished ? ' markdown-fade-in' : ''}`} onAnimationEnd={() => setJustFinished(false)}>
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
                       rehypePlugins={rehypePlugins}
@@ -281,7 +312,6 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
               ) : (
                 isStreaming ? '...' : null
               )}
-              {isStreaming && <span className="streaming-cursor" />}
             </div>
           )}
         </div>

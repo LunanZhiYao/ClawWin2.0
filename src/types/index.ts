@@ -86,6 +86,11 @@ interface ElectronSkills {
   installDep: (skillName: string) => Promise<{ ok: boolean; error?: string }>
 }
 
+interface ElectronAgents {
+  create: (params: { agentId: string; name: string }) => Promise<{ ok: boolean; error?: string }>
+  delete: (params: { agentId: string }) => Promise<{ ok: boolean; error?: string }>
+}
+
 interface ElectronPairing {
   list: () => Promise<ChannelPairingGroup[]>
   approve: (channel: string, code: string) => Promise<{ id: string } | null>
@@ -160,6 +165,7 @@ interface ElectronAPI {
   dialog: ElectronDialog
   file: ElectronFile
   skills: ElectronSkills
+  agents: ElectronAgents
   pairing: ElectronPairing
   ollama: ElectronOllama
   cww: ElectronCww
@@ -205,9 +211,21 @@ export interface ChatMessage {
 export interface ChatSession {
   id: string
   title: string
+  agentId?: string
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
+}
+
+export interface AgentInfo {
+  id: string
+  name?: string
+  identity?: {
+    name?: string
+    emoji?: string
+    avatar?: string
+    avatarUrl?: string
+  }
 }
 
 export interface ModelProvider {

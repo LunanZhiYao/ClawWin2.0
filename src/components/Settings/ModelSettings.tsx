@@ -102,6 +102,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
   const [rechargeStatus, setRechargeStatus] = useState<'idle' | 'paying' | 'success'>('idle')
   const [showCustomRecharge, setShowCustomRecharge] = useState(false)
   const [customRechargeInput, setCustomRechargeInput] = useState('')
+  const [cwwRefreshing, setCwwRefreshing] = useState(false)
 
   // Load current API key when provider changes
   useEffect(() => {
@@ -190,6 +191,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
   }, [cwwCodeCountdown])
 
   const fetchCwwModelsAndProfile = useCallback(async (token: string) => {
+    setCwwRefreshing(true)
     try {
       const [modelsRes, profileRes] = await Promise.all([
         window.electronAPI.cww.fetchModels({ serverUrl: cwwServerUrl, token }),
@@ -206,6 +208,8 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
         setCwwView('login')
         setCwwError('登录已过期，请重新登录')
       }
+    } finally {
+      setCwwRefreshing(false)
     }
   }, [])
 
@@ -790,7 +794,12 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                       充值
                     </button>
                     <button className="cww-btn-small" onClick={handleCwwLogout}>退出</button>
+                    <button className="cww-btn-small" onClick={() => fetchCwwModelsAndProfile(cwwToken)}
+                      disabled={cwwRefreshing}>
+                      {cwwRefreshing ? '刷新中...' : '刷新模型'}
+                    </button>
                   </div>
+                  {cwwRefreshing && <div className="cww-refresh-bar"><div className="cww-refresh-bar-inner" /></div>}
                   {cwwError && <div className="cww-error">{cwwError}</div>}
                   {(() => {
                     const rates = cwwModels.map(m => (m.inputRate + m.outputRate) / 2).sort((a, b) => a - b)

@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
 import { InputArea } from './InputArea'
-import type { ChatMessage, ChatAttachment } from '../../types'
+import type { ChatMessage, ChatAttachment, AgentInfo } from '../../types'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -12,6 +12,16 @@ interface ChatAreaProps {
   isStreaming?: boolean
   onStop: () => void
   gatewayPort?: number
+  agents: AgentInfo[]
+  currentAgentId?: string
+  defaultAgentId: string
+  onChangeAgent: (agentId: string) => void
+  onRestartGateway: () => void
+}
+
+/** 获取 agent 的显示名称 */
+function getAgentDisplayName(agent: AgentInfo): string {
+  return agent.identity?.name || agent.name || agent.id
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -23,6 +33,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   isStreaming = false,
   onStop,
   gatewayPort = 18888,
+  agents,
+  currentAgentId,
+  defaultAgentId: _defaultAgentId,
+  onChangeAgent,
+  onRestartGateway,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
@@ -31,13 +46,58 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showScrollTop, setShowScrollTop] = useState(false)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
   const [screenshotToast, setScreenshotToast] = useState<string | null>(null)
+  const [showAgentPicker, setShowAgentPicker] = useState(false)
+  const [showCreateAgent, setShowCreateAgent] = useState(false)
+  const [newAgentId, setNewAgentId] = useState('')
+  const [newAgentName, setNewAgentName] = useState('')
+  const [createError, setCreateError] = useState('')
+  const [creating, setCreating] = useState(false)
+  const agentPickerRef = useRef<HTMLDivElement>(null)
+
+  // 点击外部关闭 agent 选择器和创建表单
+  useEffect(() => {
+    if (!showAgentPicker && !showCreateAgent) return
+    const handler = (e: MouseEvent) => {
+      if (agentPickerRef.current && !agentPickerRef.current.contains(e.target as Node)) {
+        setShowAgentPicker(false)
+        setShowCreateAgent(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showAgentPicker, showCreateAgent])
+
+  const handleCreateAgent = useCallback(async () => {
+    const id = newAgentId.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
+    const name = newAgentName.trim()
+    if (!id) { setCreateError('请输入 Agent ID'); return }
+    if (!name) { setCreateError('请输入名称'); return }
+    setCreating(true)
+    setCreateError('')
+    try {
+      const res = await window.electronAPI.agents.create({ agentId: id, name })
+      if (!res.ok) { setCreateError(res.error || '创建失败'); setCreating(false); return }
+      setShowCreateAgent(false)
+      setShowAgentPicker(false)
+      setNewAgentId('')
+      setNewAgentName('')
+      onRestartGateway()
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : '创建失败')
+    } finally {
+      setCreating(false)
+    }
+  }, [newAgentId, newAgentName, onRestartGateway])
 
   // Auto-scroll to bottom when new messages arrive or typing indicator shows
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: isStreaming ? 'instant' : 'smooth',
+      })
     }
-  }, [messages, autoScroll, isWaiting])
+  }, [messages, autoScroll, isWaiting, isStreaming])
 
   // 清理 rAF 和 toast timer
   useEffect(() => {
@@ -121,7 +181,99 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   return (
     <div className="chat-area">
       <div className="chat-header">
-        <div className="chat-header-left" />
+        <div className="chat-header-left" ref={agentPickerRef}>
+          {agents.filter(a => a.id !== 'main').length > 0 ? (
+            <>
+              <button
+                className="chat-header-agent chat-header-agent-clickable"
+                onClick={() => { setShowAgentPicker((v) => !v); setShowCreateAgent(false) }}
+                title="选择 Agent"
+              >
+                {!currentAgentId || currentAgentId === 'main'
+                  ? 'Main'
+                  : getAgentDisplayName(agents.find((a) => a.id === currentAgentId) || agents.filter(a => a.id !== 'main')[0])
+                }
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginLeft: 4}}>
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              {showAgentPicker && (
+                <div className="agent-picker-dropdown">
+                  <div
+                    className={`agent-picker-item ${!currentAgentId || currentAgentId === 'main' ? 'active' : ''}`}
+                    onClick={() => {
+                      onChangeAgent('main')
+                      setShowAgentPicker(false)
+                    }}
+                  >
+                    <span className="agent-picker-emoji">M</span>
+                    <span className="agent-picker-name">Main</span>
+                  </div>
+                  {agents.filter(a => a.id !== 'main').map((agent) => (
+                    <div
+                      key={agent.id}
+                      className={`agent-picker-item ${agent.id === currentAgentId ? 'active' : ''}`}
+                      onClick={() => {
+                        onChangeAgent(agent.id)
+                        setShowAgentPicker(false)
+                      }}
+                    >
+                      <span className="agent-picker-emoji">
+                        {agent.identity?.emoji || getAgentDisplayName(agent).slice(0, 1)}
+                      </span>
+                      <span className="agent-picker-name">{getAgentDisplayName(agent)}</span>
+                      <span
+                        className="agent-picker-delete"
+                        title="删除 Agent"
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          const res = await window.electronAPI.agents.delete({ agentId: agent.id })
+                          if (res.ok) onRestartGateway()
+                        }}
+                      >×</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="chat-header-agent">Main</span>
+          )}
+          <button
+            className="chat-header-badge"
+            onClick={() => { setShowCreateAgent((v) => !v); setShowAgentPicker(false); setCreateError('') }}
+            title="新建 Agent"
+          >
+            + Agent
+          </button>
+          {showCreateAgent && (
+            <div className="agent-create-dropdown">
+              <div className="agent-create-form">
+                <input
+                  className="agent-create-input"
+                  placeholder="Agent ID (小写字母/数字)"
+                  value={newAgentId}
+                  onChange={(e) => setNewAgentId(e.target.value.replace(/[^a-z0-9-]/g, ''))}
+                  autoFocus
+                />
+                <input
+                  className="agent-create-input"
+                  placeholder="显示名称"
+                  value={newAgentName}
+                  onChange={(e) => setNewAgentName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleCreateAgent() }}
+                />
+                {createError && <div className="agent-create-error">{createError}</div>}
+                <div className="agent-create-actions">
+                  <button className="agent-create-cancel" onClick={() => setShowCreateAgent(false)}>取消</button>
+                  <button className="agent-create-confirm" onClick={handleCreateAgent} disabled={creating}>
+                    {creating ? '创建中...' : '创建'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="chat-header-right">
           <button
             className="chat-header-badge"

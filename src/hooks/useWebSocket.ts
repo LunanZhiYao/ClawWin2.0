@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { GatewayClient, type GatewayEventFrame, type GatewayHelloOk } from '../lib/gateway-protocol'
-import type { ChatMessage, ChatAttachment } from '../types'
+import type { ChatMessage, ChatAttachment, AgentInfo } from '../types'
 
 interface UseWebSocketOptions {
   url: string
@@ -11,19 +11,30 @@ interface UseWebSocketOptions {
 interface UseWebSocketReturn {
   connected: boolean
   hello: GatewayHelloOk | null
-  sendMessage: (sessionKey: string, content: string, attachments?: ChatAttachment[]) => void
-  abortSession: (sessionKey: string) => Promise<void>
+  agents: AgentInfo[]
+  defaultAgentId: string
+  sendMessage: (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => void
+  abortSession: (sessionKey: string, agentId?: string) => Promise<void>
   isStreaming: boolean
   backendStatus: string
   onMessageStream: React.MutableRefObject<((msg: ChatMessage) => void) | null>
   onFinalUsage: React.MutableRefObject<((usage: { input: number; output: number }) => void) | null>
   onCompactionEnd: React.MutableRefObject<(() => void) | null>
   reconnect: () => void
+  refreshAgents: () => void
   client: GatewayClient | null
 }
 
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
+}
+
+/** 构造 gateway 可解析的 sessionKey: agent:{agentId}:{originalId} */
+function buildAgentSessionKey(sessionKey: string, agentId?: string): string {
+  if (!agentId || agentId === 'main') return sessionKey
+  // 如果已经是 agent: 格式，不重复包装
+  if (sessionKey.startsWith('agent:')) return sessionKey
+  return `agent:${agentId}:${sessionKey}`
 }
 
 /**
@@ -63,6 +74,8 @@ function extractText(message: unknown): string {
 export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseWebSocketReturn {
   const [connected, setConnected] = useState(false)
   const [hello, setHello] = useState<GatewayHelloOk | null>(null)
+  const [agents, setAgents] = useState<AgentInfo[]>([])
+  const [defaultAgentId, setDefaultAgentId] = useState('main')
   const [streamingCount, setStreamingCount] = useState(0)
   const isStreaming = streamingCount > 0
   const [backendStatus, setBackendStatus] = useState('')
@@ -74,6 +87,10 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
   const thinkingBufferRef = useRef<Map<string, string>>(new Map())
   // 节流：限制流式 UI 更新频率，避免 ReactMarkdown 频繁重渲染导致闪烁
   const streamThrottleRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // 追踪每个 runId 上次推送的内容长度，避免内容未变时重复推送导致 React 卡死
+  const lastPushedLenRef = useRef<Map<string, number>>(new Map())
+  // 空转计数器：内容连续未变的次数，超过阈值自动停止 timer（兜底 final 丢失）
+  const idleCountRef = useRef<Map<string, number>>(new Map())
   // 自动压缩：暴露给 App.tsx 的回调
   const onFinalUsage = useRef<((usage: { input: number; output: number }) => void) | null>(null)
   const onCompactionEnd = useRef<(() => void) | null>(null)
@@ -91,6 +108,14 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         console.log('[ws] handshake completed (hello-ok received)')
         setConnected(true)
         setHello(h)
+        // 握手完成后获取 agent 列表
+        client.request<{ defaultId?: string; agents?: AgentInfo[] }>('agents.list', {})
+          .then((res) => {
+            if (res?.agents) setAgents(res.agents)
+            if (res?.defaultId) setDefaultAgentId(res.defaultId)
+            console.log('[ws] agents loaded:', res?.agents?.map((a: AgentInfo) => a.id))
+          })
+          .catch((err) => console.warn('[ws] agents.list failed:', err))
       },
       onEvent: (evt: GatewayEventFrame) => {
         handleEvent(evt)
@@ -244,21 +269,51 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
           streamThrottleRef.current.set(runId, setTimeout(function flush() {
             const latest = streamBufferRef.current.get(runId)
             if (latest != null) {
-              const m: ChatMessage = {
-                id: runId,
-                role: 'assistant',
-                content: latest,
-                thinking: latest.length > 0 ? undefined : thinkingBufferRef.current.get(runId),
-                timestamp: Date.now(),
-                status: 'streaming',
+              const lastLen = lastPushedLenRef.current.get(runId) ?? -1
+              if (latest.length !== lastLen) {
+                // 内容有变化，推送并重置空转计数
+                lastPushedLenRef.current.set(runId, latest.length)
+                idleCountRef.current.set(runId, 0)
+                const m: ChatMessage = {
+                  id: runId,
+                  role: 'assistant',
+                  content: latest,
+                  thinking: latest.length > 0 ? undefined : thinkingBufferRef.current.get(runId),
+                  timestamp: Date.now(),
+                  status: 'streaming',
+                }
+                onMessageStream.current?.(m)
+              } else {
+                // 内容未变，累加空转计数
+                const idle = (idleCountRef.current.get(runId) ?? 0) + 1
+                idleCountRef.current.set(runId, idle)
+                // 超过 50 次空转（~6 秒）视为 final 丢失，自动停止
+                if (idle > 50) {
+                  streamThrottleRef.current.delete(runId)
+                  lastPushedLenRef.current.delete(runId)
+                  idleCountRef.current.delete(runId)
+                  if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
+                  thinkingBufferRef.current.delete(runId)
+                  // 推送最终状态
+                  const m: ChatMessage = {
+                    id: runId,
+                    role: 'assistant',
+                    content: latest,
+                    timestamp: Date.now(),
+                    status: 'done',
+                  }
+                  onMessageStream.current?.(m)
+                  return
+                }
               }
-              onMessageStream.current?.(m)
             }
             // 如果 runId 还在 buffer 中，继续下一轮节流
             if (streamBufferRef.current.has(runId)) {
               streamThrottleRef.current.set(runId, setTimeout(flush, 120))
             } else {
               streamThrottleRef.current.delete(runId)
+              lastPushedLenRef.current.delete(runId)
+              idleCountRef.current.delete(runId)
             }
           }, 120))
         }
@@ -282,15 +337,31 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
 
           streamThrottleRef.current.set(runId, setTimeout(function flushThinking() {
             if (!streamBufferRef.current.has(runId) && thinkingBufferRef.current.has(runId)) {
-              const m: ChatMessage = {
-                id: runId,
-                role: 'assistant',
-                content: '',
-                thinking: thinkingBufferRef.current.get(runId),
-                timestamp: Date.now(),
-                status: 'streaming',
+              const thinkingNow = thinkingBufferRef.current.get(runId) || ''
+              const lastLen = lastPushedLenRef.current.get(runId) ?? -1
+              if (thinkingNow.length !== lastLen) {
+                lastPushedLenRef.current.set(runId, thinkingNow.length)
+                idleCountRef.current.set(runId, 0)
+                const m: ChatMessage = {
+                  id: runId,
+                  role: 'assistant',
+                  content: '',
+                  thinking: thinkingNow,
+                  timestamp: Date.now(),
+                  status: 'streaming',
+                }
+                onMessageStream.current?.(m)
+              } else {
+                const idle = (idleCountRef.current.get(runId) ?? 0) + 1
+                idleCountRef.current.set(runId, idle)
+                if (idle > 50) {
+                  streamThrottleRef.current.delete(runId)
+                  lastPushedLenRef.current.delete(runId)
+                  idleCountRef.current.delete(runId)
+                  thinkingBufferRef.current.delete(runId)
+                  return
+                }
               }
-              onMessageStream.current?.(m)
               streamThrottleRef.current.set(runId, setTimeout(flushThinking, 120))
             }
           }, 120))
@@ -301,6 +372,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       setBackendStatus('')
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
+      lastPushedLenRef.current.delete(runId)
+      idleCountRef.current.delete(runId)
       thinkingBufferRef.current.delete(runId)
 
       const extractedText = extractText(payload.message)
@@ -332,6 +405,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       const errorMessage = (payload.errorMessage as string) || '发生错误'
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
+      lastPushedLenRef.current.delete(runId)
+      idleCountRef.current.delete(runId)
       thinkingBufferRef.current.delete(runId)
       if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
 
@@ -349,6 +424,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       const text = streamBufferRef.current.get(runId) || '（已中断）'
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
+      lastPushedLenRef.current.delete(runId)
+      idleCountRef.current.delete(runId)
       thinkingBufferRef.current.delete(runId)
       if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
 
@@ -366,6 +443,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       const buffered = streamBufferRef.current.get(runId) || ''
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
+      lastPushedLenRef.current.delete(runId)
+      idleCountRef.current.delete(runId)
       thinkingBufferRef.current.delete(runId)
       if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
       const hint = '\n\n---\n> 回复被中断，可能是上下文空间不足。建议点击「压缩」后重试。'
@@ -381,7 +460,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
     }
   }, [])
 
-  const sendMessage = useCallback((sessionKey: string, content: string, attachments?: ChatAttachment[]) => {
+  const sendMessage = useCallback((sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => {
     const client = clientRef.current
     if (!client) {
       console.error('[ws] cannot send: no client instance')
@@ -398,7 +477,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
 
     const idempotencyKey = generateId()
 
-    // Build gateway attachments with file paths (backend reads files itself)
+    // Build gateway attachments with file paths and base64 content
     const gatewayAttachments = attachments
       ?.filter((a) => a.filePath)
       .map((a) => ({
@@ -406,10 +485,24 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         mimeType: a.mimeType,
         fileName: a.fileName,
         filePath: a.filePath,
+        content: a.content,
       }))
 
+    // Debug: log attachment details before sending to gateway
+    if (gatewayAttachments && gatewayAttachments.length > 0) {
+      console.log('[ws] sendMessage attachments:', gatewayAttachments.map((a, i) => ({
+        index: i,
+        type: a.type,
+        mimeType: a.mimeType,
+        fileName: a.fileName,
+        hasFilePath: !!a.filePath,
+        hasContent: typeof a.content === 'string',
+        contentLen: typeof a.content === 'string' ? a.content.length : 0,
+      })))
+    }
+
     const payload: Record<string, unknown> = {
-      sessionKey,
+      sessionKey: buildAgentSessionKey(sessionKey, agentId),
       message: content,
       deliver: false,
       idempotencyKey,
@@ -431,11 +524,11 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
     })
   }, [])
 
-  const abortSession = useCallback(async (sessionKey: string) => {
+  const abortSession = useCallback(async (sessionKey: string, agentId?: string) => {
     const client = clientRef.current
     if (!client) return
     try {
-      await client.request('chat.abort', { sessionKey })
+      await client.request('chat.abort', { sessionKey: buildAgentSessionKey(sessionKey, agentId) })
     } catch (err) {
       console.error('[ws] chat.abort failed:', err)
     }
@@ -446,5 +539,17 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
     clientRef.current?.start()
   }, [])
 
-  return { connected, hello, sendMessage, abortSession, isStreaming, backendStatus, onMessageStream, onFinalUsage, onCompactionEnd, reconnect, client: clientRef.current }
+  const refreshAgents = useCallback(() => {
+    const client = clientRef.current
+    if (!client) return
+    client.request<{ defaultId?: string; agents?: AgentInfo[] }>('agents.list', {})
+      .then((res) => {
+        if (res?.agents) setAgents(res.agents)
+        if (res?.defaultId) setDefaultAgentId(res.defaultId)
+        console.log('[ws] agents refreshed:', res?.agents?.map((a: AgentInfo) => a.id))
+      })
+      .catch((err) => console.warn('[ws] agents.list refresh failed:', err))
+  }, [])
+
+  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, onMessageStream, onFinalUsage, onCompactionEnd, reconnect, refreshAgents, client: clientRef.current }
 }

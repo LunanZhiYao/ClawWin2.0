@@ -20,8 +20,8 @@ export const MODEL_PROVIDERS: ModelProvider[] = [
     models: [
       { id: 'glm-5', name: 'GLM-5', reasoning: false, contextWindow: 128000, maxTokens: 8192 },
       { id: 'glm-4-plus', name: 'GLM-4 Plus', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
-      { id: 'glm-4.7-flash', name: 'GLM-4.7-Flash (免费)', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
-      { id: 'glm-4.6v-flash', name: 'GLM-4.6V-Flash (免费·多模态)', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
+      { id: 'glm-4.7-flash', name: 'GLM-4.7-Flash', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
+      { id: 'glm-4.6v-flash', name: 'GLM-4.6V-Flash (多模态)', reasoning: false, contextWindow: 128000, maxTokens: 4096 },
     ],
   },
   {

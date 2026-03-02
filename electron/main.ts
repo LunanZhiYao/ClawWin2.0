@@ -529,7 +529,7 @@ function setupIPC() {
         id: params.modelId,
         name: params.modelName,
         reasoning: params.reasoning ?? false,
-        input: ['text'],
+        input: ['text', 'image'],
         contextWindow: params.contextWindow ?? 200000,
         maxTokens: params.maxTokens ?? 8192,
       }
@@ -579,10 +579,6 @@ function setupIPC() {
         }
         const authJson = JSON.stringify(existingAuth, null, 2)
         fs.writeFileSync(authFile, authJson, 'utf-8')
-        // Also write to agent directory
-        const agentDir = path.join(openclawHome, 'agents', 'main', 'agent')
-        fs.mkdirSync(agentDir, { recursive: true })
-        fs.writeFileSync(path.join(agentDir, 'auth-profiles.json'), authJson, 'utf-8')
       }
 
       return { ok: true }
@@ -815,6 +811,106 @@ function setupIPC() {
       const ui = readUiConfig()
       ui.clawwinweb = state
       writeUiConfig(ui)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  // ===== Agent creation =====
+  ipcMain.handle('agents:create', (_event, params: { agentId: string; name: string }) => {
+    try {
+      const { agentId, name } = params
+      if (!agentId || !/^[a-z0-9-]+$/.test(agentId)) {
+        return { ok: false, error: 'Agent ID 只能包含小写字母、数字和连字符' }
+      }
+
+      const configPath = getOpenclawConfigPath()
+      const configDir = path.dirname(configPath)
+      if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true })
+      const config = fs.existsSync(configPath)
+        ? JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+        : {}
+
+      if (!config.agents) config.agents = {}
+      if (!config.agents.list) config.agents.list = []
+
+      // 检查重复
+      const existing = (config.agents.list as Array<{ id: string }>).find((a) => a.id === agentId)
+      if (existing) {
+        return { ok: false, error: `Agent "${agentId}" 已存在` }
+      }
+
+      // 如果 list 中还没有 main，先把 main 加进去（继承 defaults 配置）
+      const hasMain = (config.agents.list as Array<{ id: string }>).some((a) => a.id === 'main')
+      if (!hasMain) {
+        const defaultWorkspace = config.agents?.defaults?.workspace || path.join(os.homedir(), 'openclaw')
+        config.agents.list.unshift({
+          id: 'main',
+          name: 'Main',
+          default: true,
+          workspace: defaultWorkspace,
+        })
+      }
+
+      // 添加到 agents.list
+      const workspace = path.join(os.homedir(), `clawd-${agentId}`)
+      config.agents.list.push({ id: agentId, name, workspace })
+
+      if (!config.meta) config.meta = {}
+      config.meta.lastTouchedAt = new Date().toISOString()
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+
+      // 创建 workspace 目录
+      if (!fs.existsSync(workspace)) fs.mkdirSync(workspace, { recursive: true })
+
+      // 创建 agent 目录并复制 auth-profiles
+      const openclawHome = path.join(os.homedir(), '.openclaw')
+      const agentDir = path.join(openclawHome, 'agents', agentId, 'agent')
+      fs.mkdirSync(agentDir, { recursive: true })
+
+      const mainAuth = path.join(openclawHome, 'auth-profiles.json')
+      if (fs.existsSync(mainAuth)) {
+        fs.copyFileSync(mainAuth, path.join(agentDir, 'auth-profiles.json'))
+      }
+
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('agents:delete', (_event, params: { agentId: string }) => {
+    try {
+      const { agentId } = params
+      if (!agentId || agentId === 'main') {
+        return { ok: false, error: '不能删除 Main agent' }
+      }
+
+      // 从 config 的 agents.list 中移除
+      const configPath = getOpenclawConfigPath()
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+        const list = config?.agents?.list as Array<{ id: string }> | undefined
+        if (list) {
+          config.agents.list = list.filter(a => a.id !== agentId)
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+        }
+      }
+
+      // 删除 agent 目录
+      const agentDir = path.join(os.homedir(), '.openclaw', 'agents', agentId)
+      if (fs.existsSync(agentDir)) {
+        fs.rmSync(agentDir, { recursive: true, force: true })
+      }
+
+      // 删除 workspace 目录
+      const workspace = path.join(os.homedir(), `clawd-${agentId}`)
+      if (fs.existsSync(workspace)) {
+        fs.rmSync(workspace, { recursive: true, force: true })
+      }
+
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -1064,6 +1160,38 @@ app.whenReady().then(async () => {
     // 自动生成 CLAUDE.md 环境信息
     try { generateClaudeMd() } catch (err) {
       console.error('[claude-md] generation failed:', err)
+    }
+
+    // 升级旧版 workspace 文件（让 IDENTITY.md 支持跨会话记忆更新）
+    try {
+      const configPath = getOpenclawConfigPath()
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+        const workspace = config?.agents?.defaults?.workspace || path.join(os.homedir(), 'openclaw')
+        const identityPath = path.join(workspace, 'IDENTITY.md')
+        if (fs.existsSync(identityPath)) {
+          const content = fs.readFileSync(identityPath, 'utf-8')
+          if (content.includes('ClawWin 助手') && !content.includes('请直接更新此文件')) {
+            const patched = content.trimEnd() + '\n\n> 如果用户告诉你名字、性格或其他身份信息，请直接更新此文件，这样下次新会话你就能记住。\n'
+            fs.writeFileSync(identityPath, patched, 'utf-8')
+            console.log('[workspace] upgraded IDENTITY.md with memory hint')
+          }
+        }
+        const agentsPath = path.join(workspace, 'AGENTS.md')
+        if (fs.existsSync(agentsPath)) {
+          const content = fs.readFileSync(agentsPath, 'utf-8')
+          if (content.includes('读 SOUL.md — 你是谁') && !content.includes('读 IDENTITY.md')) {
+            const patched = content.replace(
+              '1. 读 SOUL.md — 你是谁\n2. 读 USER.md — 你在帮谁\n3. 如果有 memory/ 目录，读今天和昨天的记录',
+              '1. 读 IDENTITY.md — 你的身份（名称、性格等）\n2. 读 USER.md — 你在帮谁\n3. 如果有 memory/ 目录，用 memory_search 搜索或直接读取 memory/ 下的文件\n4. 如果有 MEMORY.md，读取它\n\n**重要：** 你的身份信息在 IDENTITY.md 中。如果用户告诉你新的名字或身份信息，立即更新 IDENTITY.md。'
+            )
+            fs.writeFileSync(agentsPath, patched, 'utf-8')
+            console.log('[workspace] upgraded AGENTS.md with identity-first instructions')
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[workspace] upgrade failed:', err)
     }
 
     gatewayManager?.start()
