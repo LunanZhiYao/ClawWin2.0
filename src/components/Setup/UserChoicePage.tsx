@@ -25,7 +25,7 @@ export const UserChoicePage: React.FC<UserChoicePageProps> = ({ onClawWin, onCus
           <span className="feature-icon">&#128295;</span>
           <div>
             <strong>自配 API Key</strong>
-            <p>我有直接配置厂商大模型 API Key 的知识，虽然更贵，但我为知识付费，之后再注册</p>
+            <p>我已有厂商大模型 API Key，直接配置使用</p>
           </div>
           <span className="choice-arrow">&#8250;</span>
         </div>

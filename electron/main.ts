@@ -961,8 +961,13 @@ function setupIPC() {
       if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
 
       const baseName = path.basename(srcPath)
+      const ext = path.extname(baseName)
       const timestamp = Date.now()
-      const destName = `${timestamp}-${baseName}`
+      // 中文/非ASCII文件名可能导致 gateway 解析失败，统一用安全文件名
+      const hasNonAscii = /[^\x00-\x7F]/.test(baseName)
+      const destName = hasNonAscii
+        ? `upload-${timestamp}${ext}`
+        : `${timestamp}-${baseName}`
       const destPath = path.join(uploadsDir, destName)
 
       fs.copyFileSync(srcPath, destPath)

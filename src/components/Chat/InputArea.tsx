@@ -20,7 +20,7 @@ function isImageFile(mimeType?: string, fileName?: string): boolean {
 }
 
 interface AttachmentWithPreview {
-  type: 'image' | 'file'
+  type: 'image' | 'file' | 'folder'
   fileName: string
   filePath: string
   mimeType?: string
@@ -229,10 +229,11 @@ export const InputArea: React.FC<InputAreaProps> = ({
 
     if ((!hasText && !hasAtt) || disabled) return
 
-    // Copy files to workspace so gateway can access them
+    // Copy files to workspace so gateway can access them (skip folders)
     const resolvedAttachments = hasAtt
       ? await Promise.all(
           attachments.map(async (a) => {
+            if (a.type === 'folder') return a
             const result = await window.electronAPI.file.copyToWorkspace(a.filePath)
             return { ...a, filePath: result.ok && result.destPath ? result.destPath : a.filePath }
           })
@@ -389,6 +390,17 @@ export const InputArea: React.FC<InputAreaProps> = ({
     fileInputRef.current?.click()
   }, [])
 
+  const handleFolderClick = useCallback(async () => {
+    if (disabled || attachments.length >= MAX_ATTACHMENTS) return
+    const folderPath = await window.electronAPI.dialog.selectFolder()
+    if (!folderPath) return
+    const folderName = folderPath.split(/[\\/]/).pop() || folderPath
+    setAttachments((prev) => [
+      ...prev,
+      { type: 'folder', fileName: folderName, filePath: folderPath, size: 0 },
+    ])
+  }, [disabled, attachments.length])
+
   // Drag and drop handlers
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -476,6 +488,12 @@ export const InputArea: React.FC<InputAreaProps> = ({
                     alt={att.fileName}
                     className="input-preview-thumb"
                   />
+                ) : att.type === 'folder' ? (
+                  <div className="input-preview-file-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                    </svg>
+                  </div>
                 ) : (
                   <div className="input-preview-file-icon">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -485,12 +503,12 @@ export const InputArea: React.FC<InputAreaProps> = ({
                   </div>
                 )}
                 <div className="input-preview-info">
-                  <span className="input-preview-name" title={att.fileName}>
+                  <span className="input-preview-name" title={att.type === 'folder' ? att.filePath : att.fileName}>
                     {att.fileName.length > 12
                       ? att.fileName.slice(0, 9) + '...'
                       : att.fileName}
                   </span>
-                  <span className="input-preview-size">{formatFileSize(att.size)}</span>
+                  <span className="input-preview-size">{att.type === 'folder' ? '文件夹' : formatFileSize(att.size)}</span>
                 </div>
                 <button
                   className="input-preview-remove"
@@ -527,6 +545,26 @@ export const InputArea: React.FC<InputAreaProps> = ({
               strokeLinejoin="round"
             >
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+
+          <button
+            className="input-attachment-btn"
+            onClick={handleFolderClick}
+            disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
+            title="挂载文件夹"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
             </svg>
           </button>
 

@@ -191,7 +191,7 @@ export interface GatewayLog {
 }
 
 export interface ChatAttachment {
-  type: 'image' | 'file'
+  type: 'image' | 'file' | 'folder'
   fileName?: string
   filePath: string       // 本地完整路径
   mimeType?: string
