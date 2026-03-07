@@ -248,7 +248,7 @@ export class GatewayClient {
       },
       role,
       scopes,
-      caps: [],
+      caps: ['tool-events'],
       auth: this.opts.token ? { token: this.opts.token } : undefined,
       locale: navigator?.language ?? 'zh-CN',
       device,

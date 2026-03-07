@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import type { ChatMessage } from '../../types'
+import type { ChatMessage, ChatToolCall } from '../../types'
 
 function isImageFile(mimeType?: string, fileName?: string): boolean {
   if (mimeType && mimeType.startsWith('image/')) return true
@@ -13,17 +13,84 @@ function isImageFile(mimeType?: string, fileName?: string): boolean {
   return false
 }
 
-/** Convert a local file path to a file:// URL (handles Windows backslashes, CJK, spaces, special chars) */
 function filePathToUrl(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/')
-  // Encode each path segment to handle spaces, CJK, #, % etc.
   const encoded = normalized.split('/').map((seg) => encodeURIComponent(seg)).join('/')
-  // Ensure triple-slash for absolute paths: file:///C%3A/...  →  need colon unescaped for drive letter
   if (/^[a-zA-Z]:\//.test(normalized)) {
-    // Re-insert the colon for the drive letter (encodeURIComponent escapes it to %3A)
     return `file:///${encoded.replace('%3A', ':')}`
   }
   return `file://${encoded}`
+}
+
+function stripLegacyTag(line: string): string {
+  return line.replace(/^\[(THINK|TOOL|CTX|OK|ERROR)\]\s*/i, '').trim()
+}
+
+function inferToolKind(toolCall: ChatToolCall): ChatToolCall['kind'] {
+  if (toolCall.kind) return toolCall.kind
+  const normalized = toolCall.name.trim().toLowerCase()
+  if (/(bash|shell|powershell|terminal|cmd)/.test(normalized)) return 'terminal'
+  if (normalized.includes('todo')) return 'todo'
+  return 'default'
+}
+
+function normalizeThinkingText(thinking?: string, keepLegacyToolLines = false): string {
+  if (!thinking) return ''
+  return thinking
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => keepLegacyToolLines || !/^\[(TOOL|OK|ERROR)\]/i.test(line))
+    .map(stripLegacyTag)
+    .join('\n')
+    .trim()
+}
+
+function parseLegacyThinking(thinking?: string): { reasoning: string; toolCalls: ChatToolCall[] } {
+  if (!thinking) return { reasoning: '', toolCalls: [] }
+
+  const reasoningLines: string[] = []
+  const toolCalls: ChatToolCall[] = []
+  let pendingTool: ChatToolCall | null = null
+
+  for (const [index, rawLine] of thinking.split('\n').entries()) {
+    const line = rawLine.trim()
+    if (!line) continue
+
+    if (/^\[TOOL\]/i.test(line)) {
+      const cleanLine = stripLegacyTag(line)
+      const match = cleanLine.match(/(?:调用工具|tool)\s+([^\s(:：]+)/i)
+      pendingTool = {
+        id: `legacy-tool-${index}`,
+        name: match?.[1] || '工具',
+        status: 'running',
+        summary: cleanLine,
+        kind: /bash|shell|powershell|terminal|cmd/i.test(match?.[1] || '') ? 'terminal' : 'default',
+      }
+      toolCalls.push(pendingTool)
+      continue
+    }
+
+    if (/^\[(OK|ERROR)\]/i.test(line) && /工具|tool/i.test(line)) {
+      const cleanLine = stripLegacyTag(line)
+      const target = pendingTool || toolCalls[toolCalls.length - 1]
+      if (target) {
+        const isError = /^\[ERROR\]/i.test(line)
+        target.status = isError ? 'error' : 'done'
+        target.isError = isError
+        target.output = cleanLine
+      }
+      pendingTool = null
+      continue
+    }
+
+    reasoningLines.push(stripLegacyTag(line))
+  }
+
+  return {
+    reasoning: reasoningLines.join('\n').trim(),
+    toolCalls,
+  }
 }
 
 interface ContentSegment {
@@ -31,24 +98,16 @@ interface ContentSegment {
   value: string
 }
 
-/**
- * Parse message content for embedded screenshot/image references.
- * Detects multiple formats:
- *   1. [screenshot: C:\path\to\file.jpg]
- *   2. `C:\path\to\file.png` (backtick-wrapped)
- *   3. Bare Windows paths like C:\...\file.jpg
- *   4. Bare Unix paths like /tmp/.../file.png
- */
 function parseContentWithImages(content: string): ContentSegment[] {
   const imgExts = 'jpg|jpeg|png|gif|webp|bmp'
-  // Match: [screenshot: path], `path`, or bare Windows/Unix image paths
   const pattern = new RegExp(
-    '\\[screenshot:\\s*([^\\]]+\\.(?:' + imgExts + '))\\s*\\]' +
-    '|`([A-Za-z]:\\\\[^`]+\\.(?:' + imgExts + '))`' +
-    '|`(/[^`]+\\.(?:' + imgExts + '))`' +
-    '|(?<![`\\w])([A-Za-z]:\\\\[^\\s"\'<>]+\\.(?:' + imgExts + '))(?![`\\w])',
+    '\\[screenshot:\\s*([^\\]]+\\.(?:' + imgExts + '))\\s*\\]'
+    + '|`([A-Za-z]:\\\\[^`]+\\.(?:' + imgExts + '))`'
+    + '|`(/[^`]+\\.(?:' + imgExts + '))`'
+    + '|(?<![`\\w])([A-Za-z]:\\\\[^\\s"\'<>]+\\.(?:' + imgExts + '))(?![`\\w])',
     'gi'
   )
+
   const segments: ContentSegment[] = []
   let lastIndex = 0
   let match: RegExpExecArray | null
@@ -73,7 +132,6 @@ function parseContentWithImages(content: string): ContentSegment[] {
   return segments
 }
 
-/** Code block with copy button and language label */
 function CodeBlock({ className, children }: { className?: string; children: React.ReactNode }) {
   const [copied, setCopied] = useState(false)
   const lang = className?.replace('hljs language-', '')?.replace('language-', '') || ''
@@ -99,41 +157,157 @@ function CodeBlock({ className, children }: { className?: string; children: Reac
   )
 }
 
-/** Markdown components override */
 const markdownComponents = {
-  // Code: distinguish inline vs block
-  code({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'> & { className?: string }) {
+  code({ className, children }: React.ComponentPropsWithoutRef<'code'> & { className?: string }) {
     const isBlock = className?.includes('language-') || className?.includes('hljs')
     if (isBlock) {
       return <CodeBlock className={className}>{children}</CodeBlock>
     }
-    return <code className="inline-code" {...props}>{children}</code>
+    return <code className="inline-code">{children}</code>
   },
-  // Wrap pre to avoid double-nesting when CodeBlock already renders <pre>
-  pre({ children }: React.ComponentPropsWithoutRef<'pre'>) {
-    // If child is already a CodeBlock (has code-block-wrapper), pass through
-    const child = React.Children.only(children) as React.ReactElement<{ className?: string }>
-    if (child?.props?.className?.includes('language-') || child?.props?.className?.includes('hljs')) {
-      // CodeBlock handles its own <pre>, just return children
-      return <>{children}</>
+  a({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) {
+    const isLocalFile = typeof href === 'string' && (/^[A-Za-z]:\\/.test(href) || href.startsWith('/'))
+    if (isLocalFile) {
+      return (
+        <a
+          href={href}
+          {...props}
+          onClick={(event) => {
+            event.preventDefault()
+            window.electronAPI?.shell?.openPath?.(href)
+          }}
+        >
+          {children}
+        </a>
+      )
     }
-    return <pre>{children}</pre>
+    return <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
   },
-  // Links open externally
-  a({ href, children }: React.ComponentPropsWithoutRef<'a'>) {
-    return (
-      <a
-        href={href}
-        onClick={(e) => {
-          e.preventDefault()
-          if (href) window.electronAPI?.shell?.openExternal?.(href)
-        }}
-        className="chat-link"
-      >
-        {children}
-      </a>
-    )
-  },
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg className={`message-chevron${open ? ' is-open' : ''}`} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  )
+}
+
+function ReasoningBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(isStreaming)
+  const bodyRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setIsExpanded(isStreaming)
+  }, [isStreaming])
+
+  // 动态计算展开高度
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    if (isExpanded) {
+      el.style.maxHeight = el.scrollHeight + 'px'
+      el.style.opacity = '1'
+    } else {
+      el.style.maxHeight = '0'
+      el.style.opacity = '0'
+    }
+  }, [isExpanded, content])
+
+  if (!content.trim()) return null
+
+  return (
+    <div className="message-reasoning-card">
+      <button className="message-reasoning-header" onClick={() => setIsExpanded((value) => !value)}>
+        <div className="message-reasoning-title-wrap">
+          <ChevronIcon open={isExpanded} />
+          <span className="message-reasoning-title">思考过程</span>
+          {isStreaming && <span className="message-reasoning-live-dot" />}
+        </div>
+      </button>
+      <div ref={bodyRef} className={`message-reasoning-body${isExpanded ? ' is-expanded' : ''}`}>
+        <div className="message-reasoning-content">{content}</div>
+      </div>
+    </div>
+  )
+}
+
+function ToolCallBlock({ toolCall, isLastInSequence = true }: { toolCall: ChatToolCall; isLastInSequence?: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const kind = inferToolKind(toolCall)
+  const hasOutput = Boolean(toolCall.output?.trim())
+  const hasInput = Boolean(toolCall.input?.trim())
+
+  return (
+    <div className={`message-tool-item status-${toolCall.status}`}>
+      {/* 工具间连接线 (LobsterAI 风格) */}
+      {!isLastInSequence && <div className="message-tool-connect-line" />}
+
+      <button className="message-tool-header" onClick={() => setIsExpanded((value) => !value)}>
+        <span className={`message-tool-dot status-${toolCall.status}`} />
+        <div className="message-tool-head-main">
+          <div className="message-tool-head-row">
+            <span className="message-tool-name">{toolCall.name}</span>
+            {toolCall.summary && <code className="message-tool-summary">{toolCall.summary}</code>}
+          </div>
+          <div className="message-tool-subtitle">
+            {toolCall.status === 'running' ? '运行中…' : toolCall.isError ? '执行失败' : '执行完成'}
+          </div>
+        </div>
+        <ChevronIcon open={isExpanded} />
+      </button>
+
+      {isExpanded && (
+        <div className="message-tool-body">
+          {kind === 'terminal' ? (
+            <div className="message-tool-terminal">
+              <div className="message-tool-terminal-topbar">
+                <span className="message-tool-terminal-light red" />
+                <span className="message-tool-terminal-light yellow" />
+                <span className="message-tool-terminal-light green" />
+                <span className="message-tool-terminal-title">Terminal</span>
+              </div>
+              <div className="message-tool-terminal-content">
+                {hasInput && (
+                  <div className="message-tool-terminal-command">
+                    <span className="message-tool-terminal-prompt">$</span>
+                    <span>{toolCall.input}</span>
+                  </div>
+                )}
+                {hasOutput && (
+                  <pre className={`message-tool-terminal-output${toolCall.isError ? ' is-error' : ''}`}>{toolCall.output}</pre>
+                )}
+                {!hasOutput && toolCall.status === 'running' && (
+                  <div className="message-tool-running-hint">等待结果…</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="message-tool-sections">
+              {hasInput && (
+                <div className="message-tool-section">
+                  <div className="message-tool-label">输入</div>
+                  <pre className="message-tool-pre">{toolCall.input}</pre>
+                </div>
+              )}
+              {hasOutput && (
+                <div className="message-tool-section">
+                  <div className="message-tool-label">输出</div>
+                  <pre className={`message-tool-pre${toolCall.isError ? ' is-error' : ''}`}>{toolCall.output}</pre>
+                </div>
+              )}
+              {!hasOutput && toolCall.status === 'running' && (
+                <div className="message-tool-section">
+                  <div className="message-tool-label">输出</div>
+                  <pre className="message-tool-pre">等待结果…</pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 interface MessageBubbleProps {
@@ -148,188 +322,162 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
   const isStreaming = message.status === 'streaming'
   const isError = message.status === 'error'
 
-  // 流式打字机效果：单次 rAF 循环 + 直接 DOM 操作，匀速逐字显示
-  const previewRef = useRef<HTMLDivElement>(null)
-  const targetRef = useRef('')
-  const visibleLenRef = useRef(0)
-  const rafRef = useRef(0)
   const wasStreamingRef = useRef(false)
+  const toolSeqRef = useRef<HTMLDivElement>(null)
   const [justFinished, setJustFinished] = useState(false)
 
-  // 每次 render 同步最新内容到 ref，不触发 effect
-  targetRef.current = isStreaming ? (message.content || '') : ''
-
+  // 流式结束时触发 markdown 淡入动画
   useEffect(() => {
-    if (!isStreaming) {
-      cancelAnimationFrame(rafRef.current)
-      // 清除直接写入 DOM 的文本，防止 React 复用节点时残留
-      if (previewRef.current) previewRef.current.textContent = ''
-      // streaming → done 时标记，触发淡入动画
-      if (wasStreamingRef.current && message.content) {
-        setJustFinished(true)
-      }
-      visibleLenRef.current = 0
-      wasStreamingRef.current = false
-      return
+    if (!isStreaming && wasStreamingRef.current && message.content) {
+      setJustFinished(true)
     }
-    wasStreamingRef.current = true
-    const step = () => {
-      const target = targetRef.current
-      if (visibleLenRef.current < target.length) {
-        visibleLenRef.current += 1
-        if (previewRef.current) {
-          previewRef.current.textContent = target.slice(0, visibleLenRef.current)
-          previewRef.current.scrollTop = previewRef.current.scrollHeight
-        }
-      }
-      rafRef.current = requestAnimationFrame(step)
+    wasStreamingRef.current = isStreaming
+  }, [isStreaming, message.content])
+
+  // 工具调用更新时自动滚动到底部
+  useEffect(() => {
+    const el = toolSeqRef.current
+    if (el) {
+      el.scrollTop = el.scrollHeight
     }
-    rafRef.current = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [isStreaming])
+  }, [message.toolCalls])
 
   const handleFileClick = useCallback((filePath: string) => {
-    // Open file with system default application via Electron shell
     window.electronAPI?.shell?.openPath?.(filePath)
   }, [])
 
   const attachments = message.attachments
   const hasAttachments = attachments && attachments.length > 0
-  const isSingleAttachment = hasAttachments && attachments.length === 1
-
+  const legacySections = useMemo(() => parseLegacyThinking(message.thinking), [message.thinking])
+  const reasoningText = !isUser
+    ? (message.toolCalls?.length ? normalizeThinkingText(message.thinking) : (legacySections.reasoning || normalizeThinkingText(message.thinking, true)))
+    : ''
+  const toolCalls = !isUser
+    ? (message.toolCalls?.length ? message.toolCalls : legacySections.toolCalls)
+    : []
   const displayContent = message.content
-
-  const rehypePlugins = [rehypeHighlight]
-
-  // Check if content has inline images (only for assistant messages, non-streaming)
   const hasInlineImages = !isUser && !isStreaming && displayContent
-    ? parseContentWithImages(displayContent).some((s) => s.type === 'image')
+    ? parseContentWithImages(displayContent).some((segment) => segment.type === 'image')
     : false
 
   return (
     <div className={`message-bubble ${isUser ? 'message-user' : 'message-assistant'} ${isStreaming ? 'message-bubble-streaming' : ''} ${isError ? 'message-error-bubble' : ''} ${isQueued ? 'message-queued' : ''}`}>
       <div className="message-body">
-        {isStreaming && <div className="streaming-top-bar" />}
-        {isStreaming && message.thinking && !message.content && (
-          <div className="thinking-line">
-            <span className="thinking-line-dot" />
-            <span className="thinking-line-text">
-              {(() => {
-                const t = message.thinking.replace(/\s+/g, ' ').trim()
-                return t.length > 80 ? '...' + t.slice(-80) : t
-              })()}
-            </span>
+        {/* Phase 1: 思考块 — 独立卡片 (LobsterAI 风格) */}
+        {!isUser && reasoningText && (
+          <ReasoningBlock content={reasoningText} isStreaming={isStreaming} />
+        )}
+
+        {/* Phase 2: 工具调用 — 独立列表项 + 连接线 (LobsterAI 风格) */}
+        {!isUser && toolCalls.length > 0 && (
+          <div ref={toolSeqRef} className="message-tool-sequence">
+            {toolCalls.map((toolCall, index) => (
+              <ToolCallBlock
+                key={toolCall.id}
+                toolCall={toolCall}
+                isLastInSequence={index === toolCalls.length - 1}
+              />
+            ))}
           </div>
         )}
-        <div className={`message-content ${isError ? 'message-error-content' : ''}${hasAttachments ? ' has-attachments' : ''}`}>
-          {hasAttachments && (
-            <div className={`message-attachments${isSingleAttachment ? ' single' : ''}`}>
-              {attachments.filter((a) => a.filePath).map((att, index) => {
-                const isImage = isImageFile(att.mimeType, att.fileName)
 
-                if (isImage) {
-                  const imgSrc = att.content && att.mimeType
-                    ? `data:${att.mimeType};base64,${att.content}`
-                    : att.content
-                      ? `data:image/png;base64,${att.content}`
-                      : filePathToUrl(att.filePath)
-                  return (
-                    <img
-                      key={index}
-                      src={imgSrc}
-                      alt={att.fileName || 'image'}
-                      className="message-attachment-img"
-                      onClick={() => handleFileClick(att.filePath)}
-                    />
-                  )
-                }
-
-                // Non-image file: show file name with icon
-                return (
-                  <div
-                    key={index}
-                    className="message-attachment-file"
-                    onClick={() => handleFileClick(att.filePath)}
-                    title={att.filePath}
-                  >
-                    <svg className="message-file-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                      <polyline points="14 2 14 8 20 8" />
-                    </svg>
-                    <span className="message-file-name">{att.fileName || att.filePath.split(/[\\/]/).pop()}</span>
-                  </div>
-                )
-              })}
+        {/* Phase 3: 文本内容 / 工具执行中的占位动画 */}
+        {!isUser && isStreaming && !displayContent && toolCalls.length > 0 && (
+          <div className="message-content message-content-assistant">
+            <div className="typing-dots">
+              <span className="typing-dot" />
+              <span className="typing-dot" />
+              <span className="typing-dot" />
             </div>
-          )}
-          {(displayContent || isStreaming) && (
-            <div className="message-text">
-              {isUser ? (
-                // User messages: plain text
-                displayContent || ''
-              ) : isStreaming ? (
-                // 流式阶段: rAF 逐字写入 DOM，此处只挂载空容器
-                <div key="streaming" className="streaming-preview" ref={previewRef} />
-              ) : displayContent ? (
-                hasInlineImages ? (
-                  // Assistant with inline images: mixed rendering
-                  parseContentWithImages(displayContent).map((segment, idx) => {
-                    if (segment.type === 'image') {
-                      return (
-                        <img
-                          key={`inline-img-${idx}`}
-                          src={filePathToUrl(segment.value)}
-                          alt="screenshot"
-                          className="message-inline-screenshot"
-                          onClick={() => handleFileClick(segment.value)}
-                        />
-                      )
-                    }
+          </div>
+        )}
+        {(displayContent || hasAttachments) && (
+          <div className={`message-content ${isError ? 'message-error-content' : ''}${hasAttachments ? ' has-attachments' : ''}${!isUser ? ' message-content-assistant' : ''}`}>
+            {hasAttachments && (
+              <div className={`message-attachments${attachments.length > 1 ? ' multi' : ''}`}>
+                {attachments.filter((attachment) => attachment.filePath).map((attachment, index) => {
+                  const image = isImageFile(attachment.mimeType, attachment.fileName)
+
+                  if (image) {
+                    const imgSrc = attachment.content && attachment.mimeType
+                      ? `data:${attachment.mimeType};base64,${attachment.content}`
+                      : attachment.content
+                        ? `data:image/png;base64,${attachment.content}`
+                        : filePathToUrl(attachment.filePath)
                     return (
-                      <div key={`md-${idx}`} className="chat-markdown">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          rehypePlugins={rehypePlugins}
-                          components={markdownComponents}
-                        >
-                          {segment.value}
-                        </ReactMarkdown>
-                      </div>
+                      <img
+                        key={index}
+                        src={imgSrc}
+                        alt={attachment.fileName || 'image'}
+                        className="message-attachment-img"
+                        onClick={() => handleFileClick(attachment.filePath)}
+                      />
                     )
-                  })
-                ) : (
-                  // Assistant: always render with ReactMarkdown (streaming + done)
-                  <div key="markdown" className={`chat-markdown${justFinished ? ' markdown-fade-in' : ''}`} onAnimationEnd={() => setJustFinished(false)}>
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      rehypePlugins={rehypePlugins}
-                      components={markdownComponents}
+                  }
+
+                  return (
+                    <div
+                      key={index}
+                      className="message-attachment-file"
+                      onClick={() => handleFileClick(attachment.filePath)}
+                      title={attachment.filePath}
                     >
-                      {displayContent}
-                    </ReactMarkdown>
-                  </div>
-                )
-              ) : (
-                isStreaming ? '...' : null
-              )}
-            </div>
-          )}
-        </div>
-        {isStreaming && (
-          <div className="message-streaming-status">
-            <span className="streaming-pulse-dot" />
-            正在输入...
+                      <svg className="message-file-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                      </svg>
+                      <span className="message-file-name">{attachment.fileName || attachment.filePath.split(/[\\/]/).pop()}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {displayContent && (
+              <div className="message-text">
+                {isUser ? (
+                  <div className="message-user-text">{displayContent || ''}</div>
+                ) : (
+                  hasInlineImages && !isStreaming ? (
+                    parseContentWithImages(displayContent).map((segment, index) => {
+                      if (segment.type === 'image') {
+                        return (
+                          <img
+                            key={`inline-img-${index}`}
+                            src={filePathToUrl(segment.value)}
+                            alt="screenshot"
+                            className="message-inline-screenshot"
+                            onClick={() => handleFileClick(segment.value)}
+                          />
+                        )
+                      }
+                      return (
+                        <div key={`md-${index}`} className="chat-markdown">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                            {segment.value}
+                          </ReactMarkdown>
+                        </div>
+                      )
+                    })
+                  ) : (
+                    <div className={`chat-markdown${justFinished ? ' markdown-fade-in' : ''}${isStreaming ? ' is-streaming' : ''}`} onAnimationEnd={() => setJustFinished(false)}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+                        {displayContent}
+                      </ReactMarkdown>
+                      {isStreaming && <span className="streaming-cursor" />}
+                    </div>
+                  )
+                )}
+              </div>
+            )}
           </div>
         )}
-        {isQueued && (
-          <div className="message-queued-hint">排队中，等待当前回复结束</div>
-        )}
+
+        {isQueued && <div className="message-queued-hint">排队中，等待当前回复结束</div>}
         {isError && (
           <div className="message-error">
             发送失败
-            {onRetry && (
-              <button className="btn-retry" onClick={onRetry}>重试</button>
-            )}
+            {onRetry && <button className="btn-retry" onClick={onRetry}>重试</button>}
           </div>
         )}
         <div className="message-actions">
@@ -344,10 +492,27 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
   )
 }
 
-/** Memoized: 按字段值比较, 避免引用不同但内容相同时的无意义重渲染 */
+function toolCallsEqual(a?: ChatToolCall[], b?: ChatToolCall[]): boolean {
+  if (a === b) return true
+  if ((a?.length || 0) !== (b?.length || 0)) return false
+  return (a || []).every((call, index) => {
+    const other = b?.[index]
+    return !!other
+      && call.id === other.id
+      && call.name === other.name
+      && call.status === other.status
+      && call.summary === other.summary
+      && call.input === other.input
+      && call.output === other.output
+      && call.kind === other.kind
+      && call.isError === other.isError
+  })
+}
+
 export const MessageBubble = React.memo(MessageBubbleInner, (prev, next) =>
-  prev.message.id === next.message.id &&
-  prev.message.content === next.message.content &&
-  prev.message.status === next.message.status &&
-  prev.message.thinking === next.message.thinking
+  prev.message.id === next.message.id
+  && prev.message.content === next.message.content
+  && prev.message.status === next.message.status
+  && prev.message.thinking === next.message.thinking
+  && toolCallsEqual(prev.message.toolCalls, next.message.toolCalls)
 )

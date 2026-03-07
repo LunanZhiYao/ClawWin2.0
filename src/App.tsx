@@ -119,6 +119,7 @@ function App() {
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [autoCompact, setAutoCompact] = useState(true)
+  const [shellHints, setShellHints] = useState(true)
   const isAutoCompactingRef = useRef(false)
 
   // 使用 ref 追踪最新的 activeSessionId，避免回调闭包中拿到旧值
@@ -135,8 +136,41 @@ function App() {
 
   // 追踪 runId → sessionId 的映射，确保 AI 回复路由到正确的会话
   const runIdSessionMapRef = useRef<Map<string, string>>(new Map())
+  const runIdUserMessageMapRef = useRef<Map<string, string>>(new Map())
   // 追踪最近一次发送消息的 sessionId
   const lastSendSessionIdRef = useRef<string | null>(null)
+
+  const markUserMessageComplete = useCallback((sessionId: string, userMessageId?: string) => {
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id !== sessionId) return session
+
+        let updated = false
+        let consumedFallbackQueue = false
+        const messages = session.messages.map((message) => {
+          if (userMessageId) {
+            if (message.id !== userMessageId || message.status !== 'queued') return message
+          } else if (message.status !== 'queued' || consumedFallbackQueue) {
+            return message
+          }
+
+          updated = true
+          if (!userMessageId) consumedFallbackQueue = true
+          return { ...message, status: 'done' as const }
+        })
+
+        return updated ? { ...session, messages, updatedAt: Date.now() } : session
+      })
+    )
+  }, [])
+
+  const registerRunBinding = useCallback((ack: { runId?: string; sessionKey: string } | null, sessionId: string, userMessageId?: string) => {
+    if (!ack?.runId) return
+    runIdSessionMapRef.current.set(ack.runId, sessionId)
+    if (userMessageId) {
+      runIdUserMessageMapRef.current.set(ack.runId, userMessageId)
+    }
+  }, [])
 
   // 根据用户配置的超时时间自动取消等待并提示错误
   const startWaiting = useCallback(() => {
@@ -210,6 +244,8 @@ function App() {
     window.electronAPI.config.getSkipUpdate().then(setSkipUpdateCheck).catch(() => {})
     // Load auto-compact preference
     window.electronAPI.config.getAutoCompact().then(setAutoCompact).catch(() => {})
+    // Load shell-hints preference
+    window.electronAPI.config.getShellHints().then(setShellHints).catch(() => {})
     // Load app version
     window.electronAPI.app.getVersion().then(setAppVersion).catch(() => {})
   }, [])
@@ -278,8 +314,10 @@ function App() {
 
   ws.onMessageStream.current = useCallback(
     (msg: ChatMessage) => {
-      // 通过 runId → sessionId 映射，确保 AI 回复路由到发起请求的会话
-      let sid = runIdSessionMapRef.current.get(msg.id)
+      // 通过 runId / sessionKey → sessionId 映射，确保 AI 回复路由到发起请求的会话
+      let sid = msg.sessionKey || runIdSessionMapRef.current.get(msg.id)
+      const userMessageId = runIdUserMessageMapRef.current.get(msg.id)
+
       if (!sid) {
         // 新 runId：绑定到最近发送消息的会话
         sid = lastSendSessionIdRef.current ?? activeSessionIdRef.current ?? undefined
@@ -294,18 +332,18 @@ function App() {
       // 回复完成或出错时清理映射
       if (msg.status === 'done' || msg.status === 'error') {
         runIdSessionMapRef.current.delete(msg.id)
+        runIdUserMessageMapRef.current.delete(msg.id)
       }
 
       // AI response has started arriving, stop showing waiting indicator
       stopWaiting()
+      markUserMessageComplete(sid, userMessageId)
 
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sid) return s
           // 收到 AI 回复，将所有 queued 消息标记为 done
-          const messages = s.messages.map((m) =>
-            m.status === 'queued' ? { ...m, status: 'done' as const } : m
-          )
+          const messages = [...s.messages]
           const existingIdx = messages.findIndex((m) => m.id === msg.id)
           if (existingIdx >= 0) {
             messages[existingIdx] = msg
@@ -418,7 +456,12 @@ function App() {
         setActiveSessionId(session.id)
         startWaiting()
         // 每个前端会话用自己的 id 作为 Gateway sessionKey，避免历史污染
-        ws.sendMessage(session.id, content, attachments, session.agentId)
+        void ws.sendMessage(session.id, content, attachments, session.agentId).then((ack) => {
+          registerRunBinding(ack, session.id, userMsg.id)
+          if (!ack && userMsg.status === 'queued') {
+            markUserMessageComplete(session.id, userMsg.id)
+          }
+        })
         return
       }
 
@@ -456,9 +499,14 @@ function App() {
 
       // 发送消息到后端，后端队列会自动处理（collect 模式）
       const currentSession = sessionsRef.current.find((s) => s.id === activeSessionId)
-      ws.sendMessage(activeSessionId, content, attachments, currentSession?.agentId)
+      void ws.sendMessage(activeSessionId, content, attachments, currentSession?.agentId).then((ack) => {
+        registerRunBinding(ack, activeSessionId, userMsg.id)
+        if (!ack && userMsg.status === 'queued') {
+          markUserMessageComplete(activeSessionId, userMsg.id)
+        }
+      })
     },
-    [activeSessionId, ws, startWaiting]
+    [activeSessionId, ws, startWaiting, registerRunBinding, markUserMessageComplete]
   )
 
   const handleSetupComplete = useCallback(async () => {
@@ -724,6 +772,7 @@ function App() {
               messages={activeSession?.messages ?? []}
               onSend={handleSend}
               gatewayState={gateway.state}
+              backendStatus={ws.backendStatus}
               isWaiting={isWaiting}
               gatewayPort={gateway.port}
               onStop={handleStop}
@@ -906,6 +955,20 @@ function App() {
                       }}
                     />
                     <span>禁用自动更新提示</span>
+                  </label>
+                </div>
+                <div className="settings-section">
+                  <label className="settings-toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={shellHints}
+                      onChange={(e) => {
+                        const val = e.target.checked
+                        setShellHints(val)
+                        window.electronAPI.config.saveShellHints(val).catch(() => {})
+                      }}
+                    />
+                    <span>兼容 Windows</span>
                   </label>
                 </div>
               </div>

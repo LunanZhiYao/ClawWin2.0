@@ -8,6 +8,7 @@ interface ChatAreaProps {
   onSend: (content: string, attachments?: ChatAttachment[]) => void
   disabled?: boolean
   gatewayState: string
+  backendStatus?: string
   isWaiting?: boolean
   isStreaming?: boolean
   onStop: () => void
@@ -19,7 +20,6 @@ interface ChatAreaProps {
   onRestartGateway: () => void
 }
 
-/** 获取 agent 的显示名称 */
 function getAgentDisplayName(agent: AgentInfo): string {
   return agent.identity?.name || agent.name || agent.id
 }
@@ -29,19 +29,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSend,
   disabled = false,
   gatewayState,
+  backendStatus,
   isWaiting = false,
   isStreaming = false,
   onStop,
   gatewayPort = 18888,
   agents,
   currentAgentId,
-  defaultAgentId: _defaultAgentId,
+  defaultAgentId,
   onChangeAgent,
   onRestartGateway,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout>>(0 as unknown as ReturnType<typeof setTimeout>)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const agentPickerRef = useRef<HTMLDivElement>(null)
+
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollTop, setShowScrollTop] = useState(false)
   const [showScrollBottom, setShowScrollBottom] = useState(false)
@@ -52,44 +55,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [newAgentName, setNewAgentName] = useState('')
   const [createError, setCreateError] = useState('')
   const [creating, setCreating] = useState(false)
-  const agentPickerRef = useRef<HTMLDivElement>(null)
+
+  const isReady = gatewayState === 'ready'
+  const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
 
   // 点击外部关闭 agent 选择器和创建表单
   useEffect(() => {
     if (!showAgentPicker && !showCreateAgent) return
-    const handler = (e: MouseEvent) => {
-      if (agentPickerRef.current && !agentPickerRef.current.contains(e.target as Node)) {
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (agentPickerRef.current && !agentPickerRef.current.contains(event.target as Node)) {
         setShowAgentPicker(false)
         setShowCreateAgent(false)
       }
     }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [showAgentPicker, showCreateAgent])
 
-  const handleCreateAgent = useCallback(async () => {
-    const id = newAgentId.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
-    const name = newAgentName.trim()
-    if (!id) { setCreateError('请输入 Agent ID'); return }
-    if (!name) { setCreateError('请输入名称'); return }
-    setCreating(true)
-    setCreateError('')
-    try {
-      const res = await window.electronAPI.agents.create({ agentId: id, name })
-      if (!res.ok) { setCreateError(res.error || '创建失败'); setCreating(false); return }
-      setShowCreateAgent(false)
-      setShowAgentPicker(false)
-      setNewAgentId('')
-      setNewAgentName('')
-      onRestartGateway()
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : '创建失败')
-    } finally {
-      setCreating(false)
-    }
-  }, [newAgentId, newAgentName, onRestartGateway])
-
-  // Auto-scroll to bottom when new messages arrive or typing indicator shows
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTo({
@@ -100,11 +83,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }, [messages, autoScroll, isWaiting, isStreaming])
 
   // 清理 rAF 和 toast timer
+  useEffect(() => () => {
+    cancelAnimationFrame(scrollRafRef.current)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+  }, [])
+
+  // 监听截屏完成事件
   useEffect(() => {
-    return () => {
-      cancelAnimationFrame(scrollRafRef.current)
-      clearTimeout(toastTimerRef.current)
+    const unsubscribe = window.electronAPI.app.onScreenshotCaptured(() => {
+      setScreenshotToast('已复制到剪贴板，Ctrl+V 粘贴到输入框')
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      toastTimerRef.current = setTimeout(() => setScreenshotToast(null), 2500)
+    })
+    return unsubscribe
+  }, [])
+
+  // 监听 Ctrl+Alt+A 快捷键
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        void handleScreenshot()
+      }
     }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   // rAF 节流的滚动事件处理，带滞后区间防闪烁
@@ -127,17 +130,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+      setAutoScroll(true)
     }
-    setAutoScroll(true)
   }, [])
 
   const handleCopy = useCallback((content: string) => {
     navigator.clipboard.writeText(content).catch(console.error)
   }, [])
 
-  // ── 区域截屏 ──────────────────────────────────────────
+  // 区域截屏
   const handleScreenshot = useCallback(async () => {
-    clearTimeout(toastTimerRef.current)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
     try {
       const ok = await window.electronAPI.app.startScreenshot()
       if (!ok) {
@@ -150,33 +153,36 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   }, [])
 
-  // 监听截屏完成事件（仅 toast 提示）
-  useEffect(() => {
-    const cleanup = window.electronAPI.app.onScreenshotCaptured(() => {
-      setScreenshotToast('已复制到剪贴板，Ctrl+V 粘贴到输入框')
-      toastTimerRef.current = setTimeout(() => setScreenshotToast(null), 2500)
-    })
-    return cleanup
-  }, [])
-
-  // 监听 Ctrl+Alt+A 快捷键
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'a') {
-        e.preventDefault()
-        handleScreenshot()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleScreenshot])
-
-  const isReady = gatewayState === 'ready'
-
   const handleCompact = useCallback(() => {
     if (!isReady || isWaiting || messages.length === 0) return
     onSend('/compact')
   }, [isReady, isWaiting, messages.length, onSend])
+
+  const handleCreateAgent = useCallback(async () => {
+    const id = newAgentId.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
+    const name = newAgentName.trim()
+    if (!id) { setCreateError('请输入 Agent ID'); return }
+    if (!name) { setCreateError('请输入名称'); return }
+    setCreating(true)
+    setCreateError('')
+    try {
+      const result = await window.electronAPI.agents.create({ agentId: id, name })
+      if (!result.ok) {
+        setCreateError(result.error || '创建失败')
+        setCreating(false)
+        return
+      }
+      setShowCreateAgent(false)
+      setShowAgentPicker(false)
+      setNewAgentId('')
+      setNewAgentName('')
+      onRestartGateway()
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : '创建失败')
+    } finally {
+      setCreating(false)
+    }
+  }, [newAgentId, newAgentName, onRestartGateway])
 
   return (
     <div className="chat-area">
@@ -189,10 +195,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 onClick={() => { setShowAgentPicker((v) => !v); setShowCreateAgent(false) }}
                 title="选择 Agent"
               >
-                {!currentAgentId || currentAgentId === 'main'
-                  ? 'Main'
-                  : getAgentDisplayName(agents.find((a) => a.id === currentAgentId) || agents.filter(a => a.id !== 'main')[0])
-                }
+                {selectedAgent ? getAgentDisplayName(selectedAgent) : 'Main'}
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginLeft: 4}}>
                   <polyline points="6 9 12 15 18 9" />
                 </svg>
@@ -261,12 +264,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   placeholder="显示名称"
                   value={newAgentName}
                   onChange={(e) => setNewAgentName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleCreateAgent() }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void handleCreateAgent() }}
                 />
                 {createError && <div className="agent-create-error">{createError}</div>}
                 <div className="agent-create-actions">
                   <button className="agent-create-cancel" onClick={() => setShowCreateAgent(false)}>取消</button>
-                  <button className="agent-create-confirm" onClick={handleCreateAgent} disabled={creating}>
+                  <button className="agent-create-confirm" onClick={() => void handleCreateAgent()} disabled={creating}>
                     {creating ? '创建中...' : '创建'}
                   </button>
                 </div>
@@ -291,7 +294,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
           <button
             className="chat-header-badge"
-            onClick={handleScreenshot}
+            onClick={() => void handleScreenshot()}
             title="截屏 (Ctrl+Alt+A)"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -303,13 +306,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
           <button
             className="chat-header-badge"
-            onClick={() => window.electronAPI.shell.openExternal(`http://127.0.0.1:${gatewayPort}`)}
+            onClick={() => void window.electronAPI.shell.openExternal(`http://127.0.0.1:${gatewayPort}`)}
             title="打开 OpenClaw WebUI"
           >
             WebUI
           </button>
         </div>
       </div>
+
       <div className="chat-messages-wrapper">
         <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
           {messages.length === 0 ? (
@@ -323,18 +327,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           ) : (
             <>
               {messages
-                .filter((msg) => msg.content || msg.status === 'streaming' || msg.status === 'queued' || msg.status === 'error' || msg.attachments?.length)
+                .filter((msg) => msg.content || msg.thinking || msg.toolCalls?.length || msg.status === 'streaming' || msg.status === 'queued' || msg.status === 'error' || msg.attachments?.length)
                 .map((msg) => (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  onCopy={() => handleCopy(msg.content)}
-                />
-              ))}
+                  <MessageBubble
+                    key={msg.id}
+                    message={msg}
+                    onCopy={() => handleCopy(msg.content)}
+                  />
+                ))}
               {isWaiting && (
                 <div className="message-bubble message-assistant message-bubble-waiting">
                   <div className="message-body">
-                    <div className="message-content">
+                    <div className="message-content message-content-assistant">
                       <div className="typing-dots">
                         <span className="typing-dot" />
                         <span className="typing-dot" />
@@ -372,9 +376,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </div>
 
       {/* 截屏提示 toast */}
-      {screenshotToast && (
-        <div className="screenshot-toast">{screenshotToast}</div>
-      )}
+      {screenshotToast && <div className="screenshot-toast">{screenshotToast}</div>}
 
       {!isReady && (
         <div className="chat-status-bar">
@@ -384,6 +386,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           {gatewayState === 'restarting' && '正在应用新配置...'}
         </div>
       )}
+
+      <div className={`chat-activity-bar ${isReady && backendStatus && (isStreaming || isWaiting) ? 'chat-activity-bar-visible' : 'chat-activity-bar-hidden'}`}>
+        <span className="chat-activity-dot" />
+        <span>{backendStatus}</span>
+      </div>
 
       <InputArea
         onSend={onSend}

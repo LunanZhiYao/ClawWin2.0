@@ -1,12 +1,15 @@
 /**
  * build-installer.js — 完整构建流程
  *
+ * 前置条件:
+ *   bundled/bash/ 已预置 MinGit (含 bash.exe)
+ *
  * 步骤:
- * 1. prepare-node.js    — 下载 Node.js 运行时
- * 2. prepare-openclaw.js — 安装 openclaw
- * 3. vite build          — 编译 React 前端
- * 4. tsc                 — 编译 Electron 主进程
- * 5. electron-builder    — 打包成 NSIS 安装包
+ * 1. prepare-node.js       — 下载 Node.js 运行时
+ * 2. prepare-openclaw.js   — 安装 openclaw
+ * 3. patch-shell-utils.js  — 修补 shell-utils.js (bash 优先)
+ * 4. vite build            — 编译前端 + Electron 主进程
+ * 5. electron-builder      — 打包 NSIS 安装包
  */
 const { execSync } = require('child_process')
 const path = require('path')
@@ -72,16 +75,19 @@ async function main() {
   checkPrerequisites()
 
   // Step 1: Download Node.js runtime
-  run('node scripts/prepare-node.js', '步骤 1/4: 下载 Node.js 运行时')
+  run('node scripts/prepare-node.js', '步骤 1/5: 下载 Node.js 运行时')
 
   // Step 2: Prepare openclaw
-  run('node scripts/prepare-openclaw.js', '步骤 2/4: 安装 openclaw')
+  run('node scripts/prepare-openclaw.js', '步骤 2/5: 安装 openclaw')
 
-  // Step 3: Build React frontend + Electron main process (vite-plugin-electron handles both)
-  run('npx vite build', '步骤 3/4: 编译前端 + Electron 主进程')
+  // Step 3: Patch shell-utils.js to prefer bash on Windows
+  run('node scripts/patch-shell-utils.js', '步骤 3/5: 修补 shell-utils.js (bash 优先)')
 
-  // Step 4: Build installer
-  run('npx electron-builder --win --config electron-builder.yml', '步骤 4/4: 打包 NSIS 安装包')
+  // Step 4: Build React frontend + Electron main process (vite-plugin-electron handles both)
+  run('npx vite build', '步骤 4/5: 编译前端 + Electron 主进程')
+
+  // Step 5: Build installer
+  run('npx electron-builder --win --config electron-builder.yml', '步骤 5/5: 打包 NSIS 安装包')
 
   console.log(`
   ╔══════════════════════════════════════════╗

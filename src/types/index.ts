@@ -61,6 +61,8 @@ interface ElectronConfig {
   saveSkipUpdate: (skip: boolean) => Promise<{ ok: boolean; error?: string }>
   getAutoCompact: () => Promise<boolean>
   saveAutoCompact: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
+  getShellHints: () => Promise<boolean>
+  saveShellHints: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
 }
 
 interface ElectronSessions {
@@ -198,11 +200,28 @@ export interface ChatAttachment {
   content?: string       // base64 内容（图片用，发送给 gateway）
 }
 
+export type ChatToolCallStatus = 'running' | 'done' | 'error'
+
+export interface ChatToolCall {
+  id: string
+  name: string
+  status: ChatToolCallStatus
+  summary?: string
+  input?: string
+  output?: string
+  kind?: 'default' | 'terminal' | 'todo'
+  startedAt?: number
+  endedAt?: number
+  isError?: boolean
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   thinking?: string
+  toolCalls?: ChatToolCall[]
+  sessionKey?: string
   attachments?: ChatAttachment[]
   timestamp: number
   status?: 'sending' | 'queued' | 'streaming' | 'done' | 'error'

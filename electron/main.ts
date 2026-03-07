@@ -742,6 +742,30 @@ function setupIPC() {
     }
   })
 
+  // Get shell-hints setting
+  ipcMain.handle('config:getShellHints', () => {
+    try {
+      const ui = readUiConfig()
+      return (ui.shellHints as boolean) ?? true
+    } catch {
+      return true
+    }
+  })
+
+  // Save shell-hints setting
+  ipcMain.handle('config:saveShellHints', (_event, enabled: boolean) => {
+    try {
+      const ui = readUiConfig()
+      ui.shellHints = !!enabled
+      writeUiConfig(ui)
+      // 立即重新生成 CLAUDE.md，使改动生效
+      try { generateClaudeMd() } catch { /* non-fatal */ }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ===== ClawWinWeb API proxy =====
 
   async function cwwFetch(url: string, options: RequestInit = {}): Promise<unknown> {

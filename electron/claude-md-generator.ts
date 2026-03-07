@@ -94,21 +94,14 @@ function detectShell(): ShellInfo {
     return {
       name: isPowerShell7 ? 'PowerShell 7 (pwsh)' : 'PowerShell',
       syntaxGuide: [
-        '- 使用 `;` 连接多条命令，不要用 `&&`',
-        '- 路径使用 `\\` 或 `/` 均可，含空格时必须加引号',
-        '- 环境变量: `$env:VAR`（PowerShell）或 `%VAR%`（cmd）',
-        '- 不要使用 Unix 专有命令，替代方案:',
-        '  - `grep` → `Select-String`',
-        '  - `cat` → `Get-Content`',
-        '  - `ls` → `Get-ChildItem` 或 `dir`',
-        '  - `rm -rf` → `Remove-Item -Recurse -Force`',
-        '  - `sed` → `-replace` 操作符',
-        '  - `awk` → `ForEach-Object` + `-split`',
-        '  - `touch` → `New-Item`',
-        '  - `cp` → `Copy-Item`',
-        '  - `mv` → `Move-Item`',
-        '- 文件编码: PowerShell 5 默认 UTF-16LE，写文件时加 `-Encoding UTF8`',
-        '- 路径中不要用 `~` 开头，使用完整绝对路径',
+        '**⚠️ 当前是 PowerShell，禁止 bash/Linux 语法：**',
+        '',
+        '- 用 `;` 连接命令（`&&` 会报错）',
+        '- 变量 `$env:NAME`（禁止 `export`）',
+        '- 空设备 `$null`（禁止 `/dev/null`）',
+        '- HTTP 用 `curl.exe`（`curl` 是 Invoke-WebRequest 别名）',
+        '- 写文件加 `-Encoding UTF8`',
+        '- 使用 PowerShell 原生 cmdlet 替代 Unix 工具',
       ].join('\n'),
     }
   }
@@ -181,6 +174,16 @@ function buildAutoSection(): string {
   const osInfo = getOsPrettyName()
   const shell = detectShell()
 
+  // 读取 shellHints 开关
+  let shellHintsEnabled = true
+  try {
+    const uiPath = path.join(os.homedir(), '.openclaw', 'clawwin-ui.json')
+    if (fs.existsSync(uiPath)) {
+      const ui = JSON.parse(fs.readFileSync(uiPath, 'utf-8'))
+      shellHintsEnabled = (ui.shellHints as boolean) ?? true
+    }
+  } catch { /* ignore */ }
+
   // 检测工具
   const tools: ToolInfo[] = []
   for (const def of TOOLS_TO_CHECK) {
@@ -221,8 +224,7 @@ function buildAutoSection(): string {
     '',
     `- 默认 Shell: **${shell.name}**`,
     '',
-    shell.syntaxGuide,
-    '',
+    ...(shellHintsEnabled ? [shell.syntaxGuide, ''] : ['']),
   ]
 
   // 已安装工具

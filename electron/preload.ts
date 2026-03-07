@@ -133,6 +133,9 @@ const electronAPI = {
     getAutoCompact: (): Promise<boolean> => ipcRenderer.invoke('config:getAutoCompact'),
     saveAutoCompact: (enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('config:saveAutoCompact', enabled),
+    getShellHints: (): Promise<boolean> => ipcRenderer.invoke('config:getShellHints'),
+    saveShellHints: (enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('config:saveShellHints', enabled),
   },
 
   // Sessions persistence

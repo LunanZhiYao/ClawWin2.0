@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { GatewayClient, type GatewayEventFrame, type GatewayHelloOk } from '../lib/gateway-protocol'
-import type { ChatMessage, ChatAttachment, AgentInfo } from '../types'
+import type { ChatMessage, ChatAttachment, ChatToolCall, AgentInfo } from '../types'
 
 interface UseWebSocketOptions {
   url: string
@@ -13,7 +13,7 @@ interface UseWebSocketReturn {
   hello: GatewayHelloOk | null
   agents: AgentInfo[]
   defaultAgentId: string
-  sendMessage: (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => void
+  sendMessage: (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => Promise<{ runId?: string; status?: string; sessionKey: string; idempotencyKey: string } | null>
   abortSession: (sessionKey: string, agentId?: string) => Promise<void>
   isStreaming: boolean
   backendStatus: string
@@ -35,6 +35,13 @@ function buildAgentSessionKey(sessionKey: string, agentId?: string): string {
   // 如果已经是 agent: 格式，不重复包装
   if (sessionKey.startsWith('agent:')) return sessionKey
   return `agent:${agentId}:${sessionKey}`
+}
+
+/** 从 agent:xxx:originalId 格式中提取原始 sessionKey */
+function normalizeSessionKey(sessionKey?: string): string | undefined {
+  if (!sessionKey) return undefined
+  const match = /^agent:[^:]+:(.+)$/.exec(sessionKey)
+  return match?.[1] || sessionKey
 }
 
 /**
@@ -91,6 +98,16 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
   const lastPushedLenRef = useRef<Map<string, number>>(new Map())
   // 空转计数器：内容连续未变的次数，超过阈值自动停止 timer（兜底 final 丢失）
   const idleCountRef = useRef<Map<string, number>>(new Map())
+  // 追踪 agent 事件中的工具调用信息
+  const toolCallsBufferRef = useRef<ChatToolCall[]>([])
+  const toolCallIdRef = useRef(0)
+  const activeRunIdRef = useRef<string | null>(null)
+  // agent lifecycle.start 分配的 runId（工具调用流式消息用此 ID）
+  // 与 chat 事件的 runId 可能不同，需要在 final 时用此 ID 确保消息正确替换
+  const agentLifecycleRunIdRef = useRef<string | null>(null)
+  // 阶段追踪：idle → thinking → tool → text → idle
+  // thinking/tool 阶段不推送流式文本，只推送工具调用和思考内容
+  const phaseRef = useRef<'idle' | 'thinking' | 'tool' | 'text'>('idle')
   // 自动压缩：暴露给 App.tsx 的回调
   const onFinalUsage = useRef<((usage: { input: number; output: number }) => void) | null>(null)
   const onCompactionEnd = useRef<(() => void) | null>(null)
@@ -141,7 +158,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
   }, [url, token, enabled])
 
   const handleEvent = useCallback((evt: GatewayEventFrame) => {
-    console.log('[ws] event received:', evt.event, evt.event === 'chat' ? JSON.stringify(evt.payload).slice(0, 2000) : '')
+    console.log('[ws] event received:', evt.event, JSON.stringify(evt.payload).slice(0, 2000))
 
     // 处理 agent 事件：提取后台活动状态
     if (evt.event === 'agent') {
@@ -151,6 +168,9 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       const data = p.data as Record<string, unknown> | undefined
       if (!data) return
       const phase = data.phase as string | undefined
+      // agent 事件的 payload 携带 runId，用于关联工具调用和消息
+      const agentRunId = p.runId as string | undefined
+      console.log('[ws] agent event:', { stream, phase, agentRunId, activeRunId: activeRunIdRef.current, toolCallsCount: toolCallsBufferRef.current.length, dataKeys: Object.keys(data) })
 
       if (stream === 'assistant') {
         // AI 正在生成文本，显示预览
@@ -163,29 +183,113 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         }
       } else if (stream === 'tool') {
         if (phase === 'start') {
+          phaseRef.current = 'tool'
           const name = (data.name as string) || '工具'
           const args = data.args as Record<string, unknown> | undefined
-          let detail = `正在执行: ${name}`
+          let input: string | undefined
+          let summary: string | undefined
           if (args) {
-            // 展示关键参数的简要信息
-            const argStr = Object.entries(args)
-              .map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 20) : JSON.stringify(v)}`)
-              .join(', ')
-            if (argStr) detail += ` (${argStr.slice(0, 60)})`
+            if (typeof args.command === 'string') { input = args.command; summary = args.command.slice(0, 80) }
+            else if (typeof args.file_path === 'string') { input = args.file_path; summary = args.file_path }
+            else if (typeof args.pattern === 'string') { input = args.pattern; summary = args.pattern.slice(0, 60) }
+            else if (typeof args.url === 'string') { summary = args.url.slice(0, 60) }
+            else if (typeof args.query === 'string') { summary = args.query.slice(0, 60) }
+            else {
+              const firstStr = Object.entries(args).find(([, v]) => typeof v === 'string')
+              if (firstStr) summary = `${firstStr[0]}=${String(firstStr[1]).slice(0, 40)}`
+            }
           }
-          setBackendStatus(detail)
+          const toolCall: ChatToolCall = {
+            id: `tc-${++toolCallIdRef.current}`,
+            name,
+            status: 'running',
+            summary,
+            input,
+            kind: /(bash|shell|powershell|terminal|cmd)/i.test(name) ? 'terminal' : 'default',
+            startedAt: Date.now(),
+          }
+          toolCallsBufferRef.current = [...toolCallsBufferRef.current, toolCall]
+          // 推送工具调用更新到消息气泡（不传文本，由 MessageBubble 显示动画占位）
+          const runId = activeRunIdRef.current
+          if (runId) {
+            onMessageStream.current?.({
+              id: runId,
+              role: 'assistant',
+              content: '',
+              thinking: thinkingBufferRef.current.get(runId),
+              toolCalls: [...toolCallsBufferRef.current],
+              timestamp: Date.now(),
+              status: 'streaming',
+            })
+          }
+          setBackendStatus(`正在执行: ${name}${summary ? ` (${summary.slice(0, 60)})` : ''}`)
         } else if (phase === 'update') {
           const name = (data.name as string) || '工具'
           setBackendStatus(`正在执行: ${name}...`)
-        } else if (phase === 'end') {
+        } else if (phase && phase !== 'start') {
+          // 处理所有结束类 phase（'end'、'complete'、'done'、'finish' 等）
+          console.log('[ws] tool end-like phase:', phase, 'data:', JSON.stringify(data).slice(0, 500))
           const name = (data.name as string) || '工具'
           const isError = data.isError as boolean | undefined
+          // 尝试多种字段名提取工具输出
+          let result: string | undefined
+          for (const key of ['result', 'output', 'content', 'text', 'response', 'stdout']) {
+            const val = data[key]
+            if (typeof val === 'string' && val) { result = val; break }
+          }
+          // 更新最后一个 running 状态的工具调用
+          const buf = toolCallsBufferRef.current
+          let idx = -1
+          for (let i = buf.length - 1; i >= 0; i--) {
+            if (buf[i].status === 'running') { idx = i; break }
+          }
+          // 退而求其次：按 name 匹配最后一个同名工具
+          if (idx < 0) {
+            for (let i = buf.length - 1; i >= 0; i--) {
+              if (buf[i].name === name) { idx = i; break }
+            }
+            console.log('[ws] tool.end fallback by name:', { name, idx, bufLen: buf.length })
+          }
+          if (idx >= 0) {
+            const newBuf = [...buf]
+            newBuf[idx] = {
+              ...buf[idx],
+              status: isError ? 'error' : 'done',
+              isError: isError || false,
+              endedAt: Date.now(),
+              ...(result && { output: result }),
+            }
+            toolCallsBufferRef.current = newBuf
+          }
+          // 始终推送工具调用状态更新（不传文本，由 MessageBubble 显示动画占位）
+          const runId = activeRunIdRef.current
+          if (runId) {
+            onMessageStream.current?.({
+              id: runId,
+              role: 'assistant',
+              content: '',
+              thinking: thinkingBufferRef.current.get(runId),
+              toolCalls: [...toolCallsBufferRef.current],
+              timestamp: Date.now(),
+              status: 'streaming',
+            })
+          }
           setBackendStatus(isError ? `${name} 执行出错，正在处理...` : `${name} 执行完成，正在思考...`)
         }
       } else if (stream === 'lifecycle') {
         if (phase === 'start') {
+          toolCallsBufferRef.current = []
+          toolCallIdRef.current = 0
+          phaseRef.current = 'thinking'
+          // 用 agent 事件的 runId 提前设置 activeRunIdRef
+          // 这样后续的 tool.start/end 事件能关联到正确的消息
+          if (agentRunId) {
+            activeRunIdRef.current = agentRunId
+            agentLifecycleRunIdRef.current = agentRunId
+          }
           setBackendStatus('思考中...')
         } else if (phase === 'end' || phase === 'error') {
+          phaseRef.current = 'idle'
           setBackendStatus('')
         }
       } else if (stream === 'compaction') {
@@ -205,7 +309,13 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
     if (!evt.payload || typeof evt.payload !== 'object') return
     const payload = evt.payload as Record<string, unknown>
     const state = payload.state as string | undefined
-    const runId = (payload.runId as string) || generateId()
+    const chatRunId = (payload.runId as string) || generateId()
+    // 优先使用 agent lifecycle 的 runId（与工具调用流式消息一致），
+    // 解决 agent 事件 runId 与 chat 事件 runId 不一致导致工具调用卡在 "running" 的问题
+    const runId = (toolCallsBufferRef.current.length > 0 && agentLifecycleRunIdRef.current)
+      ? agentLifecycleRunIdRef.current
+      : chatRunId
+    const sessionKey = normalizeSessionKey(payload.sessionKey as string | undefined)
 
     // 详细打印 payload 结构，用于排查 thinking/reasoning 字段
     console.log('[ws] chat payload keys:', Object.keys(payload))
@@ -245,22 +355,37 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         }
       }
 
+      // 辅助：构建当前工具调用列表
+      const currentToolCalls = toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined
+
+      // 核心规则：一旦本轮有工具调用（toolCallsBuffer 非空），
+      // 所有文本只累积不推送，等 final 一次性显示
+      const hasToolCalls = toolCallsBufferRef.current.length > 0
+
       if (text) {
         const isNew = !streamBufferRef.current.has(runId)
         const accumulated = (streamBufferRef.current.get(runId) || '') + text
         streamBufferRef.current.set(runId, accumulated)
 
-        if (isNew) setStreamingCount((c) => c + 1)
+        if (isNew) {
+          setStreamingCount((c) => c + 1)
+          activeRunIdRef.current = runId
+        }
 
-        // 节流：每 80ms 最多更新一次 UI，减少 ReactMarkdown 重渲染
+        // 有工具调用时，文本只累积不推送 — 等 final 一次性出现
+        if (hasToolCalls) {
+          return
+        }
+
+        // 无工具调用：正常流式推送
         if (!streamThrottleRef.current.has(runId)) {
           // 首次 delta 立即推送（让气泡立刻出现）
-          const thinkingText = streamBufferRef.current.has(runId) ? undefined : thinkingBufferRef.current.get(runId)
           const msg: ChatMessage = {
             id: runId,
             role: 'assistant',
             content: accumulated,
-            thinking: thinkingText,
+            thinking: thinkingBufferRef.current.get(runId),
+            toolCalls: currentToolCalls,
             timestamp: Date.now(),
             status: 'streaming',
           }
@@ -269,6 +394,13 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
           streamThrottleRef.current.set(runId, setTimeout(function flush() {
             const latest = streamBufferRef.current.get(runId)
             if (latest != null) {
+              // 如果中途出现了工具调用，停止流式推送
+              if (toolCallsBufferRef.current.length > 0) {
+                if (streamBufferRef.current.has(runId)) {
+                  streamThrottleRef.current.set(runId, setTimeout(flush, 120))
+                }
+                return
+              }
               const lastLen = lastPushedLenRef.current.get(runId) ?? -1
               if (latest.length !== lastLen) {
                 // 内容有变化，推送并重置空转计数
@@ -279,6 +411,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
                   role: 'assistant',
                   content: latest,
                   thinking: latest.length > 0 ? undefined : thinkingBufferRef.current.get(runId),
+                  toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                   timestamp: Date.now(),
                   status: 'streaming',
                 }
@@ -299,10 +432,15 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
                     id: runId,
                     role: 'assistant',
                     content: latest,
+                    toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                     timestamp: Date.now(),
                     status: 'done',
                   }
                   onMessageStream.current?.(m)
+                  activeRunIdRef.current = null
+                  agentLifecycleRunIdRef.current = null
+                  phaseRef.current = 'idle'
+                  toolCallsBufferRef.current = []
                   return
                 }
               }
@@ -323,6 +461,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         const isNew = !streamThrottleRef.current.has(runId)
         if (isNew) {
           setStreamingCount((c) => c + 1)
+          activeRunIdRef.current = runId
           // 推送一个只有 thinking 的消息
           const thinkingText = thinkingBufferRef.current.get(runId) || ''
           const msg: ChatMessage = {
@@ -330,6 +469,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
             role: 'assistant',
             content: '',
             thinking: thinkingText,
+            toolCalls: currentToolCalls,
             timestamp: Date.now(),
             status: 'streaming',
           }
@@ -347,6 +487,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
                   role: 'assistant',
                   content: '',
                   thinking: thinkingNow,
+                  toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                   timestamp: Date.now(),
                   status: 'streaming',
                 }
@@ -359,6 +500,10 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
                   lastPushedLenRef.current.delete(runId)
                   idleCountRef.current.delete(runId)
                   thinkingBufferRef.current.delete(runId)
+                  activeRunIdRef.current = null
+                  agentLifecycleRunIdRef.current = null
+                  phaseRef.current = 'idle'
+                  toolCallsBufferRef.current = []
                   return
                 }
               }
@@ -381,17 +526,35 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       const text = extractedText || bufferedText || ''
       if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
 
-      // 空内容不创建消息，避免空白气泡
-      if (!text) return
+      // 空内容不创建消息，避免空白气泡（但有工具调用时仍然推送）
+      if (!text && !(toolCallsBufferRef.current.length > 0)) {
+        activeRunIdRef.current = null
+        agentLifecycleRunIdRef.current = null
+        toolCallsBufferRef.current = []
+        return
+      }
+
+      // 兜底：把所有残留 running 的工具强制标记为 done
+      if (toolCallsBufferRef.current.some((tc) => tc.status === 'running')) {
+        toolCallsBufferRef.current = toolCallsBufferRef.current.map((tc) =>
+          tc.status === 'running' ? { ...tc, status: 'done' as const, endedAt: Date.now() } : tc
+        )
+      }
 
       const msg: ChatMessage = {
         id: runId,
         role: 'assistant',
         content: text,
+        toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
+        sessionKey,
         timestamp: Date.now(),
         status: 'done',
       }
       onMessageStream.current?.(msg)
+      activeRunIdRef.current = null
+      agentLifecycleRunIdRef.current = null
+      phaseRef.current = 'idle'
+      toolCallsBufferRef.current = []
 
       // 提取 usage 供自动压缩判断
       const rawUsage = payload.usage as Record<string, unknown> | undefined
@@ -414,10 +577,15 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         id: runId,
         role: 'assistant',
         content: errorMessage,
+        toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'error',
       }
       onMessageStream.current?.(msg)
+      activeRunIdRef.current = null
+      agentLifecycleRunIdRef.current = null
+      phaseRef.current = 'idle'
+      toolCallsBufferRef.current = []
     } else if (state === 'aborted') {
       // 被中断的响应，使用已有内容
       setBackendStatus('')
@@ -433,10 +601,15 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         id: runId,
         role: 'assistant',
         content: text,
+        toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'done',
       }
       onMessageStream.current?.(msg)
+      activeRunIdRef.current = null
+      agentLifecycleRunIdRef.current = null
+      phaseRef.current = 'idle'
+      toolCallsBufferRef.current = []
     } else if (state === 'terminated') {
       // 上下文耗尽或进程被终止
       setBackendStatus('')
@@ -453,14 +626,19 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         id: runId,
         role: 'assistant',
         content: buffered + hint,
+        toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'done',
       }
       onMessageStream.current?.(msg)
+      activeRunIdRef.current = null
+      agentLifecycleRunIdRef.current = null
+      phaseRef.current = 'idle'
+      toolCallsBufferRef.current = []
     }
   }, [])
 
-  const sendMessage = useCallback((sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => {
+  const sendMessage = useCallback(async (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => {
     const client = clientRef.current
     if (!client) {
       console.error('[ws] cannot send: no client instance')
@@ -472,10 +650,11 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         status: 'error',
       }
       onMessageStream.current?.(msg)
-      return
+      return null
     }
 
     const idempotencyKey = generateId()
+    const builtSessionKey = buildAgentSessionKey(sessionKey, agentId)
 
     // Build gateway attachments with file paths and base64 content
     const gatewayAttachments = attachments
@@ -502,7 +681,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
     }
 
     const payload: Record<string, unknown> = {
-      sessionKey: buildAgentSessionKey(sessionKey, agentId),
+      sessionKey: builtSessionKey,
       message: content,
       deliver: false,
       idempotencyKey,
@@ -511,7 +690,10 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       payload.attachments = gatewayAttachments
     }
 
-    client.request('chat.send', payload).catch((err) => {
+    try {
+      const ack = await client.request<{ runId?: string; status?: string }>('chat.send', payload)
+      return { ...ack, sessionKey: builtSessionKey, idempotencyKey }
+    } catch (err) {
       console.error('[ws] chat.send failed:', err)
       const msg: ChatMessage = {
         id: idempotencyKey,
@@ -521,7 +703,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
         status: 'error',
       }
       onMessageStream.current?.(msg)
-    })
+      return null
+    }
   }, [])
 
   const abortSession = useCallback(async (sessionKey: string, agentId?: string) => {
