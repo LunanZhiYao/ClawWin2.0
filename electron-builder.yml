@@ -15,10 +15,6 @@ extraResources:
     to: bundled/node/
     filter:
       - "**/*"
-  - from: bundled/bash/
-    to: bundled/bash/
-    filter:
-      - "**/*"
   - from: bundled/openclaw/
     to: bundled/openclaw/
     filter:

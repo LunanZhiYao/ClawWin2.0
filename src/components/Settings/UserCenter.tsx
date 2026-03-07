@@ -6,7 +6,7 @@ interface UserCenterProps {
     loggedIn: boolean
     email: string
     nickname: string
-    credits: number
+    balance: number
   }) => void
 }
 
@@ -19,7 +19,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
   const [nickname, setNickname] = useState('')
   const [code, setCode] = useState('')
   const [token, setToken] = useState('')
-  const [credits, setCredits] = useState(0)
+  const [balance, setBalance] = useState(0)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [codeCountdown, setCodeCountdown] = useState(0)
@@ -27,7 +27,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
   const [rechargeStatus, setRechargeStatus] = useState<'idle' | 'paying' | 'success'>('idle')
   const [showCustomRecharge, setShowCustomRecharge] = useState(false)
   const [customRechargeInput, setCustomRechargeInput] = useState('')
-  const [refreshingCredits, setRefreshingCredits] = useState(false)
+  const [refreshingBalance, setRefreshingBalance] = useState(false)
 
   // Restore login state on mount
   useEffect(() => {
@@ -40,32 +40,32 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
         if (state && state.email && savedKey) {
           setEmail(state.email || '')
           setNickname(state.nickname || '')
-          setCredits(state.credits || 0)
+          setBalance(state.balance || 0)
           setToken(savedKey)
           setView('profile')
-          // Refresh profile — 立即获取最新积分
-          setRefreshingCredits(true)
+          // Refresh profile — 立即获取最新余额
+          setRefreshingBalance(true)
           try {
             const profileRes = await window.electronAPI.cww.getProfile({
               serverUrl: CWW_SERVER_URL,
               token: savedKey,
             })
             if (!cancelled) {
-              const freshCredits = profileRes.user?.credits ?? 0
-              setCredits(freshCredits)
+              const freshBalance = profileRes.user?.balance ?? 0
+              setBalance(freshBalance)
               setNickname(profileRes.user?.nickname ?? '')
               // 同步更新缓存
               await window.electronAPI.cww.saveState({
                 email: state.email!,
                 nickname: profileRes.user?.nickname ?? state.nickname ?? '',
-                credits: freshCredits,
+                balance: freshBalance,
                 serverUrl: CWW_SERVER_URL,
               })
               onCwwStateChange?.({
                 loggedIn: true,
                 email: state.email!,
                 nickname: profileRes.user?.nickname ?? state.nickname ?? '',
-                credits: freshCredits,
+                balance: freshBalance,
               })
             }
           } catch (err: unknown) {
@@ -76,7 +76,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
               setError('登录已过期，请重新登录')
             }
           } finally {
-            if (!cancelled) setRefreshingCredits(false)
+            if (!cancelled) setRefreshingBalance(false)
           }
         }
       } catch { /* no saved state */ }
@@ -103,20 +103,27 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
       })
       const t = res.token
       setToken(t)
-      setCredits(res.user?.credits ?? 0)
+      setBalance(res.user?.balance ?? 0)
       setNickname(res.user?.nickname ?? '')
       setView('profile')
+      // Save JWT token to auth-profiles.json so gateway uses the fresh token
+      await window.electronAPI.config.saveApiKey({
+        profileId: 'clawwinweb:default',
+        provider: 'clawwinweb',
+        key: t,
+      })
       await window.electronAPI.cww.saveState({
         email,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
         serverUrl: CWW_SERVER_URL,
+        encPassword: btoa(password),
       })
       onCwwStateChange?.({
         loggedIn: true,
         email,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
       })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -139,20 +146,27 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
       })
       const t = res.token
       setToken(t)
-      setCredits(res.user?.credits ?? 0)
+      setBalance(res.user?.balance ?? 0)
       setNickname(res.user?.nickname ?? '')
       setView('profile')
+      // Save JWT token to auth-profiles.json so gateway uses the fresh token
+      await window.electronAPI.config.saveApiKey({
+        profileId: 'clawwinweb:default',
+        provider: 'clawwinweb',
+        key: t,
+      })
       await window.electronAPI.cww.saveState({
         email,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
         serverUrl: CWW_SERVER_URL,
+        encPassword: btoa(password),
       })
       onCwwStateChange?.({
         loggedIn: true,
         email,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
       })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -175,7 +189,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
 
   const handleLogout = useCallback(() => {
     setToken('')
-    setCredits(0)
+    setBalance(0)
     setEmail('')
     setPassword('')
     setNickname('')
@@ -184,10 +198,10 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
     window.electronAPI.cww.saveState({
       email: '',
       nickname: '',
-      credits: 0,
+      balance: 0,
       serverUrl: CWW_SERVER_URL,
     }).catch(() => {})
-    onCwwStateChange?.({ loggedIn: false, email: '', nickname: '', credits: 0 })
+    onCwwStateChange?.({ loggedIn: false, email: '', nickname: '', balance: 0 })
   }, [onCwwStateChange])
 
   const handleRecharge = useCallback(async () => {
@@ -218,15 +232,15 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
                 serverUrl: CWW_SERVER_URL,
                 token,
               })
-              const newCredits = profileRes.user?.credits ?? 0
-              setCredits(newCredits)
+              const newBalance = profileRes.user?.balance ?? 0
+              setBalance(newBalance)
               await window.electronAPI.cww.saveState({
                 email,
                 nickname,
-                credits: newCredits,
+                balance: newBalance,
                 serverUrl: CWW_SERVER_URL,
               })
-              onCwwStateChange?.({ loggedIn: true, email, nickname, credits: newCredits })
+              onCwwStateChange?.({ loggedIn: true, email, nickname, balance: newBalance })
             } catch {}
           }
         } catch {
@@ -324,11 +338,11 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
               <div className="user-center-name">{nickname || email}</div>
               <div className="user-center-email">{email}</div>
               <div className="user-center-credits-card">
-                <span className="user-center-credits-label">积分余额</span>
+                <span className="user-center-credits-label">账户余额</span>
                 <span className="user-center-credits-value">
-                  {refreshingCredits ? (
+                  {refreshingBalance ? (
                     <span style={{ opacity: 0.5, fontSize: '0.85em' }}>刷新中...</span>
-                  ) : credits}
+                  ) : `¥${balance.toFixed(2)}`}
                 </span>
               </div>
               {error && <div className="cww-error">{error}</div>}
@@ -339,7 +353,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
                   setShowCustomRecharge(false)
                   setCustomRechargeInput('')
                 }}>
-                  充值积分
+                  充值
                 </button>
                 <button className="btn-secondary user-center-logout" onClick={handleLogout}>
                   退出登录
@@ -356,7 +370,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
           {/* 充值 */}
           {view === 'recharge' && (
             <div className="user-center-recharge">
-              <div className="cww-panel-title">充值积分</div>
+              <div className="cww-panel-title">账户充值</div>
               {rechargeStatus === 'idle' && (
                 <>
                   <div className="cww-amount-grid">
@@ -388,8 +402,14 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
                   )}
                   {error && <div className="cww-error">{error}</div>}
                   <div className="cww-login-actions">
-                    <button className="btn-primary" onClick={handleRecharge}>
-                      充值 {rechargeAmount} 元
+                    <button className="btn-primary cww-alipay-btn" onClick={handleRecharge}>
+                      <span className="cww-alipay-icon-wrap">
+                        <svg viewBox="0 0 1024 1024" width="30" height="30">
+                          <rect width="1024" height="1024" rx="220" fill="#1677FF"/>
+                          <path d="M789.5 627.3c-49.5-18.8-104.4-39.8-104.4-39.8s28.3-64.6 39.8-131.7h-157V408h187.5v-34.2H567.9V288H510v85.8H326.5V408H510v47.8H371.8v34.2H650c-8.3 42.3-22.3 84.3-41.3 118.5-45.7-23-107.5-49.5-166.3-59.5-85.5-14.8-159.5 8.8-170.8 72s52.3 112 137.8 126.8c85.5 14.8 169.3-24.8 222-80.5 33.5 22 63 44.8 85.8 65.3l0 0c30.5 27.3 116.8 90.8 116.8 90.8L893 762.7S838.8 646 789.5 627.3zM390.8 707.5c-60-10.5-95.5-52.5-88.3-85.5s56.5-51.5 116.5-41c60 10.5 124.5 44.5 167 70.5C539 700 450.8 718 390.8 707.5z" fill="white"/>
+                        </svg>
+                      </span>
+                      支付宝充值 {rechargeAmount} 元
                     </button>
                     <button className="btn-secondary" onClick={() => setView('profile')}>
                       返回
@@ -399,7 +419,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
               )}
               {rechargeStatus === 'paying' && (
                 <>
-                  <div className="cww-recharge-info">请在浏览器中完成支付，支付完成后将自动更新积分...</div>
+                  <div className="cww-recharge-info">请在浏览器中完成支付，支付完成后将自动更新余额...</div>
                   <div className="cww-login-actions">
                     <button className="btn-secondary"
                       onClick={() => { setRechargeStatus('idle'); setView('profile') }}>
@@ -410,7 +430,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
               )}
               {rechargeStatus === 'success' && (
                 <>
-                  <div className="cww-recharge-success">充值成功！当前积分: {credits}</div>
+                  <div className="cww-recharge-success">充值成功！当前余额: ¥{balance.toFixed(2)}</div>
                   <div className="cww-login-actions">
                     <button className="btn-primary"
                       onClick={() => { setRechargeStatus('idle'); setView('profile') }}>

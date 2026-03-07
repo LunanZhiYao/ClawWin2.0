@@ -1,9 +1,6 @@
 /**
  * build-installer.js — 完整构建流程
  *
- * 前置条件:
- *   bundled/bash/ 已预置 MinGit (含 bash.exe)
- *
  * 步骤:
  * 1. prepare-node.js       — 下载 Node.js 运行时
  * 2. prepare-openclaw.js   — 安装 openclaw

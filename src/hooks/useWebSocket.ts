@@ -6,6 +6,8 @@ interface UseWebSocketOptions {
   url: string
   token?: string
   enabled: boolean
+  /** 改变此值会销毁旧 GatewayClient 并创建新的，模拟完整重连 */
+  reconnectKey?: number
 }
 
 interface UseWebSocketReturn {
@@ -13,13 +15,16 @@ interface UseWebSocketReturn {
   hello: GatewayHelloOk | null
   agents: AgentInfo[]
   defaultAgentId: string
-  sendMessage: (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => Promise<{ runId?: string; status?: string; sessionKey: string; idempotencyKey: string } | null>
+  sendMessage: (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string, modelOverride?: string) => Promise<{ runId?: string; status?: string; sessionKey: string; idempotencyKey: string } | null>
   abortSession: (sessionKey: string, agentId?: string) => Promise<void>
   isStreaming: boolean
   backendStatus: string
   onMessageStream: React.MutableRefObject<((msg: ChatMessage) => void) | null>
   onFinalUsage: React.MutableRefObject<((usage: { input: number; output: number }) => void) | null>
   onCompactionEnd: React.MutableRefObject<(() => void) | null>
+  onStreamStart: React.MutableRefObject<(() => void) | null>
+  patchSessionModel: (sessionKey: string, model: string | null, agentId?: string) => Promise<void>
+  sendModelDirective: (sessionKey: string, modelKey: string, agentId?: string) => Promise<void>
   reconnect: () => void
   refreshAgents: () => void
   client: GatewayClient | null
@@ -78,7 +83,33 @@ function extractText(message: unknown): string {
   return ''
 }
 
-export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseWebSocketReturn {
+/** 将常见英文错误消息翻译为中文 */
+function translateError(msg: string): string {
+  const lower = msg.toLowerCase()
+  if (lower.includes('insufficient') && (lower.includes('balance') || lower.includes('credit') || lower.includes('fund') || lower.includes('quota')))
+    return '余额不足，请充值后再试'
+  if (lower.includes('402') || lower.includes('payment required'))
+    return '余额不足，请充值后再试'
+  if (lower.includes('rate limit') || lower.includes('too many request') || lower.includes('api rate limit'))
+    return '请求过于频繁，请稍后再试'
+  if (lower.includes('unauthorized') || lower.includes('401'))
+    return '认证失败，请重新登录'
+  if (lower.includes('forbidden') || lower.includes('403'))
+    return '访问被拒绝，请检查权限'
+  if (lower.includes('not found') || lower.includes('404'))
+    return '请求的资源不存在'
+  if (lower.includes('timeout') || lower.includes('timed out'))
+    return '请求超时，请稍后再试'
+  if (lower.includes('network') || lower.includes('econnrefused') || lower.includes('econnreset'))
+    return '网络连接失败，请检查网络'
+  if (lower.includes('model') && lower.includes('not') && (lower.includes('found') || lower.includes('available') || lower.includes('support')))
+    return '模型不可用，请切换其他模型'
+  if (lower.includes('context') && (lower.includes('length') || lower.includes('exceed') || lower.includes('too long')))
+    return '上下文长度超限，请压缩对话或开启新会话'
+  return msg
+}
+
+export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocketOptions): UseWebSocketReturn {
   const [connected, setConnected] = useState(false)
   const [hello, setHello] = useState<GatewayHelloOk | null>(null)
   const [agents, setAgents] = useState<AgentInfo[]>([])
@@ -102,6 +133,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
   const toolCallsBufferRef = useRef<ChatToolCall[]>([])
   const toolCallIdRef = useRef(0)
   const activeRunIdRef = useRef<string | null>(null)
+  // 指令消息（如 /model）的 runId 集合，用于过滤掉其响应不显示在聊天中
+  const directiveRunIdsRef = useRef<Set<string>>(new Set())
   // agent lifecycle.start 分配的 runId（工具调用流式消息用此 ID）
   // 与 chat 事件的 runId 可能不同，需要在 final 时用此 ID 确保消息正确替换
   const agentLifecycleRunIdRef = useRef<string | null>(null)
@@ -111,6 +144,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
   // 自动压缩：暴露给 App.tsx 的回调
   const onFinalUsage = useRef<((usage: { input: number; output: number }) => void) | null>(null)
   const onCompactionEnd = useRef<(() => void) | null>(null)
+  // agent 活动开始通知（用于清除 isWaiting 等待状态）
+  const onStreamStart = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     if (!enabled || !url) return
@@ -155,7 +190,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       clientRef.current = null
       setConnected(false)
     }
-  }, [url, token, enabled])
+  // reconnectKey 变化时会销毁旧 client 并创建新的，模拟完整重启
+  }, [url, token, enabled, reconnectKey])
 
   const handleEvent = useCallback((evt: GatewayEventFrame) => {
     console.log('[ws] event received:', evt.event, JSON.stringify(evt.payload).slice(0, 2000))
@@ -287,6 +323,8 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
             activeRunIdRef.current = agentRunId
             agentLifecycleRunIdRef.current = agentRunId
           }
+          // 通知 App 层 agent 活动已开始，清除等待动画
+          onStreamStart.current?.()
           setBackendStatus('思考中...')
         } else if (phase === 'end' || phase === 'error') {
           phaseRef.current = 'idle'
@@ -316,6 +354,15 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       ? agentLifecycleRunIdRef.current
       : chatRunId
     const sessionKey = normalizeSessionKey(payload.sessionKey as string | undefined)
+
+    // 过滤指令消息的响应（如 /model 切换命令），不显示在聊天中
+    if (directiveRunIdsRef.current.has(chatRunId)) {
+      console.log('[ws] suppressing directive response:', { chatRunId, state })
+      if (state === 'final' || state === 'error' || state === 'aborted' || state === 'terminated') {
+        directiveRunIdsRef.current.delete(chatRunId)
+      }
+      return
+    }
 
     // 详细打印 payload 结构，用于排查 thinking/reasoning 字段
     console.log('[ws] chat payload keys:', Object.keys(payload))
@@ -374,6 +421,12 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
 
         // 有工具调用时，文本只累积不推送 — 等 final 一次性出现
         if (hasToolCalls) {
+          return
+        }
+
+        // Agent 生命周期内（思考/工具调用阶段），文本只累积不推送，等 final 一次显示
+        // 避免 final 前闪现残留流式文本
+        if (phaseRef.current !== 'idle') {
           return
         }
 
@@ -516,6 +569,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       // 最终完整响应 — 清除节流 timer 并立即推送
       setBackendStatus('')
       const timer = streamThrottleRef.current.get(runId)
+      const hadTimer = !!timer
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
       lastPushedLenRef.current.delete(runId)
       idleCountRef.current.delete(runId)
@@ -524,7 +578,10 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       const extractedText = extractText(payload.message)
       const bufferedText = streamBufferRef.current.get(runId)
       const text = extractedText || bufferedText || ''
-      if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
+      const hadStream = streamBufferRef.current.delete(runId)
+      // 修复: 当只有 thinking delta (无 text delta) 时，streamBuffer 未设置
+      // 但 streamingCount 已在 thinking 分支中递增，需要同步递减
+      if (hadStream || hadTimer) setStreamingCount((c) => Math.max(0, c - 1))
 
       // 空内容不创建消息，避免空白气泡（但有工具调用时仍然推送）
       if (!text && !(toolCallsBufferRef.current.length > 0)) {
@@ -565,7 +622,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       }
     } else if (state === 'error') {
       setBackendStatus('')
-      const errorMessage = (payload.errorMessage as string) || '发生错误'
+      const errorMessage = translateError((payload.errorMessage as string) || '发生错误')
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
       lastPushedLenRef.current.delete(runId)
@@ -638,7 +695,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
     }
   }, [])
 
-  const sendMessage = useCallback(async (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string) => {
+  const sendMessage = useCallback(async (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string, modelOverride?: string) => {
     const client = clientRef.current
     if (!client) {
       console.error('[ws] cannot send: no client instance')
@@ -690,6 +747,24 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       payload.attachments = gatewayAttachments
     }
 
+    // 在 chat.send 之前 apply 模型覆盖，确保本条消息使用新模型
+    if (modelOverride) {
+      let patchOk = false
+      for (let attempt = 0; attempt < 3 && !patchOk; attempt++) {
+        try {
+          await client.request('sessions.patch', { key: builtSessionKey, model: modelOverride })
+          console.log('[ws] pre-send sessions.patch ok:', modelOverride)
+          patchOk = true
+        } catch (err) {
+          console.warn(`[ws] pre-send sessions.patch attempt ${attempt + 1} failed:`, err)
+          if (attempt < 2) {
+            // 等待重连或 gateway 就绪后重试
+            await new Promise(r => setTimeout(r, 600))
+          }
+        }
+      }
+    }
+
     try {
       const ack = await client.request<{ runId?: string; status?: string }>('chat.send', payload)
       return { ...ack, sessionKey: builtSessionKey, idempotencyKey }
@@ -698,7 +773,7 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       const msg: ChatMessage = {
         id: idempotencyKey,
         role: 'assistant',
-        content: `发送失败: ${err instanceof Error ? err.message : String(err)}`,
+        content: `发送失败: ${translateError(err instanceof Error ? err.message : String(err))}`,
         timestamp: Date.now(),
         status: 'error',
       }
@@ -722,6 +797,44 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
     clientRef.current?.start()
   }, [])
 
+  const patchSessionModel = useCallback(async (sessionKey: string, model: string | null, agentId?: string) => {
+    const client = clientRef.current
+    if (!client) return
+    const key = buildAgentSessionKey(sessionKey, agentId)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await client.request('sessions.patch', { key, model })
+        console.log('[ws] patchSessionModel ok:', { key, model })
+        return
+      } catch (err) {
+        console.warn(`[ws] patchSessionModel attempt ${attempt + 1} failed:`, err)
+        if (attempt < 2) await new Promise(r => setTimeout(r, 800))
+      }
+    }
+  }, [])
+
+  /** 通过 /model 指令切换模型，直接写入 session store，比 sessions.patch 更可靠 */
+  const sendModelDirective = useCallback(async (sessionKey: string, modelKey: string, agentId?: string) => {
+    const client = clientRef.current
+    if (!client) return
+    const builtSessionKey = buildAgentSessionKey(sessionKey, agentId)
+    const idempotencyKey = generateId()
+    try {
+      const ack = await client.request<{ runId?: string }>('chat.send', {
+        sessionKey: builtSessionKey,
+        message: `/model ${modelKey}`,
+        deliver: false,
+        idempotencyKey,
+      })
+      if (ack?.runId) {
+        directiveRunIdsRef.current.add(ack.runId)
+      }
+      console.log('[ws] sendModelDirective ok:', { modelKey, runId: ack?.runId })
+    } catch (err) {
+      console.warn('[ws] sendModelDirective failed:', err)
+    }
+  }, [])
+
   const refreshAgents = useCallback(() => {
     const client = clientRef.current
     if (!client) return
@@ -734,5 +847,5 @@ export function useWebSocket({ url, token, enabled }: UseWebSocketOptions): UseW
       .catch((err) => console.warn('[ws] agents.list refresh failed:', err))
   }, [])
 
-  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, onMessageStream, onFinalUsage, onCompactionEnd, reconnect, refreshAgents, client: clientRef.current }
+  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, onMessageStream, onFinalUsage, onCompactionEnd, onStreamStart, patchSessionModel, sendModelDirective, reconnect, refreshAgents, client: clientRef.current }
 }

@@ -41,6 +41,7 @@ interface ElectronSetup {
 interface ElectronConfig {
   readConfig: () => Promise<Record<string, unknown> | null>
   getApiKey: (profileId: string) => Promise<string | null>
+  saveApiKey: (params: { profileId: string; provider: string; key: string }) => Promise<{ ok: boolean; error?: string }>
   saveModelConfig: (params: {
     provider: string
     modelId: string
@@ -63,6 +64,7 @@ interface ElectronConfig {
   saveAutoCompact: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
   getShellHints: () => Promise<boolean>
   saveShellHints: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
+  getAvailableModels: () => Promise<AvailableModel[]>
 }
 
 interface ElectronSessions {
@@ -117,15 +119,15 @@ interface ElectronOllama {
 }
 
 interface ElectronCww {
-  login: (params: { serverUrl: string; email: string; password: string }) => Promise<{ token: string; user: { id: string; email: string; nickname: string; credits: number } }>
-  register: (params: { serverUrl: string; email: string; password: string; nickname?: string; code: string }) => Promise<{ token: string; user: { id: string; email: string; nickname: string; credits: number } }>
+  login: (params: { serverUrl: string; email: string; password: string }) => Promise<{ token: string; user: { id: string; email: string; nickname: string; balance: number } }>
+  register: (params: { serverUrl: string; email: string; password: string; nickname?: string; code: string }) => Promise<{ token: string; user: { id: string; email: string; nickname: string; balance: number } }>
   sendCode: (params: { serverUrl: string; email: string }) => Promise<{ message: string }>
   fetchModels: (params: { serverUrl: string; token: string }) => Promise<{ models: Array<{ id: string; name: string; provider: string; inputRate: number; outputRate: number; vision: boolean }> }>
-  getProfile: (params: { serverUrl: string; token: string }) => Promise<{ user: { email: string; nickname: string; credits: number } }>
-  createOrder: (params: { serverUrl: string; token: string; amount: number; payType: string }) => Promise<{ orderNo: string; payUrl: string; credits: number }>
-  checkOrder: (params: { serverUrl: string; token: string; orderNo: string }) => Promise<{ order: { status: string; credits: number } }>
-  getState: () => Promise<{ email?: string; nickname?: string; credits?: number; serverUrl?: string } | null>
-  saveState: (state: { email: string; nickname: string; credits: number; serverUrl: string; encPassword?: string }) => Promise<{ ok: boolean }>
+  getProfile: (params: { serverUrl: string; token: string }) => Promise<{ user: { email: string; nickname: string; balance: number } }>
+  createOrder: (params: { serverUrl: string; token: string; amount: number; payType: string }) => Promise<{ orderNo: string; payUrl: string }>
+  checkOrder: (params: { serverUrl: string; token: string; orderNo: string }) => Promise<{ order: { status: string } }>
+  getState: () => Promise<{ email?: string; nickname?: string; balance?: number; serverUrl?: string } | null>
+  saveState: (state: { email: string; nickname: string; balance: number; serverUrl: string; encPassword?: string }) => Promise<{ ok: boolean }>
 }
 
 export interface UpdateInfo {
@@ -231,6 +233,7 @@ export interface ChatSession {
   id: string
   title: string
   agentId?: string
+  modelOverride?: string
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
@@ -358,4 +361,12 @@ export interface PairingRequest {
 export interface ChannelPairingGroup {
   channel: string
   requests: PairingRequest[]
+}
+
+export interface AvailableModel {
+  providerId: string
+  modelId: string
+  modelName: string
+  key: string
+  providerType: 'clawwin' | 'cloud' | 'local'
 }

@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
 import { InputArea } from './InputArea'
-import type { ChatMessage, ChatAttachment, AgentInfo } from '../../types'
+import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel } from '../../types'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -18,6 +18,9 @@ interface ChatAreaProps {
   defaultAgentId: string
   onChangeAgent: (agentId: string) => void
   onRestartGateway: () => void
+  availableModels: AvailableModel[]
+  currentModelKey: string
+  onSwitchModel: (modelKey: string) => void
 }
 
 function getAgentDisplayName(agent: AgentInfo): string {
@@ -39,11 +42,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   defaultAgentId,
   onChangeAgent,
   onRestartGateway,
+  availableModels,
+  currentModelKey,
+  onSwitchModel,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const agentPickerRef = useRef<HTMLDivElement>(null)
+  const modelPickerRef = useRef<HTMLDivElement>(null)
 
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollTop, setShowScrollTop] = useState(false)
@@ -51,6 +58,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [screenshotToast, setScreenshotToast] = useState<string | null>(null)
   const [showAgentPicker, setShowAgentPicker] = useState(false)
   const [showCreateAgent, setShowCreateAgent] = useState(false)
+  const [showModelPicker, setShowModelPicker] = useState(false)
   const [newAgentId, setNewAgentId] = useState('')
   const [newAgentName, setNewAgentName] = useState('')
   const [createError, setCreateError] = useState('')
@@ -72,12 +80,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [showAgentPicker, showCreateAgent])
 
+  // 点击外部关闭 model 选择器
+  useEffect(() => {
+    if (!showModelPicker) return
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(event.target as Node)) {
+        setShowModelPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [showModelPicker])
+
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: isStreaming ? 'instant' : 'smooth',
+      // 延迟一帧确保 DOM 布局完成（等待动画元素高度计算完毕）
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({
+          top: scrollRef.current.scrollHeight,
+          behavior: isStreaming ? 'instant' : 'smooth',
+        })
       })
     }
   }, [messages, autoScroll, isWaiting, isStreaming])
@@ -278,6 +301,39 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
         </div>
         <div className="chat-header-right">
+          {availableModels.length > 1 && (
+            <div className="model-switcher" ref={modelPickerRef}>
+              <button
+                className="chat-header-badge"
+                onClick={() => setShowModelPicker(v => !v)}
+                title="切换模型"
+              >
+                {(availableModels.find(m => m.key === currentModelKey)?.modelName || currentModelKey.split('/').pop() || '默认').slice(0, 16)}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{marginLeft: 4}}>
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              {showModelPicker && (
+                <div className="model-picker-dropdown">
+                  {availableModels.map(model => (
+                    <div
+                      key={model.key}
+                      className={`model-picker-item ${model.key === currentModelKey ? 'active' : ''}`}
+                      onClick={() => {
+                        onSwitchModel(model.key)
+                        setShowModelPicker(false)
+                      }}
+                    >
+                      <span className="model-picker-name">{model.modelName}</span>
+                      <span className={`model-picker-type model-picker-type-${model.providerType}`}>
+                        {model.providerType === 'clawwin' ? 'ClawWin' : model.providerType === 'local' ? '本地' : '云端'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <button
             className="chat-header-badge"
             onClick={handleCompact}

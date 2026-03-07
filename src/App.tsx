@@ -20,7 +20,7 @@ import { UserCenter } from './components/Settings/UserCenter'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, MODEL_PROVIDERS, type SetupStep } from './hooks/useSetup'
-import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, ModelProvider, ModelInfo } from './types'
+import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, ModelProvider, ModelInfo, AvailableModel } from './types'
 
 const SETUP_STEPS: SetupStep[] = ['userchoice', 'clawwin', 'workspace', 'gateway', 'complete']
 
@@ -120,7 +120,10 @@ function App() {
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [autoCompact, setAutoCompact] = useState(true)
   const [shellHints, setShellHints] = useState(true)
+  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([])
   const isAutoCompactingRef = useRef(false)
+  // 递增此值会销毁旧 GatewayClient 并创建新的，模拟完整重启
+  const [wsReconnectKey, setWsReconnectKey] = useState(0)
 
   // 使用 ref 追踪最新的 activeSessionId，避免回调闭包中拿到旧值
   const activeSessionIdRef = useRef<string | null>(null)
@@ -212,7 +215,15 @@ function App() {
     url: wsUrl,
     token: gateway.token ?? undefined,
     enabled: gateway.state === 'ready',
+    reconnectKey: wsReconnectKey,
   })
+
+  /** 重启 Gateway 并销毁旧 WebSocket 客户端，模拟完整重启 */
+  const restartGateway = useCallback(async () => {
+    await gateway.restart()
+    // 递增 reconnectKey 销毁旧 GatewayClient、创建新连接，确保 session 状态一致
+    setWsReconnectKey(k => k + 1)
+  }, [gateway])
 
   const handleStop = useCallback(() => {
     const sid = activeSessionIdRef.current
@@ -248,6 +259,8 @@ function App() {
     window.electronAPI.config.getShellHints().then(setShellHints).catch(() => {})
     // Load app version
     window.electronAPI.app.getVersion().then(setAppVersion).catch(() => {})
+    // Load available models for hot-switching
+    window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
   }, [])
 
   // 监听窗口关闭请求
@@ -346,6 +359,10 @@ function App() {
           const messages = [...s.messages]
           const existingIdx = messages.findIndex((m) => m.id === msg.id)
           if (existingIdx >= 0) {
+            // 防止已完成的消息被残留的流式定时器回调覆盖
+            if (messages[existingIdx].status === 'done' && msg.status === 'streaming') {
+              return s
+            }
             messages[existingIdx] = msg
             return { ...s, messages, updatedAt: Date.now() }
           }
@@ -383,8 +400,55 @@ function App() {
     isAutoCompactingRef.current = false
   }, [])
 
+
   // Get active session
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
+
+  // 模型热切换
+  const defaultModelKey = setup.config.provider && setup.config.modelId
+    ? `${setup.config.provider}/${setup.config.modelId}`
+    : ''
+  const currentModelKey = activeSession?.modelOverride || defaultModelKey
+
+  const handleSwitchModel = useCallback((modelKey: string) => {
+    const isDefault = modelKey === defaultModelKey
+    const override = isDefault ? undefined : modelKey
+    console.log('[app] handleSwitchModel:', { modelKey, defaultModelKey, isDefault, override, activeSessionId })
+
+    if (!activeSessionId) {
+      // 没有活动会话时，自动创建一个并设置 modelOverride
+      const session: ChatSession = {
+        id: generateId(),
+        title: '新对话',
+        agentId: ws.agents.length > 0 ? ws.defaultAgentId : undefined,
+        modelOverride: override,
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+      setSessions((prev) => [session, ...prev])
+      setActiveSessionId(session.id)
+      return
+    }
+
+    setSessions((prev) =>
+      prev.map((s) => s.id === activeSessionId
+        ? { ...s, modelOverride: override, updatedAt: Date.now() }
+        : s
+      )
+    )
+    // 通过 /model 指令切换模型，直接写入 session store，比 sessions.patch 更可靠
+    ws.sendModelDirective(activeSessionId, modelKey, sessionsRef.current.find((s) => s.id === activeSessionId)?.agentId)
+  }, [activeSessionId, defaultModelKey, ws])
+
+  // WebSocket 重连后自动重新 apply 模型覆盖
+  useEffect(() => {
+    if (!ws.connected) return
+    const session = sessionsRef.current.find((s) => s.id === activeSessionIdRef.current)
+    if (session?.modelOverride) {
+      ws.sendModelDirective(session.id, session.modelOverride, session.agentId)
+    }
+  }, [ws.connected, ws.sendModelDirective])
 
   // 切换当前会话的 agent
   const handleChangeAgent = useCallback((agentId: string) => {
@@ -396,17 +460,25 @@ function App() {
 
   // Session management
   const createSession = useCallback((agentId?: string) => {
+    // 继承当前会话的模型选择
+    const currentSession = sessionsRef.current.find((s) => s.id === activeSessionIdRef.current)
+    const inheritedModel = currentSession?.modelOverride
     const session: ChatSession = {
       id: generateId(),
       title: '新对话',
       agentId: agentId || (ws.agents.length > 0 ? ws.defaultAgentId : undefined),
+      modelOverride: inheritedModel,
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }
     setSessions((prev) => [session, ...prev])
     setActiveSessionId(session.id)
-  }, [ws.agents, ws.defaultAgentId])
+    // 新会话也要发送 /model 指令，确保 gateway 侧 session store 生效
+    if (inheritedModel) {
+      ws.sendModelDirective(session.id, inheritedModel, session.agentId)
+    }
+  }, [ws.agents, ws.defaultAgentId, ws])
 
   const deleteSession = useCallback(
     (id: string) => {
@@ -456,10 +528,14 @@ function App() {
         setActiveSessionId(session.id)
         startWaiting()
         // 每个前端会话用自己的 id 作为 Gateway sessionKey，避免历史污染
-        void ws.sendMessage(session.id, content, attachments, session.agentId).then((ack) => {
+        void ws.sendMessage(session.id, content, attachments, session.agentId, session.modelOverride).then((ack) => {
           registerRunBinding(ack, session.id, userMsg.id)
           if (!ack && userMsg.status === 'queued') {
             markUserMessageComplete(session.id, userMsg.id)
+          }
+          // 新会话首次 send 后重新 apply 模型覆盖（pre-send 可能因会话不存在而失败）
+          if (session.modelOverride) {
+            ws.patchSessionModel(session.id, session.modelOverride, session.agentId)
           }
         })
         return
@@ -499,10 +575,16 @@ function App() {
 
       // 发送消息到后端，后端队列会自动处理（collect 模式）
       const currentSession = sessionsRef.current.find((s) => s.id === activeSessionId)
-      void ws.sendMessage(activeSessionId, content, attachments, currentSession?.agentId).then((ack) => {
+      console.log('[app] sendMessage modelOverride:', currentSession?.modelOverride, 'agentId:', currentSession?.agentId, 'sessionId:', activeSessionId)
+      void ws.sendMessage(activeSessionId, content, attachments, currentSession?.agentId, currentSession?.modelOverride).then((ack) => {
         registerRunBinding(ack, activeSessionId, userMsg.id)
         if (!ack && userMsg.status === 'queued') {
           markUserMessageComplete(activeSessionId, userMsg.id)
+        }
+        // 新会话首次 send 后重新 apply 模型覆盖（Gateway 侧会话刚创建）
+        const sess = sessionsRef.current.find((s) => s.id === activeSessionId)
+        if (sess?.modelOverride) {
+          ws.patchSessionModel(activeSessionId, sess.modelOverride, sess.agentId)
         }
       })
     },
@@ -514,6 +596,8 @@ function App() {
       const ok = await setup.saveConfig()
       if (ok) {
         setShowSetup(false)
+        // 加载新配置的可用模型列表
+        window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
         // Refresh gateway token/port from the newly written config before starting
         await gateway.start()
       }
@@ -599,13 +683,13 @@ function App() {
               onNext={(token) => {
                 setup.updateConfig({
                   provider: 'clawwinweb',
-                  modelId: 'gemini-2.5-flash',
-                  modelName: 'Gemini 2.5 Flash',
+                  modelId: 'glm-5',
+                  modelName: 'GLM-5',
                   baseUrl: 'https://www.mybotworld.com/api/v1',
                   apiFormat: 'openai-completions',
                   apiKey: token,
-                  reasoning: true,
-                  contextWindow: 1048576,
+                  reasoning: false,
+                  contextWindow: 128000,
                 })
                 setup.setStep('workspace')
               }}
@@ -674,7 +758,7 @@ function App() {
         <VideoSplash
           gatewayState={gateway.state}
           exiting={showSplashExit}
-          onRetry={() => gateway.restart()}
+          onRetry={() => restartGateway()}
         />
       </ErrorBoundary>
     )
@@ -764,7 +848,7 @@ function App() {
               onSelectSession={setActiveSessionId}
               onNewSession={createSession}
               onDeleteSession={deleteSession}
-              onRestartGateway={() => gateway.restart()}
+              onRestartGateway={() => restartGateway()}
             />
           </div>
           <div className="main-content">
@@ -781,7 +865,10 @@ function App() {
               currentAgentId={activeSession?.agentId}
               defaultAgentId={ws.defaultAgentId}
               onChangeAgent={handleChangeAgent}
-              onRestartGateway={() => gateway.restart()}
+              onRestartGateway={() => restartGateway()}
+              availableModels={availableModels}
+              currentModelKey={currentModelKey}
+              onSwitchModel={handleSwitchModel}
             />
           </div>
         </div>
@@ -825,7 +912,7 @@ function App() {
                     <button
                       className="btn-secondary"
                       disabled={gateway.state === 'starting' || gateway.state === 'restarting'}
-                      onClick={() => gateway.restart()}
+                      onClick={() => restartGateway()}
                     >
                       {gateway.state === 'starting' || gateway.state === 'restarting' ? '重启中...' : '重启网关'}
                     </button>
@@ -892,7 +979,7 @@ function App() {
                           const res = await window.electronAPI.config.saveWorkspace(selected)
                           if (res.ok) {
                             setup.updateConfig({ workspace: selected })
-                            await gateway.restart()
+                            await restartGateway()
                           }
                         }
                       } catch (err) {
@@ -1025,7 +1112,15 @@ function App() {
                 }
               }
             }).catch(() => {})
-            gateway.restart().catch((err) => console.error('gateway restart failed:', err))
+            // 清除当前会话的模型覆盖，让下拉框跟随新默认模型
+            if (activeSessionId) {
+              setSessions((prev) => prev.map((s) =>
+                s.id === activeSessionId ? { ...s, modelOverride: undefined, updatedAt: Date.now() } : s
+              ))
+            }
+            // 重新加载可用模型列表
+            window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
+            restartGateway().catch((err) => console.error('gateway restart failed:', err))
           }}
         />
       )}
@@ -1034,7 +1129,7 @@ function App() {
         <ChannelSettings
           onClose={() => setShowChannelSettings(false)}
           onSaved={() => {
-            gateway.restart().catch((err) => console.error('gateway restart failed:', err))
+            restartGateway().catch((err) => console.error('gateway restart failed:', err))
           }}
           gatewayClient={ws.client}
         />

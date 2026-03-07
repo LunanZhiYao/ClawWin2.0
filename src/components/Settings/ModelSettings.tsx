@@ -14,12 +14,12 @@ interface ModelSettingsProps {
     loggedIn: boolean
     email: string
     nickname: string
-    credits: number
+    balance: number
   }) => void
 }
 
 const PROVIDER_TAGS: Record<string, { label: string; className: string }> = {
-  clawwinweb: { label: '免Key·积分制', className: 'tag-recommended' },
+  clawwinweb: { label: '免Key·余额制', className: 'tag-recommended' },
   minimax: { label: '国内直连', className: 'tag-domestic' },
   deepseek: { label: '国内直连', className: 'tag-domestic' },
   anthropic: { label: '需科学上网', className: 'tag-international' },
@@ -92,7 +92,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
   const [cwwNickname, setCwwNickname] = useState('')
   const [cwwCode, setCwwCode] = useState('')
   const [cwwToken, setCwwToken] = useState('')
-  const [cwwCredits, setCwwCredits] = useState(0)
+  const [cwwBalance, setCwwBalance] = useState(0)
   const [cwwModels, setCwwModels] = useState<Array<{id:string;name:string;provider:string;inputRate:number;outputRate:number}>>([])
   const [cwwError, setCwwError] = useState('')
   const [cwwLoading, setCwwLoading] = useState(false)
@@ -168,7 +168,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
         if (state && state.email && savedKey) {
           setCwwEmail(state.email || '')
           setCwwNickname(state.nickname || '')
-          setCwwCredits(state.credits || 0)
+          setCwwBalance(state.balance || 0)
           setCwwToken(savedKey)
           setApiKey(savedKey)
           setCwwView('logged-in')
@@ -198,7 +198,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
         window.electronAPI.cww.getProfile({ serverUrl: cwwServerUrl, token }),
       ])
       setCwwModels(modelsRes.models || [])
-      setCwwCredits(profileRes.user?.credits ?? 0)
+      setCwwBalance(profileRes.user?.balance ?? 0)
       setCwwNickname(profileRes.user?.nickname ?? '')
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
@@ -225,17 +225,17 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
       const token = res.token
       setCwwToken(token)
       setApiKey(token)
-      setCwwCredits(res.user?.credits ?? 0)
+      setCwwBalance(res.user?.balance ?? 0)
       setCwwNickname(res.user?.nickname ?? '')
       setCwwView('logged-in')
       await window.electronAPI.cww.saveState({
         email: cwwEmail,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
         serverUrl: cwwServerUrl,
         encPassword: btoa(cwwPassword),
       })
-      onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: res.user?.nickname ?? '', credits: res.user?.credits ?? 0 })
+      onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: res.user?.nickname ?? '', balance: res.user?.balance ?? 0 })
       fetchCwwModelsAndProfile(token)
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
@@ -259,17 +259,17 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
       const token = res.token
       setCwwToken(token)
       setApiKey(token)
-      setCwwCredits(res.user?.credits ?? 0)
+      setCwwBalance(res.user?.balance ?? 0)
       setCwwNickname(res.user?.nickname ?? '')
       setCwwView('logged-in')
       await window.electronAPI.cww.saveState({
         email: cwwEmail,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
         serverUrl: cwwServerUrl,
         encPassword: btoa(cwwPassword),
       })
-      onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: res.user?.nickname ?? '', credits: res.user?.credits ?? 0 })
+      onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: res.user?.nickname ?? '', balance: res.user?.balance ?? 0 })
       fetchCwwModelsAndProfile(token)
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
@@ -293,14 +293,14 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
   const handleCwwLogout = useCallback(() => {
     setCwwToken('')
     setCwwModels([])
-    setCwwCredits(0)
+    setCwwBalance(0)
     setApiKey('')
     setCwwView('login')
     setCwwEmail('')
     setCwwPassword('')
     setCwwError('')
-    window.electronAPI.cww.saveState({ email: '', nickname: '', credits: 0, serverUrl: cwwServerUrl }).catch(() => {})
-    onCwwStateChange?.({ loggedIn: false, email: '', nickname: '', credits: 0 })
+    window.electronAPI.cww.saveState({ email: '', nickname: '', balance: 0, serverUrl: cwwServerUrl }).catch(() => {})
+    onCwwStateChange?.({ loggedIn: false, email: '', nickname: '', balance: 0 })
   }, [])
 
   const handleRecharge = useCallback(async () => {
@@ -327,17 +327,17 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
           if (checkRes.order?.status === 'paid') {
             clearInterval(pollInterval)
             setRechargeStatus('success')
-            // Refresh credits
+            // Refresh balance
             try {
               const profileRes = await window.electronAPI.cww.getProfile({ serverUrl: cwwServerUrl, token: cwwToken })
-              setCwwCredits(profileRes.user?.credits ?? 0)
+              setCwwBalance(profileRes.user?.balance ?? 0)
               await window.electronAPI.cww.saveState({
                 email: cwwEmail,
                 nickname: cwwNickname,
-                credits: profileRes.user?.credits ?? 0,
+                balance: profileRes.user?.balance ?? 0,
                 serverUrl: cwwServerUrl,
               })
-              onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: cwwNickname, credits: profileRes.user?.credits ?? 0 })
+              onCwwStateChange?.({ loggedIn: true, email: cwwEmail, nickname: cwwNickname, balance: profileRes.user?.balance ?? 0 })
             } catch {}
           }
         } catch {
@@ -518,7 +518,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
         <div className="model-settings-body">
           {/* Current model display */}
           <div className="model-settings-current">
-            <div className="model-settings-current-label">当前模型</div>
+            <div className="model-settings-current-label">默认模型</div>
             <div className="model-settings-current-value">
               {currentProviderObj
                 ? `${currentProviderObj.name} / ${currentModelObj?.name ?? currentModel ?? '未选择'}`
@@ -717,9 +717,9 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
         ) : activeTab === 'clawwin' ? (
           <>
             <div className="model-settings-body">
-              {/* 当前模型 */}
+              {/* 默认模型 */}
               <div className="model-settings-current">
-                <div className="model-settings-current-label">当前模型</div>
+                <div className="model-settings-current-label">默认模型</div>
                 <div className="model-settings-current-value">
                   {currentProviderObj
                     ? `${currentProviderObj.name} / ${currentModelObj?.name ?? currentModel ?? '未选择'}`
@@ -728,7 +728,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
               </div>
 
               <p className="settings-hint" style={{ padding: '0 28px', margin: '0 0 8px' }}>
-                聚合多家模型，价格低于官方 API，按积分计费，无需自备 Key
+                聚合多家模型，价格低于官方 API，按余额计费，无需自备 Key
               </p>
 
               {/* ===== 登录视图 ===== */}
@@ -790,7 +790,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                 <div>
                   <div className="cww-user-info">
                     <span className="cww-user-name">{cwwNickname || cwwEmail}</span>
-                    <span className="cww-credits">积分: {cwwCredits}</span>
+                    <span className="cww-credits">余额: ¥{cwwBalance.toFixed(2)}</span>
                     <button className="cww-btn-small"
                       onClick={() => { setCwwView('recharge'); setRechargeStatus('idle') }}>
                       充值
@@ -809,13 +809,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                     const isReasoningModel = (name: string, id: string) =>
                       REASONING_KEYWORDS.test(name) || REASONING_KEYWORDS.test(id)
 
-                    const rates = cwwModels.map(m => (m.inputRate + m.outputRate) / 2).sort((a, b) => a - b)
-                    const low = rates[Math.floor(rates.length / 3)] ?? 0
-                    const high = rates[Math.floor(rates.length * 2 / 3)] ?? 0
                     return cwwModels.map((model) => {
-                      const avg = (model.inputRate + model.outputRate) / 2
-                      const costLevel = avg > high ? '大' : avg > low ? '中' : '小'
-                      const costClass = avg > high ? 'high' : avg > low ? 'mid' : 'low'
                       const reasoning = isReasoningModel(model.name, model.id)
                       return (
                         <div key={model.id}
@@ -824,7 +818,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                           <div className="model-settings-model-name">{model.name}</div>
                           <div className="model-settings-model-meta">
                             <span>{model.provider}</span>
-                            <span className={`cost-badge cost-${costClass}`}>积分消耗: {costLevel}</span>
+                            <span className="cost-badge cost-price">¥{model.inputRate}/M 输入 · ¥{model.outputRate}/M 输出</span>
                             {reasoning
                               ? <span className="model-reasoning-warn">推理模型，不适合 Agent</span>
                               : <span className="model-agent-badge">适合 Agent</span>
@@ -882,7 +876,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                   )}
                   {rechargeStatus === 'paying' && (
                     <>
-                      <div className="cww-recharge-info">请在浏览器中完成支付，支付完成后将自动更新积分...</div>
+                      <div className="cww-recharge-info">请在浏览器中完成支付，支付完成后将自动更新余额...</div>
                       <div className="cww-login-actions">
                         <button className="btn-secondary"
                           onClick={() => { setRechargeStatus('idle'); setCwwView('logged-in') }}>
@@ -893,7 +887,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                   )}
                   {rechargeStatus === 'success' && (
                     <>
-                      <div className="cww-recharge-success">充值成功！当前积分: {cwwCredits}</div>
+                      <div className="cww-recharge-success">充值成功！当前余额: ¥{cwwBalance.toFixed(2)}</div>
                       <div className="cww-login-actions">
                         <button className="btn-primary"
                           onClick={() => { setRechargeStatus('idle'); setCwwView('logged-in') }}>
@@ -912,7 +906,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
                 <>
                   <div className="model-settings-apikey-row">
                     <span className="cww-footer-info">
-                      已登录: {cwwNickname || cwwEmail} · 积分: {cwwCredits}
+                      已登录: {cwwNickname || cwwEmail} · 余额: ¥{cwwBalance.toFixed(2)}
                     </span>
                     <button className="btn-primary" onClick={handleSave} disabled={saving}>
                       {saving ? '保存中...' : '保存并应用'}

@@ -108,6 +108,8 @@ const electronAPI = {
   config: {
     readConfig: (): Promise<Record<string, unknown> | null> => ipcRenderer.invoke('config:readConfig'),
     getApiKey: (profileId: string): Promise<string | null> => ipcRenderer.invoke('config:getApiKey', profileId),
+    saveApiKey: (params: { profileId: string; provider: string; key: string }): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('config:saveApiKey', params),
     saveModelConfig: (params: {
       provider: string
       modelId: string
@@ -136,6 +138,8 @@ const electronAPI = {
     getShellHints: (): Promise<boolean> => ipcRenderer.invoke('config:getShellHints'),
     saveShellHints: (enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('config:saveShellHints', enabled),
+    getAvailableModels: (): Promise<{ providerId: string; modelId: string; modelName: string; key: string; providerType: string }[]> =>
+      ipcRenderer.invoke('config:getAvailableModels'),
   },
 
   // Sessions persistence
@@ -235,7 +239,7 @@ const electronAPI = {
       ipcRenderer.invoke('cww:checkOrder', params),
     getState: () =>
       ipcRenderer.invoke('cww:getState'),
-    saveState: (state: { email: string; nickname: string; credits: number; serverUrl: string; encPassword?: string }) =>
+    saveState: (state: { email: string; nickname: string; balance: number; serverUrl: string; encPassword?: string }) =>
       ipcRenderer.invoke('cww:saveState', state),
   },
 }

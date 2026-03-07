@@ -77,6 +77,11 @@ body {
   to { transform: translateY(0); opacity: 1; }
 }
 
+@keyframes contentFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @keyframes slideRight {
   from { transform: translateX(-20px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
@@ -809,6 +814,88 @@ body {
   letter-spacing: 0;
 }
 
+/* Model Switcher (chat header) */
+.model-switcher {
+  position: relative;
+}
+
+.model-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 6px;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  animation: fadeSlideDown 0.2s ease-out;
+}
+
+.model-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.model-picker-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.model-picker-item.active {
+  background: rgba(0, 162, 224, 0.08);
+}
+
+.model-picker-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-picker-default {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: white;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.model-picker-type {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.model-picker-type-clawwin {
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.model-picker-type-cloud {
+  background: rgba(0, 162, 224, 0.1);
+  color: var(--accent);
+}
+
+.model-picker-type-local {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
 .session-list-items {
   flex: 1;
   overflow-y: auto;
@@ -1047,8 +1134,7 @@ body {
   font-size: 10px;
   font-weight: 900;
   color: #6b7280;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0.05em;
   transition: all 0.3s;
   cursor: default;
 }
@@ -1096,8 +1182,7 @@ body {
   font-size: 10px;
   font-weight: 700;
   color: #9ca3af;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
+  letter-spacing: 0.1em;
 }
 
 .chat-header-badge {
@@ -1108,8 +1193,7 @@ body {
   font-size: 10px;
   font-weight: 900;
   color: #6b7280;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: 0.05em;
   transition: all 0.3s;
 }
 
@@ -1341,7 +1425,9 @@ body {
   animation: subtleIn 0.3s cubic-bezier(0.25, 1, 0.5, 1) both;
 }
 
-.message-bubble-streaming,
+.message-bubble-streaming {
+  animation: contentFadeIn 0.35s ease-out both;
+}
 .message-bubble-waiting {
   animation: none;
 }
@@ -3885,6 +3971,11 @@ body {
   color: #ef5350;
 }
 
+.cost-price {
+  background: rgba(0, 162, 224, 0.12);
+  color: #4fc3f7;
+}
+
 .model-settings-model-list.custom-fields {
   display: flex;
   flex-direction: column;
@@ -6350,22 +6441,44 @@ body {
 .cww-login-actions button { flex: 1; }
 .cww-login-actions .btn-primary {
   padding: 16px 32px;
-  background: #E60012;
+  background: #22c55e;
   border-bottom: 4px solid rgba(0, 0, 0, 0.2);
   border-radius: 16px;
   font-weight: 900;
   font-size: 18px;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
+  letter-spacing: 0.05em;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
   transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .cww-login-actions .btn-primary:hover:not(:disabled) {
+  background: #16a34a;
   transform: scale(1.02);
-  box-shadow: 0 25px 50px -12px rgba(230, 0, 18, 0.3);
+  box-shadow: 0 25px 50px -12px rgba(34, 197, 94, 0.3);
 }
 .cww-login-actions .btn-primary:active:not(:disabled) {
   transform: scale(0.95);
+}
+.cww-alipay-btn {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #1677FF !important;
+  white-space: nowrap;
+}
+.cww-alipay-btn:hover:not(:disabled) {
+  background: #0e5fcc !important;
+  box-shadow: 0 25px 50px -12px rgba(22, 119, 255, 0.3) !important;
+}
+.cww-alipay-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: white;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .cww-login-actions .btn-secondary {
   padding: 16px 32px;
@@ -6561,7 +6674,7 @@ body {
 
 /* ===== 用户中心面板 ===== */
 .user-center-panel {
-  width: 440px;
+  width: 520px;
   max-width: 90vw;
   max-height: 85vh;
   background: var(--bg-sidebar);
@@ -6671,19 +6784,19 @@ body {
 
 .user-center-actions .btn-primary {
   padding: 14px 32px;
-  background: #E60012;
+  background: #22c55e;
   border-bottom: 4px solid rgba(0, 0, 0, 0.2);
   border-radius: 16px;
   font-weight: 900;
   font-size: 16px;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.05em;
   transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .user-center-actions .btn-primary:hover:not(:disabled) {
+  background: #16a34a;
   transform: scale(1.02);
-  box-shadow: 0 25px 50px -12px rgba(230, 0, 18, 0.3);
+  box-shadow: 0 25px 50px -12px rgba(34, 197, 94, 0.3);
 }
 
 .user-center-logout {
@@ -6779,6 +6892,7 @@ body {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+  animation: contentFadeIn 0.35s ease-out both;
 }
 
 /* 悬停时显示滚动条 */
@@ -6804,6 +6918,7 @@ body {
 .message-tool-item {
   position: relative;
   padding: 4px 0;
+  animation: contentFadeIn 0.3s ease-out both;
 }
 
 /* 工具间连接线 (LobsterAI 风格) */
@@ -6823,6 +6938,7 @@ body {
   border-radius: 16px;
   overflow: hidden;
   backdrop-filter: blur(10px);
+  animation: contentFadeIn 0.35s ease-out both;
 }
 
 /* 工具调用项不需要独立边框 (LobsterAI 风格: 无边框卡片, 仅在展开时显示详情) */

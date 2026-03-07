@@ -475,6 +475,35 @@ function setupIPC() {
     }
   })
 
+  // Get available models from config (for hot-switching)
+  ipcMain.handle('config:getAvailableModels', () => {
+    try {
+      const configPath = getOpenclawConfigPath()
+      if (!fs.existsSync(configPath)) return []
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      const providers = config?.models?.providers ?? {}
+      const result: { providerId: string; modelId: string; modelName: string; key: string; providerType: string }[] = []
+      for (const [providerId, cfg] of Object.entries(providers)) {
+        const providerCfg = cfg as { models?: Array<{ id: string; name?: string }> }
+        const providerType = providerId === 'clawwinweb' ? 'clawwin'
+          : providerId === 'ollama' ? 'local'
+          : 'cloud'
+        for (const m of providerCfg.models ?? []) {
+          result.push({
+            providerId,
+            modelId: m.id,
+            modelName: m.name || m.id,
+            key: `${providerId}/${m.id}`,
+            providerType,
+          })
+        }
+      }
+      return result
+    } catch {
+      return []
+    }
+  })
+
   // Get API key for a provider
   ipcMain.handle('config:getApiKey', (_event, profileId: string) => {
     try {
@@ -484,6 +513,35 @@ function setupIPC() {
       return auth?.profiles?.[profileId]?.key ?? null
     } catch {
       return null
+    }
+  })
+
+  // Save API key only (without changing model config) — used by UserCenter login
+  ipcMain.handle('config:saveApiKey', (_event, params: { profileId: string; provider: string; key: string }) => {
+    try {
+      const openclawHome = path.join(os.homedir(), '.openclaw')
+      const authFile = path.join(openclawHome, 'auth-profiles.json')
+      const agentDir = path.join(openclawHome, 'agents', 'main', 'agent')
+      const agentAuthFile = path.join(agentDir, 'auth-profiles.json')
+
+      for (const filePath of [authFile, agentAuthFile]) {
+        let authData: Record<string, unknown> = { profiles: {} }
+        if (fs.existsSync(filePath)) {
+          try { authData = JSON.parse(fs.readFileSync(filePath, 'utf-8')) } catch { /* ignore */ }
+        }
+        if (!authData.profiles || typeof authData.profiles !== 'object') authData.profiles = {}
+        ;(authData.profiles as Record<string, unknown>)[params.profileId] = {
+          provider: params.provider,
+          type: 'api_key',
+          key: params.key,
+        }
+        const dir = path.dirname(filePath)
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(filePath, JSON.stringify(authData, null, 2), 'utf-8')
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
 
@@ -837,9 +895,14 @@ function setupIPC() {
     }
   })
 
-  ipcMain.handle('cww:saveState', (_event, state: { email: string; nickname: string; credits: number; serverUrl: string; encPassword?: string }) => {
+  ipcMain.handle('cww:saveState', (_event, state: { email: string; nickname: string; balance: number; serverUrl: string; encPassword?: string }) => {
     try {
       const ui = readUiConfig()
+      const existing = (ui.clawwinweb ?? {}) as Record<string, unknown>
+      // Preserve encPassword if not explicitly provided (avoid losing it when callers don't have the password)
+      if (state.encPassword === undefined && existing.encPassword) {
+        state.encPassword = existing.encPassword as string
+      }
       ui.clawwinweb = state
       writeUiConfig(ui)
       return { ok: true }
@@ -1277,7 +1340,7 @@ app.whenReady().then(async () => {
               body: JSON.stringify({ email: cwwState.email, password: pwd }),
               signal: AbortSignal.timeout(15000),
             })
-            const data = await res.json() as { token?: string; user?: { nickname?: string; credits?: number }; error?: string }
+            const data = await res.json() as { token?: string; user?: { nickname?: string; balance?: number }; error?: string }
             if (res.ok && data.token) {
               // 更新 auth-profiles 中的 token（全局 + agent 目录）
               const newToken = data.token
@@ -1302,7 +1365,7 @@ app.whenReady().then(async () => {
               uiCfg.clawwinweb = {
                 ...cwwState,
                 nickname: data.user?.nickname ?? (cwwState as Record<string, unknown>).nickname ?? '',
-                credits: data.user?.credits ?? (cwwState as Record<string, unknown>).credits ?? 0,
+                balance: data.user?.balance ?? (cwwState as Record<string, unknown>).balance ?? 0,
               }
               fs.writeFileSync(uiConfigPath, JSON.stringify(uiCfg, null, 2), 'utf-8')
               console.log('[cww-renew] token renewed successfully')

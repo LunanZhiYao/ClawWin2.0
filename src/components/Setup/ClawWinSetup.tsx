@@ -39,7 +39,7 @@ export const ClawWinSetup: React.FC<ClawWinSetupProps> = ({ onBack, onNext, onSk
       await window.electronAPI.cww.saveState({
         email,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
         serverUrl: CWW_SERVER_URL,
         encPassword: btoa(password),
       })
@@ -67,7 +67,7 @@ export const ClawWinSetup: React.FC<ClawWinSetupProps> = ({ onBack, onNext, onSk
       await window.electronAPI.cww.saveState({
         email,
         nickname: res.user?.nickname ?? '',
-        credits: res.user?.credits ?? 0,
+        balance: res.user?.balance ?? 0,
         serverUrl: CWW_SERVER_URL,
         encPassword: btoa(password),
       })

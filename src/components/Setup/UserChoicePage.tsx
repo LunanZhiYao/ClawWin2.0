@@ -9,8 +9,8 @@ interface UserChoicePageProps {
 export const UserChoicePage: React.FC<UserChoicePageProps> = ({ onClawWin, onCustom, onSkip }) => {
   return (
     <div className="setup-page welcome-page">
-      <h1 className="setup-title">选择使用方式</h1>
-      <p className="setup-subtitle">请选择适合您的方式开始</p>
+      <h1 className="setup-title">欢迎使用 OpenClaw</h1>
+      <p className="setup-subtitle">选择使用方式</p>
 
       <div className="setup-features">
         <div className="feature-item choice-card" onClick={onClawWin}>

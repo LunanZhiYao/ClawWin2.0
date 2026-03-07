@@ -276,17 +276,6 @@ export class GatewayManager {
     // 这样 gateway 子进程中运行 agent-browser 等命令时能找到它们
     const extraPaths = [...getAllBundledBinPaths(), getLocalNpmBinDir()]
 
-    // 将 bundled bash (MinGit) 的 usr/bin/ 目录加入 PATH 最前面
-    // 确保 openclaw 的 resolveShellFromPath("bash") 能找到它
-    const bundledRoot = app.isPackaged
-      ? path.join(process.resourcesPath, 'bundled')
-      : path.join(__dirname, '..', 'bundled')
-    const bashBinDir = path.join(bundledRoot, 'bash', 'usr', 'bin')
-    if (fs.existsSync(path.join(bashBinDir, 'bash.exe'))) {
-      extraPaths.unshift(bashBinDir)
-      env.SHELL = path.join(bashBinDir, 'bash.exe')
-    }
-
     const sep = os.platform() === 'win32' ? ';' : ':'
     const currentPath = env.PATH || env.Path || ''
     env.PATH = [...extraPaths, currentPath].join(sep)
