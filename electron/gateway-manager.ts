@@ -4,8 +4,9 @@ import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
-import { app } from 'electron'
+import { app, dialog } from 'electron'
 import { getAllBundledBinPaths, getLocalNpmBinDir, detectSystemBrowser } from './skills-installer'
+import { ConfigMigrator } from './config-migrator'
 
 export type GatewayState = 'starting' | 'ready' | 'error' | 'stopped' | 'restarting'
 
@@ -28,11 +29,15 @@ export class GatewayManager {
   private stopping = false
   private externalGateway = false
   private isRestarting = false
+  private configMigrator: ConfigMigrator
+  private gatewayLogs: string[] = []
 
   // 操作锁：所有生命周期操作串行执行，杜绝并发启动
   private opLock: Promise<void> = Promise.resolve()
 
-  constructor(private opts: GatewayManagerOptions) {}
+  constructor(private opts: GatewayManagerOptions) {
+    this.configMigrator = new ConfigMigrator((level, message) => this.log(level, message))
+  }
 
   getStatus() {
     return {
@@ -57,12 +62,20 @@ export class GatewayManager {
 
   async restart(): Promise<void> {
     return this.serialize(async () => {
-      this.setState('restarting')
-      this.log('info', '正在重启 Gateway...')
-      this.isRestarting = true
-      await this.doStop()
-      await this.doStart()
-      this.isRestarting = false
+      try {
+        this.setState('restarting')
+        this.log('info', '正在重启 Gateway...')
+        this.isRestarting = true
+        await this.doStop()
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        await this.doStart()
+      } catch (err) {
+        this.log('error', `网关重启失败: ${err instanceof Error ? err.message : String(err)}`)
+        this.setState('error')
+        await this.showRestartFailureDialog()
+      } finally {
+        this.isRestarting = false
+      }
     })
   }
 
@@ -84,6 +97,21 @@ export class GatewayManager {
 
     this.stopping = false
     this.setState('starting')
+
+    // 第 1 层防御：启动前校验并迁移配置
+    this.log('info', '正在校验配置文件...')
+    const migrationResult = await this.configMigrator.validateAndMigrate()
+
+    if (!migrationResult.success && migrationResult.needsReset) {
+      this.log('error', '配置文件不兼容，需要用户处理')
+      const resetConfirmed = await this.configMigrator.promptUserToReset()
+      if (!resetConfirmed) {
+        this.setState('error')
+        return
+      }
+      // 重置成功，继续启动
+      this.log('info', '配置已重置，继续启动...')
+    }
 
     // 先检测端口是否已被占用（已有 Gateway 在运行）
     const portInUse = await this.isPortInUse(this.opts.port)
@@ -310,6 +338,11 @@ export class GatewayManager {
       const lines = data.toString().split('\n').filter(Boolean)
       for (const line of lines) {
         this.log('info', line)
+        this.gatewayLogs.push(line)
+        // 只保留最近 100 条日志
+        if (this.gatewayLogs.length > 100) {
+          this.gatewayLogs.shift()
+        }
       }
     })
 
@@ -317,12 +350,18 @@ export class GatewayManager {
       const lines = data.toString().split('\n').filter(Boolean)
       for (const line of lines) {
         this.log('warn', line)
+        this.gatewayLogs.push(line)
+        if (this.gatewayLogs.length > 100) {
+          this.gatewayLogs.shift()
+        }
       }
     })
 
     this.process.on('exit', (code, signal) => {
       if (!this.stopping) {
         this.log('warn', `Gateway 进程已退出 (code: ${code}, signal: ${signal})`)
+        // 第 2 层防御：运行时监控，检测是否是配置错误导致的崩溃
+        this.handleGatewayCrash()
         this.setState('error')
       }
       this.process = null
@@ -476,6 +515,58 @@ export class GatewayManager {
       }
     } catch {
       // 找不到进程或命令执行失败，忽略
+    }
+  }
+
+  /**
+   * 处理 Gateway 崩溃：检测是否是配置错误
+   */
+  private async handleGatewayCrash(): Promise<void> {
+    const logContent = this.gatewayLogs.join('\n')
+    const isConfigError = this.configMigrator.detectConfigError(logContent)
+
+    if (isConfigError) {
+      this.log('error', '检测到配置相关错误，尝试自动修复...')
+      const resetConfirmed = await this.configMigrator.promptUserToReset()
+      if (resetConfirmed) {
+        this.log('info', '配置已重置，正在重启...')
+        // 延迟重启，给用户时间看到提示
+        setTimeout(() => {
+          this.restart()
+        }, 1000)
+      }
+    }
+  }
+
+  /**
+   * 显示重启失败对话框
+   */
+  private async showRestartFailureDialog(): Promise<void> {
+    const result = await dialog.showMessageBox({
+      type: 'error',
+      title: '网关重启失败',
+      message: '网关重启失败，可能是进程未完全退出',
+      detail:
+        '建议操作：\n\n' +
+        '1. 完全退出应用（右键托盘 → 退出）\n' +
+        '2. 等待 5 秒\n' +
+        '3. 重新启动应用\n\n' +
+        '请尝试退出应用并重新启动。\n\n' +
+        '如果问题持续，可能是配置文件损坏，请尝试重置配置。',
+      buttons: ['退出应用', '重置配置', '取消'],
+      defaultId: 0,
+      cancelId: 2
+    })
+
+    if (result.response === 0) {
+      // 退出应用
+      app.quit()
+    } else if (result.response === 1) {
+      // 重置配置
+      const confirmed = await this.configMigrator.promptUserToReset()
+      if (confirmed) {
+        await this.start()
+      }
     }
   }
 }
