@@ -341,11 +341,11 @@ export class OllamaManager {
   }
 
   private sendProgress(state: { id: string; status: string; progress?: number; downloadedBytes?: number; totalBytes?: number; speed?: number; currentFile?: number; totalFileCount?: number; error?: string }) {
-    this.mainWindow?.webContents.send('ollama:progress', state)
+    try { this.mainWindow?.webContents.send('ollama:progress', state) } catch { /* window destroyed */ }
   }
 
   private sendStatus(status: { installed: boolean; running: boolean; version?: string }) {
-    this.mainWindow?.webContents.send('ollama:statusChange', status)
+    try { this.mainWindow?.webContents.send('ollama:statusChange', status) } catch { /* window destroyed */ }
   }
 
   async getStatus(): Promise<{ installed: boolean; running: boolean; version?: string }> {
