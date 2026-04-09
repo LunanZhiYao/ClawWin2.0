@@ -47,7 +47,7 @@ const KEY_TIPS: Record<string, string> = {
 }
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: 'recommended', label: '推荐技能' },
+  // { key: 'recommended', label: '推荐技能' },
   { key: 'enabled', label: '已开启' },
   { key: 'all', label: '全部技能' },
   { key: 'local', label: '本地技能' },
@@ -75,7 +75,8 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
-  const [tab, setTab] = useState<TabKey>('recommended')
+  // 当前 UI 未展示 recommended 标签，默认必须落在可见标签上
+  const [tab, setTab] = useState<TabKey>('enabled')
   const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [installing, setInstalling] = useState<Record<string, boolean>>({})
 
@@ -254,7 +255,7 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
         </div>
 
         {/* grid */}
-        <div key={tab} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '0 28px 16px' }}>
+        <div key={tab} className="skill-list-scroll">
           {filtered.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '2rem 0', opacity: 0.5 }}>
               {search ? '没有匹配的技能' : tab === 'enabled' ? '暂无已开启的技能' : tab === 'local' ? '暂无本地技能' : '暂无可用技能'}

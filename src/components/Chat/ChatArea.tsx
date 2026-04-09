@@ -36,7 +36,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   isWaiting = false,
   isStreaming = false,
   onStop,
-  gatewayPort = 18888,
+  // gatewayPort = 18888,
   agents,
   currentAgentId,
   defaultAgentId,
@@ -360,13 +360,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </svg>
             截屏
           </button>
-          <button
+          {/* <button
             className="chat-header-badge"
             onClick={() => void window.electronAPI.shell.openExternal(`http://127.0.0.1:${gatewayPort}`)}
             title="打开 OpenClaw WebUI"
           >
             WebUI
-          </button>
+          </button> */}
         </div>
       </div>
 

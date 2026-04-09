@@ -7,19 +7,12 @@ interface WelcomePageProps {
 export const WelcomePage: React.FC<WelcomePageProps> = ({ onNext }) => {
   return (
     <div className="setup-page welcome-page">
-      <h1 className="setup-title">欢迎使用 OpenClaw</h1>
+      <h1 className="setup-title">欢迎使用 鲁南千易</h1>
       <p className="setup-subtitle">Windows 桌面助手版</p>
       <p className="setup-description">
         只需几步简单配置，即可开始与 AI 对话。
       </p>
       <div className="setup-features">
-        <div className="feature-item">
-          <span className="feature-icon">&#9889;</span>
-          <div>
-            <strong>ClawWin 云模型</strong>
-            <p>注册即用 20+ 顶级 AI，免 API Key，比云厂商便宜 10~20%</p>
-          </div>
-        </div>
         <div className="feature-item">
           <span className="feature-icon">&#128274;</span>
           <div>

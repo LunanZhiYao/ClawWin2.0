@@ -741,7 +741,7 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
       sessionKey: builtSessionKey,
       message: content,
       deliver: false,
-      idempotencyKey,
+      idempotencyKey
     }
     if (gatewayAttachments && gatewayAttachments.length > 0) {
       payload.attachments = gatewayAttachments

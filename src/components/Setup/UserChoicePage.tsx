@@ -6,21 +6,13 @@ interface UserChoicePageProps {
   onSkip: () => void
 }
 
-export const UserChoicePage: React.FC<UserChoicePageProps> = ({ onClawWin, onCustom, onSkip }) => {
+export const UserChoicePage: React.FC<UserChoicePageProps> = ({ onCustom, onSkip }) => {
   return (
     <div className="setup-page welcome-page">
       <h1 className="setup-title">欢迎使用 OpenClaw</h1>
       <p className="setup-subtitle">选择使用方式</p>
 
       <div className="setup-features">
-        <div className="feature-item choice-card" onClick={onClawWin}>
-          <span className="feature-icon">&#9889;</span>
-          <div>
-            <strong>开箱即用</strong>
-            <p>注册 ClawWin 云模型，新用户赠送免费额度，20+ 顶级 AI 即刻可用。之后仍可配置自定义 API Key、本地大模型</p>
-          </div>
-          <span className="choice-arrow">&#8250;</span>
-        </div>
         <div className="feature-item choice-card" onClick={onCustom}>
           <span className="feature-icon">&#128295;</span>
           <div>

@@ -1,6 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import type { GatewayState } from '../../types'
-import splashVideo from '../../assets/splash-video.mp4'
 
 interface VideoSplashProps {
   gatewayState: GatewayState
@@ -8,13 +7,11 @@ interface VideoSplashProps {
   onRetry?: () => void
 }
 
+/**
+ * 简化的启动屏组件 - 使用渐变背景和加载动画替代视频
+ */
 export function VideoSplash({ gatewayState, exiting = false, onRetry }: VideoSplashProps) {
-  const videoRef = useRef<HTMLVideoElement>(null)
   const [waitingLong, setWaitingLong] = useState(false)
-
-  useEffect(() => {
-    videoRef.current?.play().catch(() => {})
-  }, [])
 
   // 等待超过 8 秒后显示提示
   useEffect(() => {
@@ -29,17 +26,45 @@ export function VideoSplash({ gatewayState, exiting = false, onRetry }: VideoSpl
 
   return (
     <div className={`video-splash${exiting ? ' video-splash-exit' : ''}`}>
-      <video
-        ref={videoRef}
-        className="video-splash-video"
-        src={splashVideo}
-        muted
-        autoPlay
-        loop
-        playsInline
+      {/* 渐变背景替代视频 */}
+      <div
+        className="video-splash-bg"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)'
+        }}
       />
 
       <div className="video-splash-overlay" />
+
+      {/* 加载动画 */}
+      {!isError && (
+        <div className="video-splash-loading" style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          textAlign: 'center',
+          zIndex: 10
+        }}>
+          <div style={{
+            width: '60px',
+            height: '60px',
+            border: '4px solid rgba(255,255,255,0.1)',
+            borderTop: '4px solid #e94560',
+            borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+            margin: '0 auto 20px'
+          }} />
+          <style>{`
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `}</style>
+        </div>
+      )}
 
       {isError && (
         <div className="video-splash-error">

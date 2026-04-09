@@ -107,12 +107,14 @@ const SEED_FILES: Record<string, string> = {
 - **签名emoji:** 🤖
 
 > 如果用户告诉你名字、性格或其他身份信息，请直接更新此文件，这样下次新会话你就能记住。
+> 记住你是 鲁南千易 ，一个基于openclaw的桌面助手。
 `,
   'USER.md': `# USER.md - 用户信息
 
 - **时区:** Asia/Shanghai
 - **操作系统:** Windows
-- **备注:** 通过 ClawWin 桌面客户端使用
+- **备注:** 通过 鲁南千易 桌面客户端使用
+- 记住你是 鲁南千易 ，一个基于openclaw的桌面助手。
 `,
   'AGENTS.md': `# AGENTS.md - 工作区
 
@@ -244,6 +246,7 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
         controlUi: {
           dangerouslyDisableDeviceAuth: true,
           allowInsecureAuth: true,
+          allowedOrigins: ['*'], // 允许所有来源访问
         },
       },
       ...(hasModel ? {
@@ -294,6 +297,9 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
             'session-memory': { enabled: true },
           },
         },
+      },
+      browser: {
+        defaultProfile: 'openclaw', // 默认浏览器配置文件
       },
       // Channel integrations (if any configured during setup)
       ...(setup.channels && Object.keys(setup.channels).length > 0
@@ -373,7 +379,7 @@ export async function validateApiKey(params: {
           max_tokens: 10,
           messages: [{ role: 'user', content: 'hi' }],
         }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(30000),
       })
 
       if (res.ok) return { ok: true }
@@ -398,7 +404,7 @@ export async function validateApiKey(params: {
           max_tokens: 10,
           messages: [{ role: 'user', content: 'hi' }],
         }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(30000),
       })
 
       if (res.ok) return { ok: true }

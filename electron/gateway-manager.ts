@@ -23,7 +23,7 @@ export class GatewayManager {
   private state: GatewayState = 'stopped'
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null
   private consecutiveFailures = 0
-  private readonly MAX_FAILURES = 30
+  private readonly MAX_FAILURES = 60
   private readonly HEALTH_CHECK_INTERVAL = 5000
   private readonly SHUTDOWN_TIMEOUT = 5000
   private stopping = false

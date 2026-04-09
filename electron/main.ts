@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, shell, globalShortcut, Tray, dialog, clipboard, nativeImage, desktopCapturer, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, shell, Tray, dialog, clipboard, nativeImage, desktopCapturer, screen } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
@@ -9,7 +9,7 @@ import { signDeviceAuth, type DeviceAuthParams } from './device-identity'
 import { scanSkills, getSkillsConfig, saveSkillsConfig, clearBinCache } from './skills-scanner'
 import { installSkillDep, canInstallSkill, getSkillInstallInfo } from './skills-installer'
 import { OllamaManager } from './ollama-manager'
-import { checkForUpdate, downloadUpdate, installUpdate, cancelDownload, type UpdateInfo } from './update-checker'
+import { downloadUpdate, installUpdate, cancelDownload, type UpdateInfo } from './update-checker'
 import { listAllChannelPairings, approvePairingCode, getEnabledChannels } from './pairing-manager'
 import { generateClaudeMd } from './claude-md-generator'
 
@@ -42,7 +42,7 @@ function getIconPath(): string {
 function createTray() {
   const iconPath = getIconPath()
   tray = new Tray(iconPath)
-  tray.setToolTip('ClawWin')
+  tray.setToolTip('鲁南千易')
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -86,12 +86,12 @@ function createWindow() {
     height: 980,
     minWidth: 1100,
     minHeight: 780,
-    title: 'ClawWin',
+    title: '鲁南千易',
     icon: getIconPath(),
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#ffffff',
-      symbolColor: '#6b7280',
+      color: '#2D2D2D',
+      symbolColor: '#FFFFFF',
       height: 48,
     },
     webPreferences: {
@@ -291,9 +291,11 @@ function setupIPC() {
 
   // Update checker
   ipcMain.handle('app:checkForUpdate', async () => {
-    const info = await checkForUpdate()
-    if (info) pendingUpdateInfo = info
-    return info
+
+    // const info = await checkForUpdate()
+    // if (info) pendingUpdateInfo = info
+    // return info
+    return null;
   })
   ipcMain.handle('app:downloadUpdate', async () => {
     if (!pendingUpdateInfo) throw new Error('No update available')
@@ -1228,16 +1230,16 @@ function initGatewayManager() {
   })
 }
 
-// 单实例锁：防止同时运行多个 ClawWin
+// 单实例锁：防止同时运行多个 鲁南千易
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   // dialog 需要 app ready 后才能使用，这里等 ready 再弹窗
   app.whenReady().then(() => {
     dialog.showMessageBoxSync({
       type: 'warning',
-      title: 'ClawWin',
-      message: 'ClawWin 已在运行中',
-      detail: '请关闭已运行的 ClawWin 后再启动。',
+      title: '鲁南千易',
+      message: '鲁南千易 已在运行中',
+      detail: '请关闭已运行的 鲁南千易 后再启动。',
       buttons: ['确定'],
     })
     app.quit()
@@ -1461,15 +1463,18 @@ app.whenReady().then(async () => {
         }
       }
     } catch { /* ignore, proceed with check */ }
-    checkForUpdate().then((info) => {
-      if (info) {
-        pendingUpdateInfo = info
-        mainWindow?.webContents.send('app:updateAvailable', info)
-        console.log('[update] update available:', info.version)
-      } else {
-        console.log('[update] no update available')
-      }
-    }).catch((err) => { console.log('[update] check failed:', err) })
+    // 暂时禁止更新检查
+    // checkForUpdate().then((info) => {
+    //   if (info) {
+    //     pendingUpdateInfo = info
+    //     mainWindow?.webContents.send('app:updateAvailable', info)
+    //     console.log('[update] update available:', info.version)
+    //   } else {
+    //     console.log('[update] no update available')
+    //   }
+    // }).catch((err) => { console.log('[update] check failed:', err) })
+    // 自动更新检查已禁用
+    console.log('[update] auto check disabled')
   })
 })
 

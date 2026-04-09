@@ -12,3 +12,6 @@ bundled/openclaw/skills/*
 *.log
 .DS_Store
 Thumbs.db
+.idea
+.qoder
+.claude

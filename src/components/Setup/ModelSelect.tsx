@@ -13,7 +13,6 @@ interface ModelSelectProps {
 }
 
 export const ModelSelect: React.FC<ModelSelectProps> = ({
-  providers,
   selectedProvider,
   selectedModel,
   onSelect,
@@ -27,54 +26,6 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
   const [customModelName, setCustomModelName] = useState('')
   const [customFormat, setCustomFormat] = useState('openai-completions')
   const [customSelected, setCustomSelected] = useState(false)
-
-  const PROVIDER_TAGS: Record<string, { label: string; className: string }> = {
-    clawwinweb: { label: '免Key·余额制', className: 'tag-recommended' },
-    minimax: { label: '国内直连', className: 'tag-domestic' },
-    deepseek: { label: '国内直连', className: 'tag-domestic' },
-    anthropic: { label: '需科学上网', className: 'tag-international' },
-    openai: { label: '需科学上网', className: 'tag-international' },
-    moonshot: { label: '国内直连', className: 'tag-domestic' },
-    xai: { label: '需科学上网', className: 'tag-international' },
-    zhipu: { label: '国内直连', className: 'tag-domestic' },
-    qwen: { label: '国内直连', className: 'tag-domestic' },
-    siliconflow: { label: '国内直连 · 聚合', className: 'tag-domestic' },
-    nvidia: { label: '需科学上网 · 免费额度', className: 'tag-international' },
-    google: { label: '需科学上网', className: 'tag-international' },
-  }
-
-  const PROVIDER_KEY_URLS: Record<string, string> = {
-    zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
-    deepseek: 'https://platform.deepseek.com/api_keys',
-    qwen: 'https://dashscope.console.aliyun.com/apiKey',
-    moonshot: 'https://platform.moonshot.cn/console/api-keys',
-    minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
-    siliconflow: 'https://cloud.siliconflow.cn/account/ak',
-    nvidia: 'https://build.nvidia.com/',
-    openai: 'https://platform.openai.com/api-keys',
-    anthropic: 'https://console.anthropic.com/settings/keys',
-    google: 'https://aistudio.google.com/apikey',
-    xai: 'https://console.x.ai/',
-  }
-
-  const PROVIDER_TUTORIAL_URLS: Record<string, string> = {
-    zhipu: 'https://open.bigmodel.cn/dev/howuse/introduction',
-    deepseek: 'https://api-docs.deepseek.com/zh-cn/',
-    qwen: 'https://help.aliyun.com/zh/model-studio/getting-started/',
-    moonshot: 'https://platform.moonshot.cn/docs/intro',
-    minimax: 'https://platform.minimaxi.com/document/introduction',
-    siliconflow: 'https://docs.siliconflow.cn/quickstart',
-    nvidia: 'https://build.nvidia.com/docs/getting-started',
-    openai: 'https://platform.openai.com/docs/quickstart',
-    anthropic: 'https://docs.anthropic.com/en/docs/initial-setup',
-    google: 'https://ai.google.dev/gemini-api/docs/quickstart',
-    xai: 'https://docs.x.ai/docs/quickstart',
-  }
-
-  const handleProviderToggle = (providerId: string) => {
-    setExpandedProvider((prev) => (prev === providerId ? null : providerId))
-    setCustomSelected(false)
-  }
 
   const handleCustomConfirm = () => {
     if (!customUrl.trim() || !customModelId.trim()) return
@@ -104,83 +55,11 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
       <p className="setup-subtitle">选择一个 AI 服务提供商和模型</p>
 
       <div className="provider-list">
-        {providers.map((provider, idx) => {
-          const isExpanded = expandedProvider === provider.id
-          const isProviderSelected = selectedProvider === provider.id && !customSelected
-          return (
-            <div
-              key={provider.id}
-              className={`provider-card${isExpanded ? ' expanded' : ''}${isProviderSelected ? ' selected' : ''}`}
-              style={{ animationDelay: `${idx * 0.06}s` }}
-            >
-              <div
-                className="provider-header"
-                onClick={() => handleProviderToggle(provider.id)}
-              >
-                <span className="provider-name">{provider.name}</span>
-                <div className="provider-header-right">
-                  {PROVIDER_TAGS[provider.id] && (
-                    <span className={`provider-tag ${PROVIDER_TAGS[provider.id].className}`}>
-                      {PROVIDER_TAGS[provider.id].label}
-                    </span>
-                  )}
-                  {PROVIDER_TUTORIAL_URLS[provider.id] && (
-                    <button
-                      className="provider-tutorial-link"
-                      title="查看配置教程"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        window.electronAPI.shell.openExternal(PROVIDER_TUTORIAL_URLS[provider.id])
-                      }}
-                    >
-                      教程
-                    </button>
-                  )}
-                  {PROVIDER_KEY_URLS[provider.id] && (
-                    <button
-                      className="provider-key-link"
-                      title="获取 API Key"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        window.electronAPI.shell.openExternal(PROVIDER_KEY_URLS[provider.id])
-                      }}
-                    >
-                      获取 Key
-                    </button>
-                  )}
-                  <span className={`provider-chevron${isExpanded ? ' open' : ''}`}>▸</span>
-                </div>
-              </div>
-              {isExpanded && (
-                <div className="model-list">
-                  {provider.models.map((model, mIdx) => (
-                    <div
-                      key={model.id}
-                      className={`model-item model-item-animated ${
-                        isProviderSelected && selectedModel === model.id ? 'selected' : ''
-                      }`}
-                      onClick={() => {
-                        setCustomSelected(false)
-                        onSelect(provider, model)
-                      }}
-                      style={{ animationDelay: `${mIdx * 0.03}s` }}
-                    >
-                      <div className="model-name">{model.name}</div>
-                      <div className="model-meta">
-                        {model.reasoning && <span className="model-badge" title="推理模型速度慢不适合 Agent，请慎重使用">推理</span>}
-                        {model.reasoning && <span className="model-reasoning-warn">速度慢，不适合 Agent</span>}
-                        <span>上下文: {(model.contextWindow / 1000).toFixed(0)}K</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })}
-
-        {/* Custom provider */}
-        <div className={`provider-card${isCustomExpanded ? ' expanded' : ''}${customSelected ? ' selected' : ''}`}>
+        {/* Custom provider - 放在第一个 */}
+        <div
+          className={`provider-card${isCustomExpanded ? ' expanded' : ''}${customSelected ? ' selected' : ''}`}
+          style={{ animationDelay: '0s' }}
+        >
           <div
             className="provider-header"
             onClick={() => {

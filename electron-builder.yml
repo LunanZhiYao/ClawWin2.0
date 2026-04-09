@@ -1,6 +1,6 @@
 appId: cn.openclaw.desktop
-productName: "ClawWin"
-copyright: MIT License
+productName: "鲁南千易"
+copyright: Copyright © 2026 鲁南制药集团股份有限公司
 directories:
   output: release
   buildResources: assets
@@ -32,7 +32,7 @@ win:
       arch:
         - x64
   icon: assets/icon.ico
-  artifactName: "ClawWin-Setup-${version}.${ext}"
+  artifactName: "LunanQianyi-Setup-${version}.${ext}"
 
 nsis:
   oneClick: false
@@ -46,6 +46,6 @@ nsis:
   deleteAppDataOnUninstall: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: "ClawWin"
+  shortcutName: "鲁南千易"
   runAfterFinish: true
   allowElevation: false

@@ -21,6 +21,7 @@ import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, MODEL_PROVIDERS, type SetupStep } from './hooks/useSetup'
 import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, ModelProvider, ModelInfo, AvailableModel } from './types'
+import logoSrc from '../assets/logo.png'
 
 const SETUP_STEPS: SetupStep[] = ['userchoice', 'clawwin', 'workspace', 'gateway', 'complete']
 
@@ -112,10 +113,9 @@ function App() {
   const [appVersion, setAppVersion] = useState('')
   const [updateChecking, setUpdateChecking] = useState(false)
   const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(null)
-  const [skipUpdateCheck, setSkipUpdateCheck] = useState(false)
+  const [skipUpdateCheck, setSkipUpdateCheck] = useState(true)
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [showUserCenter, setShowUserCenter] = useState(false)
-  const [modelSettingsTab, setModelSettingsTab] = useState<'cloud' | 'clawwin' | 'local' | undefined>(undefined)
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [autoCompact, setAutoCompact] = useState(true)
@@ -768,6 +768,14 @@ function App() {
   return (
     <ErrorBoundary>
       <div className="app-container">
+        <div className="navbar">
+          <div className="navbar-logo">
+            <div className="navbar-brand">
+              <img src={logoSrc} alt="鲁南千易" className="navbar-brand-logo" />
+              <span className="navbar-brand-name">鲁南千易</span>
+            </div>
+          </div>
+        </div>
         <div className="app-main">
           <div className="system-sidebar">
             <div className="system-sidebar-icons">
@@ -785,16 +793,7 @@ function App() {
                 </div>
                 <span className="system-icon-label">大模型</span>
               </div>
-              <div className="system-icon-item" style={{animationDelay: '0.05s'}} onClick={() => setShowChannelSettings(true)}>
-                <div className="system-icon-circle">
-                  <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    <line x1="8" y1="9" x2="16" y2="9" />
-                    <line x1="8" y1="13" x2="13" y2="13" />
-                  </svg>
-                </div>
-                <span className="system-icon-label">聊天工具</span>
-              </div>
+
               <div className="system-icon-item" style={{animationDelay: '0.10s'}} onClick={() => setShowCronManager(true)}>
                 <div className="system-icon-circle">
                   <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -821,15 +820,7 @@ function App() {
                 </div>
                 <span className="system-icon-label">设置</span>
               </div>
-              <div className="system-icon-item" style={{animationDelay: '0.25s'}} onClick={() => setShowUserCenter(true)}>
-                <div className="system-icon-circle">
-                  <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                </div>
-                <span className="system-icon-label">用户中心</span>
-              </div>
+
             </div>
           </div>
           <div className="sidebar">
@@ -1049,7 +1040,6 @@ function App() {
 
               {/* 底部操作栏 */}
               <div className="settings-footer">
-                <span className="settings-qq">QQ群: 463169230</span>
                 <button
                   className="btn-secondary settings-reconfig-btn"
                   onClick={() => {
@@ -1076,11 +1066,9 @@ function App() {
         <ModelSettings
           currentProvider={setup.config.provider}
           currentModel={setup.config.modelId}
-          initialTab={modelSettingsTab}
-          onClose={() => { setShowModelSettings(false); setModelSettingsTab(undefined) }}
+          onClose={() => { setShowModelSettings(false); }}
           onSaved={() => {
             setShowModelSettings(false)
-            setModelSettingsTab(undefined)
             // 重新读取配置以更新前端状态（当前模型显示等）
             window.electronAPI.config.readConfig().then((savedConfig) => {
               if (savedConfig) {
@@ -1159,7 +1147,7 @@ function App() {
         <div className="settings-overlay" onClick={() => setShowCloseDialog(false)}>
           <div className="close-dialog" onClick={e => e.stopPropagation()}>
             <div className="close-dialog-header">
-              <h2>关闭 ClawWin</h2>
+              <h2>关闭 鲁南千易</h2>
             </div>
             <div className="close-dialog-body">
               <p>请选择关闭方式</p>
