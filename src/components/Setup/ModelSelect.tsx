@@ -39,8 +39,8 @@ export const ModelSelect: React.FC<ModelSelectProps> = ({
         id: customModelId.trim(),
         name,
         reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 8192,
+        contextWindow: 262000,
+        maxTokens: 131000,
       }],
     }
     setCustomSelected(true)
