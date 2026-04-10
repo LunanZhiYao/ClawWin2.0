@@ -17,11 +17,14 @@ import { ChannelSettings } from './components/Settings/ChannelSettings'
 import { SkillSettings } from './components/Settings/SkillSettings'
 import { CronManager } from './components/Settings/CronManager'
 import { UserCenter } from './components/Settings/UserCenter'
+import { QRCodeLogin } from './components/Login/QRCodeLogin'
+import { LoginStatus } from './components/Login/LoginStatus'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, MODEL_PROVIDERS, type SetupStep } from './hooks/useSetup'
 import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, ModelProvider, ModelInfo, AvailableModel } from './types'
 import logoSrc from '../assets/logo.png'
+import './components/Login/Login.css'
 
 const SETUP_STEPS: SetupStep[] = ['userchoice', 'clawwin', 'workspace', 'gateway', 'complete']
 
@@ -91,6 +94,9 @@ function ModelSelectStep({ setup, onBack, onComplete }: {
 function App() {
   const gateway = useGateway()
   const setup = useSetup()
+
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [currentUser, setCurrentUser] = useState<any | null>(null)
 
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
@@ -234,8 +240,54 @@ function App() {
     stopWaiting()
   }, [ws, stopWaiting])
 
+  const handleLoginSuccess = useCallback(async (token: string, user: any, config: any) => {
+    localStorage.setItem('accessToken', token)
+    localStorage.setItem('userInfo', JSON.stringify(user))
+    if (config) {
+      localStorage.setItem('modelConfig', JSON.stringify(config))
+    }
+    
+    setCurrentUser(user)
+    setIsLoggedIn(true)
+    
+    if (config) {
+      try {
+        await window.electronAPI.config.saveModelConfig({
+          provider: config.provider,
+          modelId: config.model_id,
+          modelName: config.model_name || config.model_id,
+          baseUrl: config.base_url || '',
+          apiFormat: config.api_format || 'openai-completions',
+          apiKey: config.api_key || '',
+        })
+      } catch (error) {
+        console.error('更新模型配置失败:', error)
+      }
+    }
+    
+    await gateway.start()
+  }, [gateway])
+
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem('accessToken')
+    localStorage.removeItem('userInfo')
+    localStorage.removeItem('modelConfig')
+    
+    setCurrentUser(null)
+    setIsLoggedIn(false)
+  }, [])
+
   // Load sessions from disk on mount
   useEffect(() => {
+    const token = localStorage.getItem('accessToken')
+    const userInfo = localStorage.getItem('userInfo')
+    // const savedModelConfig = localStorage.getItem('modelConfig')
+    
+    if (token && userInfo) {
+      setCurrentUser(JSON.parse(userInfo))
+      setIsLoggedIn(true)
+    }
+    
     window.electronAPI.sessions.load().then((loaded) => {
       if (Array.isArray(loaded) && loaded.length > 0) {
         setSessions(loaded)
@@ -647,6 +699,15 @@ function App() {
     )
   }
 
+  // Login page
+  if (!isLoggedIn) {
+    return (
+      <ErrorBoundary>
+        <QRCodeLogin onLoginSuccess={handleLoginSuccess} />
+      </ErrorBoundary>
+    )
+  }
+
   // Setup wizard
   if (showSetup) {
     // modelselect maps to the same progress position as clawwin
@@ -775,6 +836,9 @@ function App() {
               <span className="navbar-brand-name">鲁南千易</span>
             </div>
           </div>
+          {currentUser && (
+            <LoginStatus user={currentUser} onLogout={handleLogout} />
+          )}
         </div>
         <div className="app-main">
           <div className="system-sidebar">
