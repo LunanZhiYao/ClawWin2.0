@@ -3,6 +3,14 @@ import path from 'node:path'
 import os from 'node:os'
 import crypto from 'node:crypto'
 
+/** 用户主目录下默认工作空间文件夹名（与向导、IPC、文件落盘回退路径一致） */
+export const DEFAULT_WORKSPACE_DIRNAME = 'qianyi'
+
+/** 解析后的默认工作空间绝对路径 */
+export function getDefaultUserWorkspacePath(): string {
+  return path.join(os.homedir(), DEFAULT_WORKSPACE_DIRNAME)
+}
+
 const OPENCLAW_HOME = path.join(os.homedir(), '.openclaw')
 const CONFIG_FILE = path.join(OPENCLAW_HOME, 'openclaw.json')
 const AUTH_PROFILES_FILE = path.join(OPENCLAW_HOME, 'auth-profiles.json')
@@ -176,12 +184,32 @@ const SEED_FILES: Record<string, string> = {
  * 解析工作空间路径，处理 ~ 和正斜杠
  */
 function resolveWorkspace(raw: string | undefined): string {
-  if (!raw) return path.join(os.homedir(), 'openclaw')
+  if (!raw) return getDefaultUserWorkspacePath()
   // Expand ~ to home directory
   let resolved = raw.replace(/^~/, os.homedir())
   // Normalize separators for the current OS
   resolved = path.resolve(resolved)
   return resolved
+}
+
+/**
+ * 向导未携带 provider/model 时，保留磁盘上已有模型段（例如扫码登录已 merge 进 openclaw.json），
+ * 避免整文件覆盖把登录阶段写入的 agents/models/auth 清掉。
+ */
+function carryOverModelBlocksIfMissing(
+  openclawConfig: Record<string, unknown>,
+  existing: Record<string, unknown>,
+): void {
+  const agents = existing.agents as Record<string, unknown> | undefined
+  const defaults = agents?.defaults as Record<string, unknown> | undefined
+  const primary = (defaults?.model as Record<string, unknown> | undefined)?.primary as string | undefined
+  if (!primary || !primary.includes('/')) return
+  const ocAgents = openclawConfig.agents as Record<string, unknown>
+  const ocDefaults = ocAgents.defaults as Record<string, unknown>
+  ocDefaults.model = defaults?.model
+  ocDefaults.models = defaults?.models
+  if (existing.models) openclawConfig.models = existing.models
+  if (existing.auth) openclawConfig.auth = existing.auth
 }
 
 /**
@@ -195,6 +223,15 @@ function resolveWorkspace(raw: string | undefined): string {
 export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean; error?: string } {
   try {
     ensureDir(OPENCLAW_HOME)
+
+    let existingOnDisk: Record<string, unknown> = {}
+    if (fs.existsSync(CONFIG_FILE)) {
+      try {
+        existingOnDisk = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')) as Record<string, unknown>
+      } catch {
+        /* 忽略损坏的旧文件，按全新向导写入 */
+      }
+    }
 
     const setup = config as unknown as SetupConfig
     const now = (config._now as string) || new Date().toISOString()
@@ -305,6 +342,11 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
       ...(setup.channels && Object.keys(setup.channels).length > 0
         ? { channels: setup.channels }
         : {}),
+    }
+
+    // 扫码登录等场景可能已写入模型；向导 state 若未带上 provider/model，仍须保留原文件中的模型块
+    if (!hasModel) {
+      carryOverModelBlocksIfMissing(openclawConfig, existingOnDisk)
     }
 
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(openclawConfig, null, 2), 'utf-8')

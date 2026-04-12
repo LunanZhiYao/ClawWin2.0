@@ -143,6 +143,59 @@ export const MODEL_PROVIDERS: ModelProvider[] = [
 export type SetupStep = 'welcome' | 'userchoice' | 'clawwin' | 'modelselect' | 'workspace' | 'gateway' | 'complete'
 
 /**
+ * 将磁盘上的 openclaw.json 转为向导 state 片段（含 agents.defaults.workspace 与 auth-profiles 中的 API Key）。
+ * 供首次挂载与「登录后落盘」两次场景复用，避免向导 state 停留在登录前的空配置。
+ */
+async function openclawSavedToSetupPartial(
+  savedConfig: Record<string, unknown> | null,
+): Promise<Partial<SetupConfig>> {
+  const merged: Partial<SetupConfig> = {}
+  if (!savedConfig || typeof savedConfig !== 'object') return merged
+
+  const agents = savedConfig.agents as Record<string, unknown> | undefined
+  const defaults = agents?.defaults as Record<string, unknown> | undefined
+  // 工作区在磁盘上的权威来源为 agents.defaults.workspace（与 config:saveWorkspace 一致）
+  const workspaceFromDisk = defaults?.workspace
+  if (typeof workspaceFromDisk === 'string' && workspaceFromDisk.trim()) {
+    merged.workspace = workspaceFromDisk.trim()
+  }
+  const modelCfg = defaults?.model as Record<string, unknown> | undefined
+  const primary = modelCfg?.primary as string | undefined
+  if (primary && primary.includes('/')) {
+    const slashIdx = primary.indexOf('/')
+    merged.provider = primary.slice(0, slashIdx)
+    merged.modelId = primary.slice(slashIdx + 1)
+    const modelsMap = defaults?.models as Record<string, { alias?: string }> | undefined
+    merged.modelName = modelsMap?.[primary]?.alias || merged.modelId
+  }
+  if (merged.provider) {
+    const models = savedConfig.models as Record<string, unknown> | undefined
+    const providers = models?.providers as Record<
+      string,
+      {
+        baseUrl?: string
+        api?: string
+        models?: Array<{ id: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }>
+      }
+    > | undefined
+    const provCfg = providers?.[merged.provider]
+    if (provCfg) {
+      merged.baseUrl = provCfg.baseUrl
+      merged.apiFormat = provCfg.api
+      const mm = provCfg.models?.find((m) => m.id === merged.modelId)
+      if (mm) {
+        if (typeof mm.reasoning === 'boolean') merged.reasoning = mm.reasoning
+        if (typeof mm.contextWindow === 'number') merged.contextWindow = mm.contextWindow
+        if (typeof mm.maxTokens === 'number') merged.maxTokens = mm.maxTokens
+      }
+    }
+    const key = await window.electronAPI.config.getApiKey(`${merged.provider}:default`)
+    if (key) merged.apiKey = key
+  }
+  return merged
+}
+
+/**
  * Generate a random 48-character hex token for gateway authentication.
  */
 function generateGatewayToken(): string {
@@ -159,7 +212,8 @@ async function fetchDefaultWorkspace(): Promise<string> {
   try {
     return await window.electronAPI.setup.getDefaultWorkspace()
   } catch {
-    return 'C:/Users/User/openclaw'
+    // 非 Electron / IPC 不可用时与 App 中兜底文案一致（含 ~，后续写入前会再解析）
+    return '~/qianyi'
   }
 }
 
@@ -176,10 +230,12 @@ interface UseSetupReturn {
   updateConfig: (partial: Partial<SetupConfig>) => void
   saveConfig: () => Promise<boolean>
   startGateway: () => Promise<void>
+  /** 登录等场景写入 openclaw 后，重新把磁盘配置合并进向导 state */
+  hydrateFromOpenclawDisk: () => Promise<void>
 }
 
 export function useSetup(): UseSetupReturn {
-  const [step, setStep] = useState<SetupStep>('userchoice')
+  const [step, setStep] = useState<SetupStep>('workspace')
   const [config, setConfig] = useState<Partial<SetupConfig>>(() => ({
     gatewayPort: 18888,
     gatewayToken: generateGatewayToken(),
@@ -190,49 +246,43 @@ export function useSetup(): UseSetupReturn {
   const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
-    Promise.all([
-      window.electronAPI.setup.isFirstRun(),
-      fetchDefaultWorkspace(),
-      window.electronAPI.config.readConfig(),
-    ]).then(([first, defaultWorkspace, savedConfig]) => {
-      setIsFirstRun(first)
-      setConfig((prev) => {
-        const merged = { ...prev, workspace: prev.workspace ?? defaultWorkspace }
-        // Restore provider/model info from saved openclaw config
-        if (savedConfig && typeof savedConfig === 'object') {
-          const sc = savedConfig as Record<string, unknown>
-          // agents.defaults.model.primary = "provider/modelId"
-          const agents = sc.agents as Record<string, unknown> | undefined
-          const defaults = agents?.defaults as Record<string, unknown> | undefined
-          const modelCfg = defaults?.model as Record<string, unknown> | undefined
-          const primary = modelCfg?.primary as string | undefined
-          if (primary && primary.includes('/')) {
-            const slashIdx = primary.indexOf('/')
-            merged.provider = primary.slice(0, slashIdx)
-            merged.modelId = primary.slice(slashIdx + 1)
-            // Get display name from agents.defaults.models["provider/modelId"].alias
-            const modelsMap = defaults?.models as Record<string, { alias?: string }> | undefined
-            merged.modelName = modelsMap?.[primary]?.alias || merged.modelId
-          }
-          // Get baseUrl/apiFormat from models.providers
-          if (merged.provider) {
-            const models = sc.models as Record<string, unknown> | undefined
-            const providers = models?.providers as Record<string, { baseUrl?: string; api?: string }> | undefined
-            const provCfg = providers?.[merged.provider]
-            if (provCfg) {
-              merged.baseUrl = provCfg.baseUrl
-              merged.apiFormat = provCfg.api
-            }
-          }
-        }
-        return merged
-      })
-      setIsLoading(false)
-    }).catch((err) => {
-      console.error('[useSetup] 初始化失败:', err)
-      setIsFirstRun(false)
-      setIsLoading(false)
-    })
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [first, defaultWorkspace, savedConfig] = await Promise.all([
+          window.electronAPI.setup.isFirstRun(),
+          fetchDefaultWorkspace(),
+          window.electronAPI.config.readConfig(),
+        ])
+        if (cancelled) return
+        setIsFirstRun(first)
+        const diskPartial = await openclawSavedToSetupPartial(savedConfig)
+        if (cancelled) return
+        setConfig((prev) => ({
+          ...prev,
+          workspace: prev.workspace ?? defaultWorkspace,
+          ...diskPartial,
+        }))
+      } catch (err) {
+        console.error('[useSetup] 初始化失败:', err)
+        if (!cancelled) setIsFirstRun(false)
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const hydrateFromOpenclawDisk = useCallback(async () => {
+    try {
+      const saved = await window.electronAPI.config.readConfig()
+      const partial = await openclawSavedToSetupPartial(saved)
+      setConfig((prev) => ({ ...prev, ...partial }))
+    } catch (err) {
+      console.error('[useSetup] hydrateFromOpenclawDisk 失败:', err)
+    }
   }, [])
 
   const updateConfig = useCallback((partial: Partial<SetupConfig>) => {
@@ -307,5 +357,6 @@ export function useSetup(): UseSetupReturn {
     updateConfig,
     saveConfig,
     startGateway,
+    hydrateFromOpenclawDisk,
   }
 }

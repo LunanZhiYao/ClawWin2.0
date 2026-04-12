@@ -1,15 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { ChatArea } from './components/Chat/ChatArea'
 import { SessionList } from './components/Sidebar/SessionList'
-import { UserChoicePage } from './components/Setup/UserChoicePage'
-import { ClawWinSetup } from './components/Setup/ClawWinSetup'
-import { ModelSelect } from './components/Setup/ModelSelect'
-import { ApiKeyInput } from './components/Setup/ApiKeyInput'
 import { WorkspaceSetup } from './components/Setup/WorkspaceSetup'
 import { GatewaySetup } from './components/Setup/GatewaySetup'
 import { SetupComplete } from './components/Setup/SetupComplete'
 import { ErrorBoundary } from './components/Common/ErrorBoundary'
-import { Loading } from './components/Common/Loading'
+import { StartupSplash } from './components/Common/StartupSplash'
 import { VideoSplash } from './components/Common/VideoSplash'
 import { UpdateNotification } from './components/Common/UpdateNotification'
 import { ModelSettings } from './components/Settings/ModelSettings'
@@ -19,77 +15,35 @@ import { CronManager } from './components/Settings/CronManager'
 import { UserCenter } from './components/Settings/UserCenter'
 import { QRCodeLogin } from './components/Login/QRCodeLogin'
 import { LoginStatus } from './components/Login/LoginStatus'
+import { fetchMeSession } from './api/auth'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
-import { useSetup, MODEL_PROVIDERS, type SetupStep } from './hooks/useSetup'
-import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, ModelProvider, ModelInfo, AvailableModel } from './types'
+import { useSetup, type SetupStep } from './hooks/useSetup'
+import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, AvailableModel } from './types'
 import logoSrc from '../assets/logo.png'
 import './components/Login/Login.css'
 
-const SETUP_STEPS: SetupStep[] = ['userchoice', 'clawwin', 'workspace', 'gateway', 'complete']
+const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
+
+/** 将扫码/me 返回的 model_config 写入 openclaw（与登录成功路径一致） */
+async function persistServerModelConfig(config: Record<string, unknown>) {
+  await window.electronAPI.config.saveModelConfig({
+    provider: config.provider as string,
+    modelId: config.model_id as string,
+    modelName: (config.model_name as string) || (config.model_id as string),
+    baseUrl: (config.base_url as string) || '',
+    apiKey: (config.api_key as string) || '',
+    apiFormat: (config.api_format as string) || 'openai-completions',
+    input: (config.input_types as string[]) || ['image', 'text'],
+    contextWindow: (config.context_window as number) || 256000,
+    maxTokens: (config.max_tokens as number) || 131000,
+  })
+}
 
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
-/** Sub-component for the "modelselect" setup step (select provider → enter API key) */
-function ModelSelectStep({ setup, onBack, onComplete }: {
-  setup: ReturnType<typeof useSetup>
-  onBack: () => void
-  onComplete: () => void
-}) {
-  const [phase, setPhase] = useState<'select' | 'apikey'>('select')
-  const [selectedProvider, setSelectedProvider] = useState<ModelProvider | null>(null)
-  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null)
-
-  // Filter out clawwinweb — that path goes through ClawWinSetup
-  const customProviders = MODEL_PROVIDERS.filter((p) => p.id !== 'clawwinweb')
-
-  if (phase === 'apikey' && selectedProvider && selectedModel) {
-    return (
-      <ApiKeyInput
-        providerName={selectedProvider.name}
-        modelName={selectedModel.name}
-        baseUrl={selectedProvider.baseUrl}
-        apiFormat={selectedProvider.apiFormat}
-        modelId={selectedModel.id}
-        onBack={() => setPhase('select')}
-        onNext={(apiKey) => {
-          setup.updateConfig({
-            provider: selectedProvider.id,
-            modelId: selectedModel.id,
-            modelName: selectedModel.name,
-            baseUrl: selectedProvider.baseUrl,
-            apiFormat: selectedProvider.apiFormat,
-            apiKey,
-            reasoning: selectedModel.reasoning,
-            contextWindow: selectedModel.contextWindow,
-            maxTokens: selectedModel.maxTokens,
-          })
-          onComplete()
-        }}
-      />
-    )
-  }
-
-  return (
-    <ModelSelect
-      providers={customProviders}
-      selectedProvider={selectedProvider?.id}
-      selectedModel={selectedModel?.id}
-      onSelect={(provider, model) => {
-        setSelectedProvider(provider)
-        setSelectedModel(model)
-      }}
-      onBack={onBack}
-      onNext={() => {
-        if (selectedProvider && selectedModel) {
-          setPhase('apikey')
-        }
-      }}
-    />
-  )
-}
 
 function App() {
   const gateway = useGateway()
@@ -97,6 +51,12 @@ function App() {
 
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [currentUser, setCurrentUser] = useState<any | null>(null)
+  /** setup 就绪后，用 /auth/me 完成一次会话恢复；未完成前不渲染登录/主界面，避免闪屏 */
+  const [authBootstrapDone, setAuthBootstrapDone] = useState(false)
+  const gatewayRef = useRef(gateway)
+  gatewayRef.current = gateway
+  const hydrateFromDiskRef = useRef(setup.hydrateFromOpenclawDisk)
+  hydrateFromDiskRef.current = setup.hydrateFromOpenclawDisk
 
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
@@ -108,7 +68,7 @@ function App() {
   const [showModelSettings, setShowModelSettings] = useState(false)
   const [showChannelSettings, setShowChannelSettings] = useState(false)
   const [showCronManager, setShowCronManager] = useState(false)
-  const [settingsWorkspace, setSettingsWorkspace] = useState(setup.config.workspace ?? '~/openclaw')
+  const [settingsWorkspace, setSettingsWorkspace] = useState(setup.config.workspace ?? '~/qianyi')
   const [responseTimeout, setResponseTimeout] = useState(300000)
   const [splashDismissed, setSplashDismissed] = useState(false)
   const [showSplashExit, setShowSplashExit] = useState(false)
@@ -241,53 +201,115 @@ function App() {
   }, [ws, stopWaiting])
 
   const handleLoginSuccess = useCallback(async (token: string, user: any, config: any) => {
+    // 仅持久化 token；用户与模型以服务端为准，启动时由 /auth/me 再同步（此处仍用扫码结果立即落盘，避免多一次往返）
     localStorage.setItem('accessToken', token)
-    localStorage.setItem('userInfo', JSON.stringify(user))
-    if (config) {
-      localStorage.setItem('modelConfig', JSON.stringify(config))
-    }
-    
+    localStorage.removeItem('userInfo')
+    localStorage.removeItem('modelConfig')
+
     setCurrentUser(user)
     setIsLoggedIn(true)
-    
+
     if (config) {
       try {
-        await window.electronAPI.config.saveModelConfig({
-          provider: config.provider,
-          modelId: config.model_id,
-          modelName: config.model_name || config.model_id,
-          baseUrl: config.base_url || '',
-          apiFormat: config.api_format || 'openai-completions',
-          apiKey: config.api_key || '',
-        })
+        await persistServerModelConfig(config)
       } catch (error) {
         console.error('更新模型配置失败:', error)
       }
     }
-    
+
+    // 首次引导在登录前已初始化 useSetup；登录落盘后须把模型等信息同步进向导 state，否则完成引导时会覆盖掉登录写入的配置
+    await setup.hydrateFromOpenclawDisk()
+
     await gateway.start()
-  }, [gateway])
+  }, [gateway, setup.hydrateFromOpenclawDisk])
 
   const handleLogout = useCallback(() => {
     localStorage.removeItem('accessToken')
     localStorage.removeItem('userInfo')
     localStorage.removeItem('modelConfig')
-    
+
     setCurrentUser(null)
     setIsLoggedIn(false)
   }, [])
 
+  // 启动后：在 setup 自磁盘加载完成后，用 accessToken 调 /auth/me 恢复用户并刷新模型落盘（依赖仅 isLoading，避免 gateway 引用抖动重复拉取）
+  useEffect(() => {
+    if (setup.isLoading) return
+
+    let cancelled = false
+    const finish = () => {
+      if (!cancelled) setAuthBootstrapDone(true)
+    }
+
+    ;(async () => {
+      localStorage.removeItem('userInfo')
+      localStorage.removeItem('modelConfig')
+      const token = localStorage.getItem('accessToken')
+      if (!token) {
+        if (!cancelled) {
+          setIsLoggedIn(false)
+          finish()
+        }
+        return
+      }
+
+      const me = await fetchMeSession(token)
+      if (cancelled) return
+
+      if (!me.ok && me.unauthorized) {
+        localStorage.removeItem('accessToken')
+        localStorage.removeItem('userInfo')
+        localStorage.removeItem('modelConfig')
+        if (!cancelled) {
+          setCurrentUser(null)
+          setIsLoggedIn(false)
+          finish()
+        }
+        return
+      }
+
+      if (!me.ok) {
+        console.warn('[auth] /auth/me 失败，保留 token 以便网络恢复后重试:', me.message)
+        if (!cancelled) {
+          setCurrentUser(null)
+          setIsLoggedIn(false)
+          finish()
+        }
+        return
+      }
+
+      if (cancelled) return
+      setCurrentUser(me.user)
+      setIsLoggedIn(true)
+      if (me.modelConfig) {
+        try {
+          await persistServerModelConfig(me.modelConfig)
+        } catch (e) {
+          console.error('[auth] 启动时写入模型配置失败:', e)
+        }
+      }
+      if (cancelled) return
+      try {
+        await hydrateFromDiskRef.current()
+      } catch (e) {
+        console.error('[auth] hydrate 失败:', e)
+      }
+      if (cancelled) return
+      try {
+        await gatewayRef.current.start()
+      } catch (e) {
+        console.error('[auth] gateway.start 失败:', e)
+      }
+      finish()
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [setup.isLoading])
+
   // Load sessions from disk on mount
   useEffect(() => {
-    const token = localStorage.getItem('accessToken')
-    const userInfo = localStorage.getItem('userInfo')
-    // const savedModelConfig = localStorage.getItem('modelConfig')
-    
-    if (token && userInfo) {
-      setCurrentUser(JSON.parse(userInfo))
-      setIsLoggedIn(true)
-    }
-    
     window.electronAPI.sessions.load().then((loaded) => {
       if (Array.isArray(loaded) && loaded.length > 0) {
         setSessions(loaded)
@@ -315,7 +337,12 @@ function App() {
     window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
   }, [])
 
-  // 监听窗口关闭请求
+  // 设置页工作区：首帧 useState 早于 useSetup 从磁盘合并，须随 setup.config.workspace 同步
+  useEffect(() => {
+    setSettingsWorkspace(setup.config.workspace ?? '~/qianyi')
+  }, [setup.config.workspace])
+
+  // 监听窗口关闭请求（主进程已 preventDefault，须由渲染进程弹窗后 hideToTray / quitApp）
   useEffect(() => {
     const unsub = window.electronAPI.app.onCloseRequested(() => {
       setShowCloseDialog(true)
@@ -690,21 +717,74 @@ function App() {
   // 视频启动屏：激活后直到dismiss前一直显示
   const showVideoSplash = splashActive && !splashDismissed
 
+  /** 与主界面相同的关闭选择层；各分支早退时也必须挂载，否则 closeRequested 无 UI */
+  const appCloseDialog = showCloseDialog ? (
+    <div
+      className="settings-overlay app-close-dialog-overlay"
+      onClick={() => setShowCloseDialog(false)}
+    >
+      <div className="close-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="close-dialog-header">
+          <h2>关闭 鲁南千易</h2>
+        </div>
+        <div className="close-dialog-body">
+          <p>请选择关闭方式</p>
+        </div>
+        <div className="close-dialog-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              setShowCloseDialog(false)
+              window.electronAPI.app.hideToTray()
+            }}
+          >
+            最小化到托盘
+          </button>
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={() => {
+              setShowCloseDialog(false)
+              window.electronAPI.app.quitApp()
+            }}
+          >
+            退出程序
+          </button>
+        </div>
+        <p className="close-dialog-hint">最小化到托盘将保持网关运行，退出程序将关闭所有进程</p>
+      </div>
+    </div>
+  ) : null
+
   // Loading state
   if (setup.isLoading) {
     return (
-      <div className="app-loading">
-        <Loading text="正在初始化..." size="large" />
-      </div>
+      <>
+        <StartupSplash message="正在初始化..." />
+        {appCloseDialog}
+      </>
+    )
+  }
+
+  if (!authBootstrapDone) {
+    return (
+      <>
+        <StartupSplash message="正在验证登录..." />
+        {appCloseDialog}
+      </>
     )
   }
 
   // Login page
   if (!isLoggedIn) {
     return (
-      <ErrorBoundary>
-        <QRCodeLogin onLoginSuccess={handleLoginSuccess} />
-      </ErrorBoundary>
+      <>
+        <ErrorBoundary>
+          <QRCodeLogin onLoginSuccess={handleLoginSuccess} />
+        </ErrorBoundary>
+        {appCloseDialog}
+      </>
     )
   }
 
@@ -715,113 +795,82 @@ function App() {
     const currentStepIndex = SETUP_STEPS.indexOf(displayStep)
 
     return (
-      <ErrorBoundary>
-        <div className="setup-container">
-          <div className="setup-progress">
-            {SETUP_STEPS.map((s, i) => (
-              <div
-                key={s}
-                className={`progress-step ${
-                  displayStep === s ? 'active' : i < currentStepIndex ? 'done' : ''
-                }`}
-              >
-                <div className="progress-dot">{i + 1}</div>
-              </div>
-            ))}
+      <>
+        <ErrorBoundary>
+          <div className="setup-container">
+            <div className="setup-progress">
+              {SETUP_STEPS.map((s, i) => (
+                <div
+                  key={s}
+                  className={`progress-step ${
+                    displayStep === s ? 'active' : i < currentStepIndex ? 'done' : ''
+                  }`}
+                >
+                  <div className="progress-dot">{i + 1}</div>
+                </div>
+              ))}
+            </div>
+
+            {setup.step === 'workspace' && (
+              <WorkspaceSetup
+                workspace={setup.config.workspace ?? '~/qianyi'}
+                onNext={(workspace) => {
+                  setup.updateConfig({ workspace })
+                  setup.setStep('gateway')
+                }}
+                onSkip={() => setup.setStep('gateway')}
+              />
+            )}
+
+            {setup.step === 'gateway' && (
+              <GatewaySetup
+                port={setup.config.gatewayPort ?? 18888}
+                token={setup.config.gatewayToken ?? ''}
+                onBack={() => setup.setStep('workspace')}
+                onNext={(port) => {
+                  setup.updateConfig({ gatewayPort: port })
+                  setup.setStep('complete')
+                }}
+                onSkip={() => setup.setStep('complete')}
+              />
+            )}
+
+            {setup.step === 'complete' && (
+              <SetupComplete
+                providerName={setup.config.provider === 'clawwinweb' ? 'ClawWinWeb' : (setup.config.provider || '未配置（稍后在设置中配置）')}
+                modelName={setup.config.modelName || '未配置'}
+                apiKey={setup.config.apiKey || '未配置'}
+                workspace={setup.config.workspace ?? '~/qianyi'}
+                gatewayPort={setup.config.gatewayPort ?? 18888}
+                saving={setup.isSaving}
+                error={setup.saveError}
+                onBack={() => {
+                  setup.clearError()
+                  setup.setStep('gateway')
+                }}
+                onComplete={handleSetupComplete}
+              />
+            )}
           </div>
-
-          {setup.step === 'userchoice' && (
-            <UserChoicePage
-              onClawWin={() => setup.setStep('clawwin')}
-              onCustom={() => setup.setStep('modelselect')}
-              onSkip={() => setup.setStep('workspace')}
-            />
-          )}
-
-          {setup.step === 'clawwin' && (
-            <ClawWinSetup
-              onBack={() => setup.setStep('userchoice')}
-              onNext={(token) => {
-                setup.updateConfig({
-                  provider: 'clawwinweb',
-                  modelId: 'glm-5',
-                  modelName: 'GLM-5',
-                  baseUrl: 'https://www.mybotworld.com/api/v1',
-                  apiFormat: 'openai-completions',
-                  apiKey: token,
-                  reasoning: false,
-                  contextWindow: 128000,
-                })
-                setup.setStep('workspace')
-              }}
-              onSkip={() => setup.setStep('workspace')}
-            />
-          )}
-
-          {setup.step === 'modelselect' && (
-            <ModelSelectStep
-              setup={setup}
-              onBack={() => setup.setStep('userchoice')}
-              onComplete={() => setup.setStep('workspace')}
-            />
-          )}
-
-          {setup.step === 'workspace' && (
-            <WorkspaceSetup
-              workspace={setup.config.workspace ?? '~/openclaw'}
-              onBack={() => setup.setStep(setup.config.provider === 'clawwinweb' ? 'clawwin' : 'modelselect')}
-              onNext={(workspace) => {
-                setup.updateConfig({ workspace })
-                setup.setStep('gateway')
-              }}
-              onSkip={() => setup.setStep('gateway')}
-            />
-          )}
-
-          {setup.step === 'gateway' && (
-            <GatewaySetup
-              port={setup.config.gatewayPort ?? 18888}
-              token={setup.config.gatewayToken ?? ''}
-              onBack={() => setup.setStep('workspace')}
-              onNext={(port) => {
-                setup.updateConfig({ gatewayPort: port })
-                setup.setStep('complete')
-              }}
-              onSkip={() => setup.setStep('complete')}
-            />
-          )}
-
-          {setup.step === 'complete' && (
-            <SetupComplete
-              providerName={setup.config.provider === 'clawwinweb' ? 'ClawWinWeb' : (setup.config.provider || '未配置（稍后在设置中配置）')}
-              modelName={setup.config.modelName || '未配置'}
-              apiKey={setup.config.apiKey || '未配置'}
-              workspace={setup.config.workspace ?? '~/openclaw'}
-              gatewayPort={setup.config.gatewayPort ?? 18888}
-              saving={setup.isSaving}
-              error={setup.saveError}
-              onBack={() => {
-                setup.clearError()
-                setup.setStep('gateway')
-              }}
-              onComplete={handleSetupComplete}
-            />
-          )}
-        </div>
-      </ErrorBoundary>
+        </ErrorBoundary>
+        {appCloseDialog}
+      </>
     )
   }
 
   // 视频启动屏：网关正在启动时循环播放
   if (showVideoSplash || showSplashExit) {
     return (
-      <ErrorBoundary>
-        <VideoSplash
-          gatewayState={gateway.state}
-          exiting={showSplashExit}
-          onRetry={() => restartGateway()}
-        />
-      </ErrorBoundary>
+      <>
+        <ErrorBoundary>
+          <VideoSplash
+            gatewayState={gateway.state}
+            exiting={showSplashExit}
+            onRetry={() => restartGateway()}
+          />
+        </ErrorBoundary>
+        {appCloseDialog}
+      </>
     )
   }
 
@@ -1109,7 +1158,7 @@ function App() {
                   onClick={() => {
                     setShowSettings(false)
                     setShowSetup(true)
-                    setup.setStep('userchoice')
+                    setup.setStep('workspace')
                   }}
                 >
                   重新配置向导
@@ -1130,6 +1179,7 @@ function App() {
         <ModelSettings
           currentProvider={setup.config.provider}
           currentModel={setup.config.modelId}
+          currentModelName={setup.config.modelName}
           onClose={() => { setShowModelSettings(false); }}
           onSaved={() => {
             setShowModelSettings(false)
@@ -1207,33 +1257,7 @@ function App() {
         />
       )}
 
-      {showCloseDialog && (
-        <div className="settings-overlay" onClick={() => setShowCloseDialog(false)}>
-          <div className="close-dialog" onClick={e => e.stopPropagation()}>
-            <div className="close-dialog-header">
-              <h2>关闭 鲁南千易</h2>
-            </div>
-            <div className="close-dialog-body">
-              <p>请选择关闭方式</p>
-            </div>
-            <div className="close-dialog-actions">
-              <button className="btn-secondary" onClick={() => {
-                setShowCloseDialog(false)
-                window.electronAPI.app.hideToTray()
-              }}>
-                最小化到托盘
-              </button>
-              <button className="btn-danger" onClick={() => {
-                setShowCloseDialog(false)
-                window.electronAPI.app.quitApp()
-              }}>
-                退出程序
-              </button>
-            </div>
-            <p className="close-dialog-hint">最小化到托盘将保持网关运行，退出程序将关闭所有进程</p>
-          </div>
-        </div>
-      )}
+      {appCloseDialog}
     </ErrorBoundary>
   )
 }

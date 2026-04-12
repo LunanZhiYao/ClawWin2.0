@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { GatewayManager } from './gateway-manager'
-import { isFirstRun, getOpenclawConfigPath, writeSetupConfig, validateApiKey } from './setup-wizard'
+import { isFirstRun, getOpenclawConfigPath, writeSetupConfig, validateApiKey, getDefaultUserWorkspacePath } from './setup-wizard'
 import { getNodePath, getOpenclawPath } from './node-runtime'
 import { signDeviceAuth, type DeviceAuthParams } from './device-identity'
 import { scanSkills, getSkillsConfig, saveSkillsConfig, clearBinCache } from './skills-scanner'
@@ -27,6 +27,34 @@ let isQuitting = false
 let pendingUpdateInfo: UpdateInfo | null = null
 let downloadedInstallerPath: string | null = null
 let ollamaManager: OllamaManager | null = null
+
+/**
+ * 是否允许渲染进程打开 DevTools（F12 / 快捷键等）。
+ * - 开发态（未打包）：始终允许。
+ * - 安装版：默认关闭；仅当显式开启调试时允许（避免任意用户按 F12 查看源码与网络）。
+ *
+ * 开启方式（满足其一即可）：
+ * - 环境变量：`APP_DEBUG=1`、`true`、`yes`、`on`（大小写不敏感）
+ * - 命令行：`--app-debug` 或 `--APP_DEBUG=true` / `--app-debug=1` 等
+ */
+function getAllowDevTools(): boolean {
+  if (!app.isPackaged) return true
+
+  const env = (process.env.APP_DEBUG || '').trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(env)) return true
+
+  for (const raw of process.argv) {
+    const a = raw.trim()
+    const lower = a.toLowerCase()
+    if (lower === '--app-debug' || lower === '--app_debug') return true
+    const m = /^--app[_-]?debug=(.+)$/i.exec(a)
+    if (m) {
+      const v = m[1].trim().toLowerCase()
+      if (['1', 'true', 'yes', 'on'].includes(v)) return true
+    }
+  }
+  return false
+}
 
 const DIST = path.join(__dirname, '../dist')
 const PRELOAD = path.join(__dirname, 'preload.js')
@@ -81,6 +109,8 @@ function createTray() {
 function createWindow() {
   Menu.setApplicationMenu(null)
 
+  const allowDevTools = getAllowDevTools()
+
   mainWindow = new BrowserWindow({
     width: 1520,
     height: 980,
@@ -99,6 +129,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      devTools: allowDevTools,
     },
     show: false,
   })
@@ -107,15 +138,17 @@ function createWindow() {
     mainWindow?.show()
   })
 
-  // 注册 DevTools 快捷键（Ctrl+Shift+I 和 F12）
-  mainWindow.webContents.on('before-input-event', (_event, input) => {
-    if (
-      (input.control && input.shift && input.key.toLowerCase() === 'i') ||
-      input.key === 'F12'
-    ) {
-      mainWindow?.webContents.toggleDevTools()
-    }
-  })
+  // 打包版默认禁用 DevTools；仅调试模式下注册快捷键（与 webPreferences.devTools 一致）
+  if (allowDevTools) {
+    mainWindow.webContents.on('before-input-event', (_event, input) => {
+      if (
+        (input.control && input.shift && input.key.toLowerCase() === 'i') ||
+        input.key === 'F12'
+      ) {
+        mainWindow?.webContents.toggleDevTools()
+      }
+    })
+  }
 
   // Fallback: show window after timeout even if ready-to-show hasn't fired
   setTimeout(() => {
@@ -235,9 +268,9 @@ function setupIPC() {
     return os.homedir()
   })
 
-  // Get default workspace path
+  // Get default workspace path（与 setup-wizard 中 resolveWorkspace 空值回退一致）
   ipcMain.handle('setup:getDefaultWorkspace', () => {
-    return path.join(os.homedir(), 'openclaw')
+    return getDefaultUserWorkspacePath()
   })
 
   // Get gateway token from config
@@ -368,6 +401,8 @@ function setupIPC() {
           preload: path.join(__dirname, 'screenshot-preload.js'),
           contextIsolation: true,
           nodeIntegration: false,
+          // 与主窗口一致：安装版默认不可调试图层窗口
+          devTools: getAllowDevTools(),
         },
       })
 
@@ -940,7 +975,7 @@ function setupIPC() {
       // 如果 list 中还没有 main，先把 main 加进去（继承 defaults 配置）
       const hasMain = (config.agents.list as Array<{ id: string }>).some((a) => a.id === 'main')
       if (!hasMain) {
-        const defaultWorkspace = config.agents?.defaults?.workspace || path.join(os.homedir(), 'openclaw')
+        const defaultWorkspace = config.agents?.defaults?.workspace || path.join(os.homedir(), 'qianyi')
         config.agents.list.unshift({
           id: 'main',
           name: 'Main',
@@ -1041,7 +1076,7 @@ function setupIPC() {
   ipcMain.handle('file:copyToWorkspace', async (_event, srcPath: string) => {
     try {
       const configPath = getOpenclawConfigPath()
-      let workspace = path.join(os.homedir(), 'openclaw')
+      let workspace = getDefaultUserWorkspacePath()
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
         workspace = config?.agents?.defaults?.workspace || workspace
@@ -1070,7 +1105,7 @@ function setupIPC() {
   ipcMain.handle('file:saveImageFromClipboard', async (_event, base64: string, mimeType: string) => {
     try {
       const configPath = getOpenclawConfigPath()
-      let workspace = path.join(os.homedir(), 'openclaw')
+      let workspace = getDefaultUserWorkspacePath()
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
         workspace = config?.agents?.defaults?.workspace || workspace
@@ -1403,7 +1438,7 @@ app.whenReady().then(async () => {
       const configPath = getOpenclawConfigPath()
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-        const workspace = config?.agents?.defaults?.workspace || path.join(os.homedir(), 'openclaw')
+        const workspace = config?.agents?.defaults?.workspace || path.join(os.homedir(), 'qianyi')
         const identityPath = path.join(workspace, 'IDENTITY.md')
         if (fs.existsSync(identityPath)) {
           const content = fs.readFileSync(identityPath, 'utf-8')

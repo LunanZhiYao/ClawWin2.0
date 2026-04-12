@@ -52,6 +52,7 @@ interface ElectronConfig {
     reasoning?: boolean
     contextWindow?: number
     maxTokens?: number
+    input?: string[]
   }) => Promise<{ ok: boolean; error?: string }>
   getChannels: () => Promise<Record<string, Record<string, string>>>
   saveChannels: (channels: Record<string, Record<string, string>>) => Promise<{ ok: boolean; error?: string }>

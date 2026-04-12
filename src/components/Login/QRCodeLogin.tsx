@@ -42,34 +42,54 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
   }, [fetchQRCode])
 
   useEffect(() => {
-    if (status !== 'waiting' || !qrCodeKey) return
+    // 仅等待和已扫码会继续加载
+    if ((status !== 'waiting' && status !== 'scanned') || !qrCodeKey) return
 
-    const pollInterval = setInterval(async () => {
+    // 使用 setInterval + async 会在上一次请求未完成时又发新请求，易造成并发与顺序错乱；
+    // 改为「单次请求结束后再 setTimeout 排下一次」，保证同一时刻最多一个 check 在途。
+    let cancelled = false
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const POLL_MS = 2000
+
+    const runPoll = async () => {
+      if (cancelled) return
       try {
         const response = await checkQRCode(qrCodeKey)
+        if (cancelled) return
         const code = response.data?.code
         console.log('扫码状态检查:', { code, type: typeof code })
-        
+
         // 兼容字符串和数字类型的 code
         if (code === '1005' || code === 1005) {
           setStatus('expired')
-          clearInterval(pollInterval)
+          return
+        }
+        if (code === '1002' || code === 1002) {
+          setStatus('scanned')
         } else if ((code === '1003' || code === 1003) && response.data?.access_token) {
           console.log('登录成功，准备调用 onLoginSuccess')
-          clearInterval(pollInterval)
           setStatus('scanned')
           onLoginSuccess(
             response.data.access_token,
             response.data.user,
             response.data.model_config
           )
+          return
         }
       } catch (error) {
-        console.error('检查扫码状态失败:', error)
+        if (!cancelled) console.error('检查扫码状态失败:', error)
       }
-    }, 2000)
 
-    return () => clearInterval(pollInterval)
+      if (!cancelled) timeoutId = setTimeout(() => void runPoll(), POLL_MS)
+    }
+
+    // 与原先 setInterval 一致：首次轮询在间隔后触发
+    timeoutId = setTimeout(() => void runPoll(), POLL_MS)
+
+    return () => {
+      cancelled = true
+      if (timeoutId) clearTimeout(timeoutId)
+    }
   }, [status, qrCodeKey, onLoginSuccess])
 
   const handleRefresh = () => {
@@ -80,7 +100,7 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
     <div className="qrcode-login-container">
       <div className="qrcode-login-card">
         <h2 className="qrcode-login-title">鲁南千易 - 扫码登录</h2>
-        
+
         {status === 'loading' && (
           <div className="qrcode-loading">
             <div className="qrcode-spinner"></div>
@@ -91,9 +111,9 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
         {status === 'waiting' && qrCodeData && (
           <div className="qrcode-display">
             {qrCodeData.img ? (
-              <img 
+              <img
                 src={`${qrCodeData.img}`}
-                alt="登录二维码" 
+                alt="登录二维码"
                 className="qrcode-image"
               />
             ) : (
@@ -102,14 +122,13 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
                 <p className="qrcode-key">{qrCodeKey}</p>
               </div>
             )}
-            <p className="qrcode-hint">请使用手机扫描二维码登录</p>
           </div>
         )}
 
         {status === 'scanned' && (
           <div className="qrcode-success">
             <div className="qrcode-success-icon">✓</div>
-            <p>扫码成功，正在登录...</p>
+            <p className="qrcode-key">扫码成功，正在登录...</p>
           </div>
         )}
 
@@ -134,7 +153,7 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
         )}
 
         <div className="qrcode-footer">
-          <p>使用企业微信或钉钉扫码登录</p>
+          <p>使用云上鲁南扫码登录</p>
         </div>
       </div>
     </div>

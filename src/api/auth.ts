@@ -26,19 +26,11 @@ interface CheckQRCodeResponse {
   }
 }
 
-interface UserResponse {
-  code: number
-  message: string
-  data: {
-    id: number
-    name: string
-    mobile: string | null
-    department_id: number
-    reasonable_department_id: number
-    avatar: string | null
-    status: number
-  }
-}
+/** /auth/me 成功时的结构化结果，供启动恢复与后续复用 */
+export type MeSessionResult =
+  | { ok: true; user: Record<string, unknown>; modelConfig: Record<string, unknown> | null }
+  | { ok: false; unauthorized: true }
+  | { ok: false; unauthorized: false; message?: string }
 
 /**
  * 获取登录二维码
@@ -58,20 +50,70 @@ export async function checkQRCode(qrCode: string): Promise<CheckQRCodeResponse> 
 }
 
 /**
- * 获取当前用户信息
- * @param token 访问令牌
+ * 拉取当前登录态：用户 + 服务端下发的模型配置。
+ * 401：HTTP 状态为 401，或 JSON 体 code 为 401（与业务约定一致）。
  */
-export async function getCurrentUser(token: string): Promise<UserResponse> {
-  const response = await fetch(`${API_BASE_URL}/auth/me`, {
-    headers: {
-      'Authorization': `Bearer ${token}`
-    }
-  })
-  return response.json()
+export async function fetchMeSession(token: string): Promise<MeSessionResult> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  } catch {
+    return { ok: false, unauthorized: false, message: '网络错误' }
+  }
+
+  let body: Record<string, unknown> | null = null
+  try {
+    body = (await response.json()) as Record<string, unknown>
+  } catch {
+    body = null
+  }
+
+  const bodyCode = body?.code as number | string | undefined
+  if (response.status === 401 || bodyCode === 401 || bodyCode === '401') {
+    return { ok: false, unauthorized: true }
+  }
+
+  if (!response.ok) {
+    const msg = (body?.message as string) || `HTTP ${response.status}`
+    return { ok: false, unauthorized: false, message: msg }
+  }
+
+  if (bodyCode !== undefined && bodyCode !== 200 && bodyCode !== 0 && bodyCode !== '200' && bodyCode !== '0') {
+    if (bodyCode === 401 || bodyCode === '401') return { ok: false, unauthorized: true }
+    const msg = (body?.message as string) || String(bodyCode)
+    return { ok: false, unauthorized: false, message: msg }
+  }
+
+  const raw = (body?.data ?? body) as Record<string, unknown> | null
+  if (!raw || typeof raw !== 'object') {
+    return { ok: false, unauthorized: false, message: '无效的响应数据' }
+  }
+
+  const modelConfig =
+    (raw.model_config as Record<string, unknown> | undefined) ??
+    (raw.modelConfig as Record<string, unknown> | undefined) ??
+    null
+
+  let user: Record<string, unknown>
+  if (raw.user && typeof raw.user === 'object') {
+    user = raw.user as Record<string, unknown>
+  } else {
+    user = { ...raw }
+    delete user.model_config
+    delete user.modelConfig
+  }
+
+  if (!user || Object.keys(user).length === 0) {
+    return { ok: false, unauthorized: false, message: '缺少用户信息' }
+  }
+
+  return { ok: true, user, modelConfig }
 }
 
 /**
- * 退出登录（清除本地存储）
+ * 退出登录（仅清理本地 token；顺带移除旧版本写入的 userInfo/modelConfig）
  */
 export function logout(): void {
   localStorage.removeItem('accessToken')

@@ -2,14 +2,14 @@ import React, { useState, useCallback } from 'react'
 
 interface WorkspaceSetupProps {
   workspace: string
-  onBack: () => void
+  // onBack: () => void
   onNext: (workspace: string) => void
   onSkip?: () => void
 }
 
 export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
   workspace: initialWorkspace,
-  onBack,
+  // onBack,
   onNext,
   onSkip,
 }) => {
@@ -28,7 +28,7 @@ export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
       /^[A-Za-z]:[\\/]/.test(trimmed) ||
       trimmed.startsWith('~/')
     if (!isAbsolute) {
-      setError('请输入绝对路径，例如 C:\\Users\\用户名\\openclaw 或 ~/openclaw')
+      setError('请输入绝对路径，例如 C:\\Users\\用户名\\qianyi 或 ~/qianyi')
       return
     }
     setError(null)
@@ -59,7 +59,7 @@ export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
             id="workspace-path"
             type="text"
             className="input-field input-workspace"
-            placeholder="例如: C:\Users\用户名\openclaw"
+            placeholder="例如: C:\Users\用户名\qianyi"
             value={workspace}
             onChange={(e) => {
               setWorkspace(e.target.value)
@@ -92,7 +92,7 @@ export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
       </div>
 
       <div className="setup-actions">
-        <button className="btn-secondary" onClick={onBack}>上一步</button>
+        {/*<button className="btn-secondary" onClick={onBack}>上一步</button>*/}
         {onSkip && <button className="btn-secondary" onClick={onSkip}>跳过</button>}
         <button className="btn-primary" onClick={handleNext}>
           下一步

@@ -218,9 +218,7 @@ export class ConfigMigrator {
         '• 从旧版本升级后配置结构发生变化\n' +
         '• 配置文件已损坏\n\n' +
         '建议操作：\n' +
-        '• 点击"重置配置"将清空所有设置（API Key、模型等）\n' +
-        '• 旧配置会自动备份到 .openclaw 目录\n' +
-        '• 重置后需要重新配置模型和 API Key',
+        '• 点击"重置配置"将清空所有设置\n',
       buttons: ['重置配置', '查看日志', '退出应用'],
       defaultId: 0,
       cancelId: 2

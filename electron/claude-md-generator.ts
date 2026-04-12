@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { execSync } from 'node:child_process'
-import { getOpenclawConfigPath } from './setup-wizard'
+import { getOpenclawConfigPath, getDefaultUserWorkspacePath } from './setup-wizard'
 import { scanSkills } from './skills-scanner'
 
 const MARKER_START = '<!-- CLAWWIN-AUTO-START -->'
@@ -164,7 +164,7 @@ function getWorkspacePath(): string {
       }
     }
   } catch { /* ignore */ }
-  return path.join(os.homedir(), 'openclaw')
+  return getDefaultUserWorkspacePath()
 }
 
 // ---- Build content ----
