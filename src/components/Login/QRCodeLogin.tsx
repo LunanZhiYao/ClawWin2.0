@@ -1,8 +1,12 @@
+/**
+ * 扫码登录：轮询仅用于拿到 access_token（1003）；用户与 model_config 由上层通过 /auth/me 拉取，与冷启动一致。
+ */
 import { useState, useEffect, useCallback } from 'react'
 import { getQRCode, checkQRCode } from '../../api/auth'
 
 interface QRCodeLoginProps {
-  onLoginSuccess: (token: string, user: any, modelConfig: any) => void
+  /** 传入 QR 接口返回的 access_token；由调用方 fetchMeSession 完成后续同步 */
+  onLoginSuccess: (token: string) => Promise<void>
 }
 
 export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
@@ -49,7 +53,7 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
     // 改为「单次请求结束后再 setTimeout 排下一次」，保证同一时刻最多一个 check 在途。
     let cancelled = false
     let timeoutId: ReturnType<typeof setTimeout> | null = null
-    const POLL_MS = 2000
+    const POLL_MS = 1000
 
     const runPoll = async () => {
       if (cancelled) return
@@ -67,13 +71,15 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
         if (code === '1002' || code === 1002) {
           setStatus('scanned')
         } else if ((code === '1003' || code === 1003) && response.data?.access_token) {
-          console.log('登录成功，准备调用 onLoginSuccess')
           setStatus('scanned')
-          onLoginSuccess(
-            response.data.access_token,
-            response.data.user,
-            response.data.model_config
-          )
+          try {
+            await onLoginSuccess(response.data.access_token)
+          } catch (err) {
+            if (!cancelled) {
+              setStatus('error')
+              setErrorMessage(err instanceof Error ? err.message : '登录失败')
+            }
+          }
           return
         }
       } catch (error) {

@@ -190,7 +190,11 @@ export class ConfigMigrator {
    * 备份配置文件
    */
   private async backupConfig(): Promise<void> {
-    try {
+
+    this.log('info', `配置备份已关闭`)
+    return
+
+    /*try {
       if (!fs.existsSync(this.configPath)) {
         return
       }
@@ -202,7 +206,7 @@ export class ConfigMigrator {
       this.log('info', `配置已备份至: ${backupPath}`)
     } catch (err) {
       this.log('warn', `配置备份失败: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    }*/
   }
 
   /**

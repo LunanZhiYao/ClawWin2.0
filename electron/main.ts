@@ -520,20 +520,65 @@ function setupIPC() {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
       const providers = config?.models?.providers ?? {}
       const result: { providerId: string; modelId: string; modelName: string; key: string; providerType: string }[] = []
+      // 去重索引：避免同一模型在 providers 与 agents.defaults.models 双来源重复展示
+      const seen = new Set<string>()
       for (const [providerId, cfg] of Object.entries(providers)) {
-        const providerCfg = cfg as { models?: Array<{ id: string; name?: string }> }
+        const providerCfg = cfg as {
+          models?: Array<{ id: string; name?: string }> | Record<string, { id?: string; name?: string }>
+        }
         const providerType = providerId === 'clawwinweb' ? 'clawwin'
           : providerId === 'ollama' ? 'local'
           : 'cloud'
-        for (const m of providerCfg.models ?? []) {
+
+        // 兼容两种历史结构：
+        // 1) 数组：[{ id, name }]
+        // 2) 对象：{ "provider/model": { id,name } } 或 { "modelId": { ... } }
+        const modelEntries = Array.isArray(providerCfg.models)
+          ? providerCfg.models
+          : Object.entries(providerCfg.models ?? {}).map(([rawKey, rawVal]) => {
+              const v = (rawVal ?? {}) as { id?: string; name?: string }
+              const normalizedId = (typeof v.id === 'string' && v.id.trim())
+                ? v.id.trim()
+                : rawKey.includes('/') ? rawKey.slice(rawKey.indexOf('/') + 1) : rawKey
+              return { id: normalizedId, name: v.name }
+            })
+
+        for (const m of modelEntries) {
+          if (!m?.id) continue
+          const key = `${providerId}/${m.id}`
+          if (seen.has(key)) continue
+          seen.add(key)
           result.push({
             providerId,
             modelId: m.id,
             modelName: m.name || m.id,
-            key: `${providerId}/${m.id}`,
+            key,
             providerType,
           })
         }
+      }
+
+      // 从 agents.defaults.models 回填别名（某些场景只有这里有模型声明）
+      const defaultsModels = config?.agents?.defaults?.models ?? {}
+      for (const [providerModelKey, entry] of Object.entries(defaultsModels)) {
+        if (typeof providerModelKey !== 'string' || !providerModelKey.includes('/')) continue
+        if (seen.has(providerModelKey)) continue
+        const slashIdx = providerModelKey.indexOf('/')
+        const providerId = providerModelKey.slice(0, slashIdx)
+        const modelId = providerModelKey.slice(slashIdx + 1)
+        if (!providerId || !modelId) continue
+        const providerType = providerId === 'clawwinweb' ? 'clawwin'
+          : providerId === 'ollama' ? 'local'
+          : 'cloud'
+        const alias = (entry as { alias?: string } | undefined)?.alias
+        seen.add(providerModelKey)
+        result.push({
+          providerId,
+          modelId,
+          modelName: alias || modelId,
+          key: providerModelKey,
+          providerType,
+        })
       }
       return result
     } catch {

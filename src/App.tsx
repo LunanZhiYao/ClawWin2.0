@@ -15,7 +15,7 @@ import { CronManager } from './components/Settings/CronManager'
 import { UserCenter } from './components/Settings/UserCenter'
 import { QRCodeLogin } from './components/Login/QRCodeLogin'
 import { LoginStatus } from './components/Login/LoginStatus'
-import { fetchMeSession } from './api/auth'
+import { fetchMeSession, type MeSessionResult } from './api/auth'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, type SetupStep } from './hooks/useSetup'
@@ -24,6 +24,9 @@ import logoSrc from '../assets/logo.png'
 import './components/Login/Login.css'
 
 const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
+
+/** /auth/me 成功分支的结构化类型，供冷启动与扫码登录共用落盘逻辑 */
+type MeSessionOk = Extract<MeSessionResult, { ok: true }>
 
 /** 将扫码/me 返回的 model_config 写入 openclaw（与登录成功路径一致） */
 async function persistServerModelConfig(config: Record<string, unknown>) {
@@ -38,6 +41,62 @@ async function persistServerModelConfig(config: Record<string, unknown>) {
     contextWindow: (config.context_window as number) || 256000,
     maxTokens: (config.max_tokens as number) || 131000,
   })
+}
+
+/**
+ * /auth/me 成功后：持久化 token、服务端模型写入 openclaw、hydrate 向导 state、拉起网关。
+ * 与冷启动 bootstrap 共用，避免扫码与启动两套「登录态生效」逻辑分叉。
+ * ensureGateway：由调用方实现「已运行则重启、否则启动」，以便新模型配置被进程重新加载。
+ * refreshModelPicker：hydrate 后从磁盘重拉可选模型列表，避免热切换下拉仍显示旧列表。
+ */
+async function applyMeSessionAfterFetch(
+  token: string,
+  me: MeSessionOk,
+  opts: {
+    hydrateFromOpenclawDisk: () => Promise<void>
+    /** 网关已在跑则重启读新配置，否则 start（见 App 内 ensureGatewayAfterAuth） */
+    ensureGateway: () => Promise<void>
+    setCurrentUser: (u: Record<string, unknown>) => void
+    setIsLoggedIn: (v: boolean) => void
+    /** 任一步骤后返回 true 表示应中止（如 React effect 已清理） */
+    shouldAbort?: () => boolean
+    /** hydrate 之后调用，同步 Chat 区模型下拉的数据源 */
+    refreshModelPicker?: () => Promise<void>
+  },
+): Promise<void> {
+  if (opts.shouldAbort?.()) return
+  localStorage.setItem('accessToken', token)
+  localStorage.removeItem('userInfo')
+  localStorage.removeItem('modelConfig')
+  opts.setCurrentUser(me.user)
+  opts.setIsLoggedIn(true)
+  if (me.modelConfig) {
+    try {
+      await persistServerModelConfig(me.modelConfig)
+    } catch (e) {
+      console.error('[auth] 写入模型配置失败:', e)
+    }
+  }
+  if (opts.shouldAbort?.()) return
+  try {
+    await opts.hydrateFromOpenclawDisk()
+  } catch (e) {
+    console.error('[auth] hydrate 失败:', e)
+  }
+  if (opts.shouldAbort?.()) return
+  if (opts.refreshModelPicker) {
+    try {
+      await opts.refreshModelPicker()
+    } catch (e) {
+      console.error('[auth] 刷新可选模型列表失败:', e)
+    }
+  }
+  if (opts.shouldAbort?.()) return
+  try {
+    await opts.ensureGateway()
+  } catch (e) {
+    console.error('[auth] gateway 启动/重启 失败:', e)
+  }
 }
 
 function generateId(): string {
@@ -191,6 +250,26 @@ function App() {
     setWsReconnectKey(k => k + 1)
   }, [gateway])
 
+  /**
+   * /auth/me 落盘模型后拉起网关：已在运行/拉起中则 restart 以载入新配置，否则 start。
+   * 重启时递增 wsReconnectKey，与设置页「重启网关」行为一致。
+   */
+  const ensureGatewayAfterAuth = useCallback(async () => {
+    const g = gatewayRef.current
+    if (g.state === 'ready' || g.state === 'starting' || g.state === 'restarting') {
+      await g.restart()
+      setWsReconnectKey((k) => k + 1)
+    } else {
+      await g.start()
+    }
+  }, [])
+
+  /** openclaw 落盘或 hydrate 后重拉模型列表，供 /auth/me 成功路径与设置保存共用思路 */
+  const refreshModelPickerFromDisk = useCallback(async () => {
+    const models = await window.electronAPI.config.getAvailableModels()
+    setAvailableModels(models)
+  }, [])
+
   const handleStop = useCallback(() => {
     const sid = activeSessionIdRef.current
     if (sid) {
@@ -200,28 +279,28 @@ function App() {
     stopWaiting()
   }, [ws, stopWaiting])
 
-  const handleLoginSuccess = useCallback(async (token: string, user: any, config: any) => {
-    // 仅持久化 token；用户与模型以服务端为准，启动时由 /auth/me 再同步（此处仍用扫码结果立即落盘，避免多一次往返）
-    localStorage.setItem('accessToken', token)
-    localStorage.removeItem('userInfo')
-    localStorage.removeItem('modelConfig')
-
-    setCurrentUser(user)
-    setIsLoggedIn(true)
-
-    if (config) {
-      try {
-        await persistServerModelConfig(config)
-      } catch (error) {
-        console.error('更新模型配置失败:', error)
+  /** 扫码仅拿到 access_token；用户与 model_config 一律走 fetchMeSession（/auth/me），与冷启动一致 */
+  const handleLoginSuccess = useCallback(
+    async (token: string) => {
+      const me = await fetchMeSession(token)
+      if (!me.ok) {
+        const msg = me.unauthorized
+          ? '登录已失效，请重新扫码'
+          : (me.message || '同步用户信息失败，请重试')
+        throw new Error(msg)
       }
-    }
-
-    // 首次引导在登录前已初始化 useSetup；登录落盘后须把模型等信息同步进向导 state，否则完成引导时会覆盖掉登录写入的配置
-    await setup.hydrateFromOpenclawDisk()
-
-    await gateway.start()
-  }, [gateway, setup.hydrateFromOpenclawDisk])
+      await applyMeSessionAfterFetch(token, me, {
+        hydrateFromOpenclawDisk: () => setup.hydrateFromOpenclawDisk(),
+        ensureGateway: ensureGatewayAfterAuth,
+        setCurrentUser,
+        setIsLoggedIn,
+        refreshModelPicker: refreshModelPickerFromDisk,
+      })
+      // 重新登录后服务端默认模型可能已变；会话级 modelOverride 会盖住新 default，须清空以免 UI 仍显示旧模型
+      setSessions((prev) => prev.map((s) => ({ ...s, modelOverride: undefined, updatedAt: Date.now() })))
+    },
+    [ensureGatewayAfterAuth, refreshModelPickerFromDisk, setup.hydrateFromOpenclawDisk],
+  )
 
   const handleLogout = useCallback(() => {
     localStorage.removeItem('accessToken')
@@ -232,7 +311,7 @@ function App() {
     setIsLoggedIn(false)
   }, [])
 
-  // 启动后：在 setup 自磁盘加载完成后，用 accessToken 调 /auth/me 恢复用户并刷新模型落盘（依赖仅 isLoading，避免 gateway 引用抖动重复拉取）
+  // 启动后：在 setup 自磁盘加载完成后，用 accessToken 调 /auth/me 恢复用户并刷新模型落盘；依赖含 ensure/refresh 回调的稳定引用
   useEffect(() => {
     if (setup.isLoading) return
 
@@ -279,34 +358,21 @@ function App() {
       }
 
       if (cancelled) return
-      setCurrentUser(me.user)
-      setIsLoggedIn(true)
-      if (me.modelConfig) {
-        try {
-          await persistServerModelConfig(me.modelConfig)
-        } catch (e) {
-          console.error('[auth] 启动时写入模型配置失败:', e)
-        }
-      }
-      if (cancelled) return
-      try {
-        await hydrateFromDiskRef.current()
-      } catch (e) {
-        console.error('[auth] hydrate 失败:', e)
-      }
-      if (cancelled) return
-      try {
-        await gatewayRef.current.start()
-      } catch (e) {
-        console.error('[auth] gateway.start 失败:', e)
-      }
+      await applyMeSessionAfterFetch(token, me, {
+        hydrateFromOpenclawDisk: () => hydrateFromDiskRef.current(),
+        ensureGateway: ensureGatewayAfterAuth,
+        setCurrentUser,
+        setIsLoggedIn,
+        shouldAbort: () => cancelled,
+        refreshModelPicker: refreshModelPickerFromDisk,
+      })
       finish()
     })()
 
     return () => {
       cancelled = true
     }
-  }, [setup.isLoading])
+  }, [setup.isLoading, ensureGatewayAfterAuth, refreshModelPickerFromDisk])
 
   // Load sessions from disk on mount
   useEffect(() => {
