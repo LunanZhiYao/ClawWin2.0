@@ -279,9 +279,17 @@ function App() {
     stopWaiting()
   }, [ws, stopWaiting])
 
-  /** 扫码仅拿到 access_token；用户与 model_config 一律走 fetchMeSession（/auth/me），与冷启动一致 */
+  /**
+   * 扫码仅拿到 access_token；用户与 model_config 一律走 fetchMeSession（/auth/me），与冷启动一致。
+   * 首次使用场景（登录前本地尚无 openclaw 配置）下，登录后应优先进入向导，不应提前拉起网关。
+   * 仅依赖 setup.isFirstRun 会误伤旧配置用户（如历史配置缺少 wizard 字段），因此额外结合“登录前是否已有配置”判定。
+   */
   const handleLoginSuccess = useCallback(
     async (token: string) => {
+      // 在写入服务端模型前读取一次磁盘配置，作为“是否真正首次使用”的可靠判据。
+      const configBeforeLogin = await window.electronAPI.config.readConfig()
+      const hadConfigBeforeLogin = !!configBeforeLogin
+      const shouldEnterFirstRunSetup = setup.isFirstRun && !hadConfigBeforeLogin
       const me = await fetchMeSession(token)
       if (!me.ok) {
         const msg = me.unauthorized
@@ -291,15 +299,24 @@ function App() {
       }
       await applyMeSessionAfterFetch(token, me, {
         hydrateFromOpenclawDisk: () => setup.hydrateFromOpenclawDisk(),
-        ensureGateway: ensureGatewayAfterAuth,
+        // 首次使用时网关应由向导完成页触发启动，避免“登录即跳过向导自动启动”。
+        ensureGateway: shouldEnterFirstRunSetup ? async () => {} : ensureGatewayAfterAuth,
         setCurrentUser,
         setIsLoggedIn,
         refreshModelPicker: refreshModelPickerFromDisk,
       })
       // 重新登录后服务端默认模型可能已变；会话级 modelOverride 会盖住新 default，须清空以免 UI 仍显示旧模型
       setSessions((prev) => prev.map((s) => ({ ...s, modelOverride: undefined, updatedAt: Date.now() })))
+      if (shouldEnterFirstRunSetup) {
+        // 首次进入向导时强制回到第一步，避免复用旧 step 导致直接落在最后一页。
+        setup.setStep('workspace')
+        setShowSetup(true)
+      } else {
+        // 非首次（退出重登/鉴权失效后重登）一律回主页面。
+        setShowSetup(false)
+      }
     },
-    [ensureGatewayAfterAuth, refreshModelPickerFromDisk, setup.hydrateFromOpenclawDisk],
+    [ensureGatewayAfterAuth, refreshModelPickerFromDisk, setup.hydrateFromOpenclawDisk, setup.isFirstRun, setup.setStep],
   )
 
   const handleLogout = useCallback(() => {
@@ -337,8 +354,6 @@ function App() {
 
       if (!me.ok && me.unauthorized) {
         localStorage.removeItem('accessToken')
-        localStorage.removeItem('userInfo')
-        localStorage.removeItem('modelConfig')
         if (!cancelled) {
           setCurrentUser(null)
           setIsLoggedIn(false)
