@@ -676,6 +676,7 @@ function setupIPC() {
     apiFormat: string
     apiKey: string
     runtimeAuthOnly?: boolean
+    replaceProvidersModels?: boolean
     reasoning?: boolean
     contextWindow?: number
     maxTokens?: number
@@ -691,6 +692,7 @@ function setupIPC() {
 
       const providerModelKey = `${params.provider}/${params.modelId}`
       const now = new Date().toISOString()
+      const replaceProvidersModels = params.replaceProvidersModels === true
 
       // Update agents.defaults.model.primary
       if (!config.agents) config.agents = {}
@@ -700,11 +702,21 @@ function setupIPC() {
 
       // Update agents.defaults.models
       if (!config.agents.defaults.models) config.agents.defaults.models = {}
+      if (replaceProvidersModels) {
+        config.agents.defaults.models = {}
+      }
       config.agents.defaults.models[providerModelKey] = { alias: params.modelName }
 
       // Update models.providers
       if (!config.models) config.models = { mode: 'merge' }
       if (!config.models.providers) config.models.providers = {}
+      if (replaceProvidersModels) {
+        for (const provider of Object.values(config.models.providers as Record<string, Record<string, unknown>>)) {
+          if (provider && typeof provider === 'object') {
+            provider.models = []
+          }
+        }
+      }
       const existingProvider = config.models.providers[params.provider] ?? { models: [] }
       const newModel: { id: string; [k: string]: unknown } = {
         id: params.modelId,
@@ -714,12 +726,18 @@ function setupIPC() {
         contextWindow: params.contextWindow ?? 200000,
       }
       if (params.maxTokens) newModel.maxTokens = params.maxTokens
-      const existingModels: Array<{ id: string;[k: string]: unknown }> = existingProvider.models ?? []
-      const idx = existingModels.findIndex((m) => m.id === params.modelId)
-      if (idx >= 0) {
-        existingModels[idx] = newModel
+      let nextModels: Array<{ id: string; [k: string]: unknown }>
+      if (replaceProvidersModels) {
+        nextModels = [newModel]
       } else {
-        existingModels.push(newModel)
+        const existingModels: Array<{ id: string; [k: string]: unknown }> = existingProvider.models ?? []
+        const idx = existingModels.findIndex((m) => m.id === params.modelId)
+        if (idx >= 0) {
+          existingModels[idx] = newModel
+        } else {
+          existingModels.push(newModel)
+        }
+        nextModels = existingModels
       }
       // 显式开关：仅当调用方声明 runtimeAuthOnly=true 时，才走“只运行时注入、不写 auth.profiles”。
       const runtimeAuthOnly = params.runtimeAuthOnly === true
@@ -731,7 +749,7 @@ function setupIPC() {
           ? 'OPENAI_API_KEY'
           : ((params.apiKey || (existingProvider.apiKey as string) || '').trim()),
         api: params.apiFormat,
-        models: existingModels,
+        models: nextModels,
       }
 
       // 运行时托管模式不写 auth.profiles，避免 profile 优先级覆盖 env 解析链。

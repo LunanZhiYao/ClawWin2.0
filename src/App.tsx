@@ -43,6 +43,8 @@ async function persistServerModelConfig(config: Record<string, unknown>) {
     apiKey: 'OPENAI_API_KEY',
     // 显式声明本次写入走“运行时鉴权模式”，由主进程跳过 auth.profiles 落盘。
     runtimeAuthOnly: true,
+    // /auth/me 下发模型应覆盖 providers 中已有模型，避免不断追加。
+    replaceProvidersModels: true,
     apiFormat: (config.api_format as string) || 'openai-completions',
     input: (config.input_types as string[]) || ['image', 'text'],
     contextWindow: (config.context_window as number) || 256000,
@@ -981,7 +983,7 @@ function App() {
         <div className="app-main">
           <div className="system-sidebar">
             <div className="system-sidebar-icons">
-              <div className="system-icon-item" style={{animationDelay: '0s'}} onClick={() => setShowModelSettings(true)}>
+              {/* <div className="system-icon-item" style={{animationDelay: '0s'}} onClick={() => setShowModelSettings(true)}>
                 <div className="system-icon-circle">
                   <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="4" y="4" width="16" height="16" rx="3" />
@@ -994,7 +996,7 @@ function App() {
                   </svg>
                 </div>
                 <span className="system-icon-label">大模型</span>
-              </div>
+              </div> */}
 
               <div className="system-icon-item" style={{animationDelay: '0.10s'}} onClick={() => setShowCronManager(true)}>
                 <div className="system-icon-circle">
@@ -1210,7 +1212,7 @@ function App() {
                     <span>自动压缩上下文</span>
                   </label>
                 </div>
-                <div className="settings-section">
+                {/* <div className="settings-section">
                   <label className="settings-toggle-row">
                     <input
                       type="checkbox"
@@ -1223,7 +1225,7 @@ function App() {
                     />
                     <span>禁用自动更新提示</span>
                   </label>
-                </div>
+                </div> */}
                 <div className="settings-section">
                   <label className="settings-toggle-row">
                     <input

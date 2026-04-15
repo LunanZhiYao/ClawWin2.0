@@ -130,6 +130,7 @@ const electronAPI = {
       apiFormat: string
       apiKey: string
       runtimeAuthOnly?: boolean
+      replaceProvidersModels?: boolean
       reasoning?: boolean
       contextWindow?: number
       maxTokens?: number
