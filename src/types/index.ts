@@ -49,6 +49,7 @@ interface ElectronConfig {
     baseUrl: string
     apiFormat: string
     apiKey: string
+    runtimeAuthOnly?: boolean
     reasoning?: boolean
     contextWindow?: number
     maxTokens?: number
@@ -133,6 +134,11 @@ interface ElectronCww {
   saveState: (state: { email: string; nickname: string; balance: number; serverUrl: string; encPassword?: string }) => Promise<{ ok: boolean }>
 }
 
+interface ElectronAuth {
+  setRuntimeApiKey: (apiKey: string | null) => Promise<{ ok: boolean; error?: string }>
+  clearRuntimeApiKey: () => Promise<{ ok: boolean; error?: string }>
+}
+
 export interface UpdateInfo {
   version: string
   releaseNotes: string
@@ -176,6 +182,7 @@ interface ElectronAPI {
   pairing: ElectronPairing
   ollama: ElectronOllama
   cww: ElectronCww
+  auth: ElectronAuth
 }
 
 declare global {

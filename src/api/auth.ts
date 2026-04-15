@@ -117,6 +117,4 @@ export async function fetchMeSession(token: string): Promise<MeSessionResult> {
  */
 export function logout(): void {
   localStorage.removeItem('accessToken')
-  localStorage.removeItem('userInfo')
-  localStorage.removeItem('modelConfig')
 }

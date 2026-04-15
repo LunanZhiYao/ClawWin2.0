@@ -364,6 +364,26 @@ function setupIPC() {
     app.quit()
   })
 
+  /** 运行时注入默认模型 API Key（仅主进程内存，不落盘） */
+  ipcMain.handle('auth:setRuntimeApiKey', (_event, apiKey: string | null) => {
+    try {
+      gatewayManager?.setRuntimeDefaultApiKey(apiKey)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /** 清空运行时 API Key（退出登录/鉴权失效场景） */
+  ipcMain.handle('auth:clearRuntimeApiKey', () => {
+    try {
+      gatewayManager?.setRuntimeDefaultApiKey(null)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ── 区域截屏 ──────────────────────────────────────────
   let screenshotWin: BrowserWindow | null = null
   let screenshotImageDataUrl = ''
@@ -635,6 +655,7 @@ function setupIPC() {
     baseUrl: string
     apiFormat: string
     apiKey: string
+    runtimeAuthOnly?: boolean
     reasoning?: boolean
     contextWindow?: number
     maxTokens?: number
@@ -680,32 +701,24 @@ function setupIPC() {
       } else {
         existingModels.push(newModel)
       }
+      // 显式开关：仅当调用方声明 runtimeAuthOnly=true 时，才走“只运行时注入、不写 auth.profiles”。
+      const runtimeAuthOnly = params.runtimeAuthOnly === true
       config.models.providers[params.provider] = {
         ...existingProvider,
         baseUrl: params.baseUrl,
+        // 运行时托管模式仅写占位符；普通模式保留原有写盘策略。
+        apiKey: runtimeAuthOnly
+          ? 'OPENAI_API_KEY'
+          : ((params.apiKey || (existingProvider.apiKey as string) || '').trim()),
         api: params.apiFormat,
         models: existingModels,
       }
 
-      // Update auth.profiles
-      if (!config.auth) config.auth = {}
-      if (!config.auth.profiles) config.auth.profiles = {}
-      config.auth.profiles[`${params.provider}:default`] = {
-        provider: params.provider,
-        mode: 'api_key',
-      }
-
-      // Update meta
-      if (!config.meta) config.meta = {}
-      config.meta.lastTouchedAt = now
-
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-
-      // Write auth-profiles.json (API key)
-      if (params.apiKey) {
+      // 运行时托管模式不写 auth.profiles，避免 profile 优先级覆盖 env 解析链。
+      // 普通模式沿用传统写入，兼容既有 provider 行为。
+      if (!runtimeAuthOnly && params.apiKey) {
         const openclawHome = path.join(os.homedir(), '.openclaw')
         const authFile = path.join(openclawHome, 'auth-profiles.json')
-        // OpenClaw agent 实际从 agents/main/agent/ 目录加载 auth-profiles
         const agentDir = path.join(openclawHome, 'agents', 'main', 'agent')
         const agentAuthFile = path.join(agentDir, 'auth-profiles.json')
 
@@ -723,10 +736,15 @@ function setupIPC() {
         }
         const authJson = JSON.stringify(existingAuth, null, 2)
         fs.writeFileSync(authFile, authJson, 'utf-8')
-        // 同步写入 agent 目录，否则 agent 找不到 API key
         if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true })
         fs.writeFileSync(agentAuthFile, authJson, 'utf-8')
       }
+
+      // Update meta
+      if (!config.meta) config.meta = {}
+      config.meta.lastTouchedAt = now
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
 
       return { ok: true }
     } catch (err) {

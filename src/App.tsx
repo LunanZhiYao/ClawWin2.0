@@ -28,14 +28,21 @@ const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
 /** /auth/me 成功分支的结构化类型，供冷启动与扫码登录共用落盘逻辑 */
 type MeSessionOk = Extract<MeSessionResult, { ok: true }>
 
-/** 将扫码/me 返回的 model_config 写入 openclaw（与登录成功路径一致） */
+/**
+ * 将扫码/me 返回的 model_config 写入 openclaw。
+ * 安全约束：真实 API Key 只注入主进程内存，不落盘到配置文件。
+ */
 async function persistServerModelConfig(config: Record<string, unknown>) {
+  await window.electronAPI.auth.setRuntimeApiKey(((config.api_key as string) || '').trim() || null)
   await window.electronAPI.config.saveModelConfig({
     provider: config.provider as string,
     modelId: config.model_id as string,
     modelName: (config.model_name as string) || (config.model_id as string),
     baseUrl: (config.base_url as string) || '',
-    apiKey: (config.api_key as string) || '',
+    // 禁止明文落盘：openai 仅写环境变量占位符，真实 key 仅驻留主进程内存
+    apiKey: 'OPENAI_API_KEY',
+    // 显式声明本次写入走“运行时鉴权模式”，由主进程跳过 auth.profiles 落盘。
+    runtimeAuthOnly: true,
     apiFormat: (config.api_format as string) || 'openai-completions',
     input: (config.input_types as string[]) || ['image', 'text'],
     contextWindow: (config.context_window as number) || 256000,
@@ -66,8 +73,6 @@ async function applyMeSessionAfterFetch(
 ): Promise<void> {
   if (opts.shouldAbort?.()) return
   localStorage.setItem('accessToken', token)
-  localStorage.removeItem('userInfo')
-  localStorage.removeItem('modelConfig')
   opts.setCurrentUser(me.user)
   opts.setIsLoggedIn(true)
   if (me.modelConfig) {
@@ -319,10 +324,13 @@ function App() {
     [ensureGatewayAfterAuth, refreshModelPickerFromDisk, setup.hydrateFromOpenclawDisk, setup.isFirstRun, setup.setStep],
   )
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
     localStorage.removeItem('accessToken')
-    localStorage.removeItem('userInfo')
-    localStorage.removeItem('modelConfig')
+    try {
+      await window.electronAPI.auth.clearRuntimeApiKey()
+    } catch (err) {
+      console.warn('[auth] 清空运行时 API Key 失败:', err)
+    }
 
     setCurrentUser(null)
     setIsLoggedIn(false)
@@ -338,8 +346,6 @@ function App() {
     }
 
     ;(async () => {
-      localStorage.removeItem('userInfo')
-      localStorage.removeItem('modelConfig')
       const token = localStorage.getItem('accessToken')
       if (!token) {
         if (!cancelled) {

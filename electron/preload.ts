@@ -104,6 +104,14 @@ const electronAPI = {
     },
   },
 
+  // Auth（运行时 key 注入：仅内存，不落盘）
+  auth: {
+    setRuntimeApiKey: (apiKey: string | null): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('auth:setRuntimeApiKey', apiKey),
+    clearRuntimeApiKey: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('auth:clearRuntimeApiKey'),
+  },
+
   // Config
   config: {
     readConfig: (): Promise<Record<string, unknown> | null> => ipcRenderer.invoke('config:readConfig'),
@@ -117,6 +125,7 @@ const electronAPI = {
       baseUrl: string
       apiFormat: string
       apiKey: string
+      runtimeAuthOnly?: boolean
       reasoning?: boolean
       contextWindow?: number
       maxTokens?: number

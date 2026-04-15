@@ -31,6 +31,8 @@ export class GatewayManager {
   private isRestarting = false
   private configMigrator: ConfigMigrator
   private gatewayLogs: string[] = []
+  /** 运行时默认模型 API Key，仅驻留主进程内存 */
+  private runtimeDefaultApiKey: string | null = null
 
   // 操作锁：所有生命周期操作串行执行，杜绝并发启动
   private opLock: Promise<void> = Promise.resolve()
@@ -48,6 +50,15 @@ export class GatewayManager {
 
   getPort() {
     return this.opts.port
+  }
+
+  /**
+   * 设置/清空运行时默认 API Key。
+   * 该 key 会在 spawn 网关时注入 OPENAI_API_KEY 环境变量，不写入磁盘。
+   */
+  setRuntimeDefaultApiKey(apiKey: string | null) {
+    const normalized = typeof apiKey === 'string' ? apiKey.trim() : ''
+    this.runtimeDefaultApiKey = normalized || null
   }
 
   // ========== 公开方法（通过锁串行化） ==========
@@ -293,6 +304,13 @@ export class GatewayManager {
 
     if (token) {
       env.OPENCLAW_GATEWAY_TOKEN = token
+    }
+    if (this.runtimeDefaultApiKey) {
+      env.OPENAI_API_KEY = this.runtimeDefaultApiKey
+      this.log('info', `[auth] 注入 OPENAI_API_KEY 到网关环境（length=${this.runtimeDefaultApiKey.length}）`)
+    } else {
+      delete env.OPENAI_API_KEY
+      this.log('warn', '[auth] 未注入 OPENAI_API_KEY（运行时 key 为空）')
     }
 
     // Set OPENCLAW_HOME to user's home directory (not .openclaw subdir)
