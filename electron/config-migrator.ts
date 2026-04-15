@@ -40,6 +40,21 @@ export class ConfigMigrator {
   }
 
   /**
+   * 仅对「直连 OpenAI 官方 API」做 completions→responses 迁移。
+   * 自定义 baseUrl（中转/企业代理等）仍可能只支持 chat/completions，不得覆盖用户或服务端下发的 api_format。
+   */
+  private isOfficialOpenAIApiBaseUrl(baseUrl: unknown): boolean {
+    const raw = typeof baseUrl === 'string' ? baseUrl.trim() : ''
+    if (!raw) return true
+    try {
+      const u = new URL(raw.includes('://') ? raw : `https://${raw}`)
+      return u.hostname.toLowerCase() === 'api.openai.com'
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * 主入口：校验并迁移配置
    */
   async validateAndMigrate(): Promise<MigrationResult> {
@@ -101,11 +116,15 @@ export class ConfigMigrator {
     }
 
     // 迁移 OpenAI 直连 provider 的 API 格式：openai-completions → openai-responses
-    // GPT-5.4+ 不再支持旧的 /v1/chat/completions 端点
-    // 注意：clawwinweb 等代理服务仍使用 openai-completions，不做迁移
-    if (newConfig.models?.providers?.openai?.api === 'openai-completions') {
-      newConfig.models.providers.openai.api = 'openai-responses'
-      this.log('info', '已将 openai 的 API 格式从 openai-completions 迁移为 openai-responses')
+    // GPT-5.4+ 在官方端点上不再推荐旧 completions 形态；仅对 api.openai.com（或空 baseUrl）迁移。
+    // 任意自定义 baseUrl（含 clawwin 后端下发的代理地址）保留服务端配置的 api_format。
+    const openaiProv = newConfig.models?.providers?.openai
+    if (
+      openaiProv?.api === 'openai-completions' &&
+      this.isOfficialOpenAIApiBaseUrl(openaiProv?.baseUrl)
+    ) {
+      openaiProv.api = 'openai-responses'
+      this.log('info', '已将 openai 的 API 格式从 openai-completions 迁移为 openai-responses（官方 API 端点）')
     }
 
     // 确保 gateway.auth.token 存在（如果有 gateway 配置）
