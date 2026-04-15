@@ -342,6 +342,17 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
       ...(setup.channels && Object.keys(setup.channels).length > 0
         ? { channels: setup.channels }
         : {}),
+      // Plugin configurations - enable built-in plugins
+      plugins: {
+        entries: {
+          'aliyun-opensearch': {
+            enabled: true,
+            config: {
+              "integrationName": "aliyun"
+            },
+          },
+        },
+      },
     }
 
     // 扫码登录等场景可能已写入模型；向导 state 若未带上 provider/model，仍须保留原文件中的模型块

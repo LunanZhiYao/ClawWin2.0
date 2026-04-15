@@ -384,6 +384,26 @@ function setupIPC() {
     }
   })
 
+  /** 运行时注入 access token（仅主进程内存，不落盘） */
+  ipcMain.handle('auth:setRuntimeAccessToken', (_event, token: string | null) => {
+    try {
+      gatewayManager?.setRuntimeAccessToken(token)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /** 清空运行时 access token（退出登录/鉴权失效场景） */
+  ipcMain.handle('auth:clearRuntimeAccessToken', () => {
+    try {
+      gatewayManager?.setRuntimeAccessToken(null)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ── 区域截屏 ──────────────────────────────────────────
   let screenshotWin: BrowserWindow | null = null
   let screenshotImageDataUrl = ''

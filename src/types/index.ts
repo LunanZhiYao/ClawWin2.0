@@ -137,6 +137,8 @@ interface ElectronCww {
 interface ElectronAuth {
   setRuntimeApiKey: (apiKey: string | null) => Promise<{ ok: boolean; error?: string }>
   clearRuntimeApiKey: () => Promise<{ ok: boolean; error?: string }>
+  setRuntimeAccessToken: (token: string | null) => Promise<{ ok: boolean; error?: string }>
+  clearRuntimeAccessToken: () => Promise<{ ok: boolean; error?: string }>
 }
 
 export interface UpdateInfo {

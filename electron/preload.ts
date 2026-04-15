@@ -110,6 +110,10 @@ const electronAPI = {
       ipcRenderer.invoke('auth:setRuntimeApiKey', apiKey),
     clearRuntimeApiKey: (): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('auth:clearRuntimeApiKey'),
+    setRuntimeAccessToken: (token: string | null): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('auth:setRuntimeAccessToken', token),
+    clearRuntimeAccessToken: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('auth:clearRuntimeAccessToken'),
   },
 
   // Config

@@ -33,6 +33,8 @@ export class GatewayManager {
   private gatewayLogs: string[] = []
   /** 运行时默认模型 API Key，仅驻留主进程内存 */
   private runtimeDefaultApiKey: string | null = null
+  /** 登录态 access token，仅驻留主进程内存，用于注入网关子进程环境 */
+  private runtimeAccessToken: string | null = null
 
   // 操作锁：所有生命周期操作串行执行，杜绝并发启动
   private opLock: Promise<void> = Promise.resolve()
@@ -59,6 +61,15 @@ export class GatewayManager {
   setRuntimeDefaultApiKey(apiKey: string | null) {
     const normalized = typeof apiKey === 'string' ? apiKey.trim() : ''
     this.runtimeDefaultApiKey = normalized || null
+  }
+
+  /**
+   * 设置/清空运行时 access token。
+   * 该 token 会在 spawn 网关时注入 ACCESS_TOKEN 环境变量，不写入磁盘。
+   */
+  setRuntimeAccessToken(token: string | null) {
+    const normalized = typeof token === 'string' ? token.trim() : ''
+    this.runtimeAccessToken = normalized || null
   }
 
   // ========== 公开方法（通过锁串行化） ==========
@@ -311,6 +322,15 @@ export class GatewayManager {
     } else {
       delete env.OPENAI_API_KEY
       this.log('warn', '[auth] 未注入 OPENAI_API_KEY（运行时 key 为空）')
+    }
+
+    // 将access_token 存在env里
+    if (this.runtimeAccessToken) {
+      env.ACCESS_TOKEN = this.runtimeAccessToken
+      this.log('info', `[auth] 注入 ACCESS_TOKEN 到网关环境（length=${this.runtimeAccessToken.length}）`)
+    } else {
+      delete env.ACCESS_TOKEN
+      this.log('warn', '[auth] 未注入 ACCESS_TOKEN（运行时 token 为空）')
     }
 
     // Set OPENCLAW_HOME to user's home directory (not .openclaw subdir)

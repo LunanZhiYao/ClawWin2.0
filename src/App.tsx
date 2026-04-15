@@ -72,6 +72,7 @@ async function applyMeSessionAfterFetch(
   },
 ): Promise<void> {
   if (opts.shouldAbort?.()) return
+  await window.electronAPI.auth.setRuntimeAccessToken(token)
   localStorage.setItem('accessToken', token)
   opts.setCurrentUser(me.user)
   opts.setIsLoggedIn(true)
@@ -328,8 +329,9 @@ function App() {
     localStorage.removeItem('accessToken')
     try {
       await window.electronAPI.auth.clearRuntimeApiKey()
+      await window.electronAPI.auth.clearRuntimeAccessToken()
     } catch (err) {
-      console.warn('[auth] 清空运行时 API Key 失败:', err)
+      console.warn('[auth] 清空运行时鉴权信息失败:', err)
     }
 
     setCurrentUser(null)
