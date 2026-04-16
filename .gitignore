@@ -8,6 +8,7 @@ bundled/openclaw/*
 !bundled/openclaw/skills/
 bundled/openclaw/skills/*
 !bundled/openclaw/skills/windows-control/
+!bundled/openclaw/extensions/aliyun-opensearch-plugin/
 *.exe
 *.log
 .DS_Store
