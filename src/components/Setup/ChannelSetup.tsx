@@ -147,7 +147,7 @@ export function ChannelSetup({ channels: initialChannels, onBack, onNext }: Chan
 
       {/* 配置对话框 */}
       {editingDef && (
-        <div className="channel-dialog-overlay" onClick={handleDialogCancel}>
+        <div className="channel-dialog-overlay" onClick={(e) => e.stopPropagation()}>
           <div className="channel-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="channel-dialog-header">
               <span className="channel-icon"><editingDef.logo /></span>
@@ -190,7 +190,7 @@ export function ChannelSetup({ channels: initialChannels, onBack, onNext }: Chan
       )}
       {/* 教程弹窗 */}
       {tutorialChannel && tutorialChannel.tutorialSteps && (
-        <div className="channel-dialog-overlay" onClick={() => setTutorialChannel(null)}>
+        <div className="channel-dialog-overlay" onClick={(e) => e.stopPropagation()}>
           <div className="channel-dialog channel-tutorial-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="channel-dialog-header">
               <span className="channel-icon"><tutorialChannel.logo /></span>

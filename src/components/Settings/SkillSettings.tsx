@@ -385,7 +385,7 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
   )
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
+    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="settings-panel-skills" onClick={e => e.stopPropagation()}>
         {loading ? (
           <>

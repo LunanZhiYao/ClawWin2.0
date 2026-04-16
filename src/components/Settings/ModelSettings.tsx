@@ -200,7 +200,7 @@ export const ModelSettings: React.FC<ModelSettingsProps> = ({
   const canSave = !!(endpointProvider && endpointModel && apiKey.trim())
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
+    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="settings-panel-wide" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <div className="model-settings-tabs">

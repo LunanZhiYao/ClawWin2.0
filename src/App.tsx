@@ -1074,7 +1074,7 @@ function App() {
       </div>
 
       {showSettings && (
-        <div className="settings-overlay" onClick={() => setShowSettings(false)}>
+        <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
           <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
             <div className="settings-header">
               <h2>设置</h2>

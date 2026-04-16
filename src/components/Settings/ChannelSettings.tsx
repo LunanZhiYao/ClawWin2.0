@@ -235,7 +235,7 @@ export function ChannelSettings({ onClose, onSaved, gatewayClient }: ChannelSett
 
   if (loading) {
     return (
-      <div className="settings-overlay" onClick={onClose}>
+      <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
         <div className="settings-panel-wide" onClick={(e) => e.stopPropagation()}>
           <div className="settings-header">
             <h2>消息渠道</h2>
@@ -257,7 +257,7 @@ export function ChannelSettings({ onClose, onSaved, gatewayClient }: ChannelSett
   }
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
+    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="settings-panel-wide" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <h2>消息渠道</h2>
@@ -440,7 +440,7 @@ export function ChannelSettings({ onClose, onSaved, gatewayClient }: ChannelSett
 
           {/* 配置对话框 */}
           {editingDef && (
-            <div className="channel-dialog-overlay" onClick={handleDialogCancel}>
+            <div className="channel-dialog-overlay" onClick={(e) => e.stopPropagation()}>
               <div className="channel-dialog" onClick={(e) => e.stopPropagation()}>
                 <div className="channel-dialog-header">
                   <span className="channel-icon"><editingDef.logo /></span>
@@ -483,7 +483,7 @@ export function ChannelSettings({ onClose, onSaved, gatewayClient }: ChannelSett
           )}
           {/* 教程弹窗 */}
           {tutorialChannel && tutorialChannel.tutorialSteps && (
-            <div className="channel-dialog-overlay" onClick={() => { setTutorialChannel(null); setShowPermJson(false); setPermCopied(false) }}>
+            <div className="channel-dialog-overlay" onClick={(e) => e.stopPropagation()}>
               <div className="channel-dialog channel-tutorial-dialog" onClick={(e) => e.stopPropagation()}>
                 <div className="channel-dialog-header">
                   <span className="channel-icon"><tutorialChannel.logo /></span>
@@ -537,7 +537,7 @@ export function ChannelSettings({ onClose, onSaved, gatewayClient }: ChannelSett
           )}
           {/* WhatsApp QR 码弹窗 */}
           {showQrDialog && (
-            <div className="channel-dialog-overlay" onClick={() => setShowQrDialog(false)}>
+            <div className="channel-dialog-overlay" onClick={(e) => e.stopPropagation()}>
               <div className="channel-dialog whatsapp-qr-dialog" onClick={(e) => e.stopPropagation()}>
                 <div className="channel-dialog-header">
                   <svg viewBox="0 0 24 24" width="28" height="28" fill="none">

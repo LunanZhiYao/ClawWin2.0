@@ -219,7 +219,7 @@ function CronJobForm({ initialData, onSave, onCancel }: CronJobFormProps) {
   }, [form, onSave])
 
   return (
-    <div className="channel-dialog-overlay" onClick={onCancel}>
+    <div className="channel-dialog-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="channel-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="channel-dialog-header">
           <h3>{initialData ? '编辑任务' : '新建任务'}</h3>
@@ -736,7 +736,7 @@ export function CronManager({ client, connected, onClose }: CronManagerProps) {
   }, [cron])
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
+    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="settings-panel-wide" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <h2>定时任务</h2>

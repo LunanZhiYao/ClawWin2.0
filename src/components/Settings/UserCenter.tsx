@@ -258,7 +258,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({ onClose, onCwwStateChang
   }, [token, rechargeAmount, email, nickname, onCwwStateChange])
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
+    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="user-center-panel" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <h2>用户中心</h2>

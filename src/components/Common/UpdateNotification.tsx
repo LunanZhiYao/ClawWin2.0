@@ -111,13 +111,8 @@ export function UpdateNotification({ info, onClose, onBackground, initialStage }
     onBackground?.()
   }
 
-  // 下载中不允许点击遮罩关闭
-  const handleOverlayClick = () => {
-    if (stage !== 'downloading') onClose()
-  }
-
   return (
-    <div className="settings-overlay" onClick={handleOverlayClick}>
+    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="update-dialog" onClick={e => e.stopPropagation()}>
         <div className="update-dialog-header">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00A2E0" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

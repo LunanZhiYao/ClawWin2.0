@@ -467,13 +467,8 @@ function setupIPC() {
         screenshotImageDataUrl = ''
       })
 
-      // 失焦自动取消
-      screenshotWin.on('blur', () => {
-        if (screenshotWin) {
-          screenshotWin.close()
-          screenshotWin = null
-        }
-      })
+      // 注意：不要在失焦(点击窗口外/切换焦点)时自动关闭
+      // 关闭仅由渲染进程显式触发（confirm/cancel）
 
       return true
     } catch {

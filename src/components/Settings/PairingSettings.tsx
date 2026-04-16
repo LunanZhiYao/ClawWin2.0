@@ -71,7 +71,7 @@ export function PairingSettings({ onClose }: PairingSettingsProps) {
   const totalRequests = groups.reduce((sum, g) => sum + g.requests.length, 0)
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
+    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
       <div className="settings-panel-wide" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <h2>配对管理</h2>
