@@ -1,5 +1,7 @@
 import { abortSignalAfterMs, credentialFetchTimeoutMs } from './timing.js'
-import { getCredentialEndpoint, readAccessToken, getCredentialEnvHint } from './env.js'
+
+const CREDENTIAL_API_BASE_URL = 'https://lnqy-server.shouhuisoft.com/api/v1'
+const DEFAULT_CREDENTIALS_PATH = '/integrations/credentials'
 
 export interface IntegrationCredentialResolverOptions<TShape extends Record<string, string>> {
   endpoint?: string
@@ -14,9 +16,9 @@ const integrationConfigInflight = new Map<string, Promise<Record<string, string>
 export async function resolveIntegrationCredentials<TShape extends Record<string, string>>(
   options: IntegrationCredentialResolverOptions<TShape>,
 ): Promise<TShape> {
-  const endpoint = getCredentialEndpoint(options.endpoint)
+  const endpoint = resolveCredentialEndpoint(options.endpoint)
   if (!endpoint) {
-    throw new Error(`无法请求凭证接口：请设置 ${getCredentialEnvHint()}。`)
+    throw new Error(`无法请求凭证接口：请设置插件配置 apiKeyEndpoint，或使用默认路径 ${DEFAULT_CREDENTIALS_PATH}。`)
   }
 
   const accessToken = readAccessToken()
@@ -95,6 +97,22 @@ async function requestCredentials(
     throw new Error(envelope.msg ?? `拉取凭证失败: 业务码 ${envelope.code}`)
   }
   return parseCredentialPayload(data)
+}
+
+function resolveCredentialEndpoint(explicitEndpoint?: string): string | null {
+  const raw = explicitEndpoint?.trim() || DEFAULT_CREDENTIALS_PATH
+  if (!raw) return null
+  if (/^https?:\/\//i.test(raw)) return raw
+
+  const base = CREDENTIAL_API_BASE_URL.replace(/\/$/, '')
+  if (!base) return null
+  const apiPath = raw.startsWith('/') ? raw : `/${raw}`
+  return `${base}${apiPath}`
+}
+
+function readAccessToken(): string | null {
+  const token = process.env.ACCESS_TOKEN?.trim()
+  return token || null
 }
 
 function fillTargetConfigFromPayload<TShape extends Record<string, string>>(

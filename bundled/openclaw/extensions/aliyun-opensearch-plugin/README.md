@@ -8,7 +8,7 @@
 - ✅ **智能查询重写** - 使用 LLM 优化搜索查询词，提高搜索质量
 - ✅ **多轮对话上下文** - 支持传入对话历史，实现上下文感知搜索
 - ✅ **多种内容类型** - 支持 `snippet`（简短摘要）和 `summary`（详细摘要）
-- ✅ **灵活配置** - 支持环境变量和配置文件两种方式
+- ✅ **灵活配置** - 支持通过后端 integrations 凭证接口统一下发配置
 - ✅ **详细错误处理** - 提供清晰的错误提示和故障排查建议
 - ✅ **使用统计** - 返回 token 使用情况，便于成本控制
 
@@ -22,44 +22,12 @@ OpenClaw 启动时会自动加载此插件。
 
 ## 配置
 
-### 环境变量方式（推荐）
+本插件默认通过后端 integrations 凭证接口获取 `api_key` / `host` / `workspace` / `service_id`，并在内存中做缓存。
 
-在 ClawWin 项目的 `.env` 文件中配置：
-
-```env
-# 阿里云 OpenSearch API Key（必填）
-ALIYUN_OPENSEARCH_API_KEY=OS-xxxxxxxxxxxx
-
-# API 服务地址（可选，默认为华东2上海）
-ALIYUN_OPENSEARCH_HOST=http://opensearch.cn-shanghai.aliyuncs.com
-```
-
-### 配置文件方式（可选）
-
-在 `~/.openclaw/openclaw.json` 中添加：
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "aliyun-opensearch": {
-        "enabled": true,
-        "config": {
-          "apiKey": "OS-xxxxxxxxxxxx",
-          "host": "http://opensearch.cn-shanghai.aliyuncs.com",
-          "workspace": "default",
-          "serviceId": "ops-web-search-001",
-          "queryRewrite": true,
-          "contentType": "snippet",
-          "topK": 5
-        }
-      }
-    }
-  }
-}
-```
-
-**注意**：环境变量优先级高于配置文件。
+- **必须**：进程环境变量中有 `ACCESS_TOKEN`（登录后由宿主注入），用于请求后端凭证接口
+- **可选**：在插件配置中传 `apiKeyEndpoint`
+  - 留空时使用默认路径：`/api/v1/integrations/credentials`
+  - 可填完整 URL，或填相对路径（将拼接到内置后端基址）
 
 ## 获取 API Key
 
