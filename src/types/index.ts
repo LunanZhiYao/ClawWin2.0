@@ -4,6 +4,8 @@ interface ElectronGateway {
   start: () => Promise<void>
   stop: () => Promise<void>
   restart: () => Promise<void>
+  /** 在启动网关前透传 renderer 的构建环境变量到主进程与子进程 */
+  setExtraEnvs: (extraEnvs: Record<string, unknown> | null) => Promise<{ ok: boolean; error?: string }>
   getToken: () => Promise<string | null>
   getPort: () => Promise<number>
   signDeviceAuth: (params: {

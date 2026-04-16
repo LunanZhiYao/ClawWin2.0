@@ -404,6 +404,19 @@ function setupIPC() {
     }
   })
 
+  /**
+   * 注入额外环境变量（例如渲染进程的 import.meta.env）。
+   * 设计原因：主进程启动阶段拿不到 Vite 渲染上下文，需由 renderer 主动透传。
+   */
+  ipcMain.handle('gateway:setExtraEnvs', (_event, extraEnvs: Record<string, unknown> | null) => {
+    try {
+      gatewayManager?.setExtraEnvs(extraEnvs ?? {})
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ── 区域截屏 ──────────────────────────────────────────
   let screenshotWin: BrowserWindow | null = null
   let screenshotImageDataUrl = ''
@@ -1401,8 +1414,12 @@ app.whenReady().then(async () => {
     ollamaBaseDir = exeDir
   }
   ollamaManager = new OllamaManager(ollamaBaseDir)
+  // 先创建窗口，确保 renderer 能尽快调用 gateway:setExtraEnvs
+  createWindow()
+  ollamaManager?.setMainWindow(mainWindow)
+  createTray()
 
-  // Auto-start gateway if not first run (before creating window so state is ready)
+  // Auto-start gateway if not first run
   if (!isFirstRun()) {
     // 自动同步 auth-profiles 到 agent 目录（修复旧版本只写全局文件的 bug）
     try {
@@ -1582,10 +1599,6 @@ app.whenReady().then(async () => {
       }
     } catch { /* ignore config read errors */ }
   }
-
-  createWindow()
-  ollamaManager?.setMainWindow(mainWindow)
-  createTray()
 
   // 启动后检查更新（尊重用户的跳过更新设置）
   mainWindow?.webContents.on('did-finish-load', () => {

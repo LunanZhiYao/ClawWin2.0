@@ -125,6 +125,16 @@ function App() {
   const hydrateFromDiskRef = useRef(setup.hydrateFromOpenclawDisk)
   hydrateFromDiskRef.current = setup.hydrateFromOpenclawDisk
 
+  useEffect(() => {
+    /**
+     * 在 renderer 启动后把 Vite 注入的构建环境变量同步到主进程。
+     * 这里采用运行时 IPC 注入，避免主进程初始化阶段拿不到 import.meta.env 的问题。
+     */
+    void window.electronAPI.gateway.setExtraEnvs(import.meta.env).catch((err) => {
+      console.warn('[gateway] 同步 extra envs 失败:', err)
+    })
+  }, [])
+
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)

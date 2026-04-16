@@ -31,6 +31,8 @@ export class GatewayManager {
   private isRestarting = false
   private configMigrator: ConfigMigrator
   private gatewayLogs: string[] = []
+  /** 注入到 Gateway 子进程的额外环境变量（如渲染进程的 import.meta.env） */
+  private extraEnvs: Record<string, string> = {}
   /** 运行时默认模型 API Key，仅驻留主进程内存 */
   private runtimeDefaultApiKey: string | null = null
   /** 登录态 access token，仅驻留主进程内存，用于注入网关子进程环境 */
@@ -74,6 +76,22 @@ export class GatewayManager {
 
   getRuntimeAccessToken(): string | null {
     return this.runtimeAccessToken
+  }
+
+  /**
+   * 设置/覆盖 extra env（仅主进程内存，不落盘）。
+   * 子进程环境变量要求为 string，这里统一做空值过滤与字符串化。
+   */
+  setExtraEnvs(extraEnvs: Record<string, unknown> | null | undefined) {
+
+    this.log('info', `VITE-ENV:${JSON.stringify(extraEnvs)}`)
+
+    const next: Record<string, string> = {}
+    for (const [key, value] of Object.entries(extraEnvs ?? {})) {
+      if (value === undefined || value === null) continue
+      next[key] = String(value)
+    }
+    this.extraEnvs = next
   }
 
   // ========== 公开方法（通过锁串行化） ==========
@@ -315,6 +333,8 @@ export class GatewayManager {
       OPENCLAW_NO_RESPAWN: '1',
       OPENCLAW_NODE_OPTIONS_READY: '1',
       OPENCLAW_GATEWAY_PORT: String(this.opts.port),
+      // 合并运行时注入环境变量，允许渲染进程把构建态变量透传给网关进程
+      ...this.extraEnvs,
     }
 
     if (token) {

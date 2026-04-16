@@ -20,6 +20,9 @@ const electronAPI = {
     start: (): Promise<void> => ipcRenderer.invoke('gateway:start'),
     stop: (): Promise<void> => ipcRenderer.invoke('gateway:stop'),
     restart: (): Promise<void> => ipcRenderer.invoke('gateway:restart'),
+    /** 在启动网关前透传 renderer 的构建环境变量到主进程与子进程 */
+    setExtraEnvs: (extraEnvs: Record<string, unknown> | null): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('gateway:setExtraEnvs', extraEnvs),
     getToken: (): Promise<string | null> => ipcRenderer.invoke('gateway:getToken'),
     getPort: (): Promise<number> => ipcRenderer.invoke('gateway:getPort'),
     signDeviceAuth: (params: {
