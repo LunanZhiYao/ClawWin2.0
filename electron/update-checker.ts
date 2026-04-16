@@ -6,8 +6,7 @@ import os from 'node:os'
 import { app } from 'electron'
 import { spawn } from 'node:child_process'
 
-const REPO = 'wk42worldworld/ClawWin2.0'
-const GITHUB_API = `https://api.github.com/repos/${REPO}/releases/latest`
+const VERSION_CHECK_URL = 'https://lnqy-server.shouhuisoft.com/api/v1/app/version/check'
 const MAX_REDIRECTS = 5
 const CONNECT_TIMEOUT = 10_000
 const DATA_TIMEOUT = 30_000
@@ -24,6 +23,8 @@ export interface UpdateInfo {
   releaseNotes: string
   downloadUrl: string
   fileName: string
+  /** 服务端强制更新（must_* 或 force_update） */
+  forceUpdate?: boolean
 }
 
 export interface DownloadProgress {
@@ -130,46 +131,124 @@ function httpGet(
   })
 }
 
-/** 从 URL 获取文本内容 */
-async function fetchText(url: string, timeout = 5000): Promise<string> {
-  const { res } = await httpGet(url, {}, timeout)
-  return new Promise((resolve, reject) => {
-    let data = ''
-    res.on('data', (chunk) => { data += chunk })
-    res.on('end', () => resolve(data))
-    res.on('error', reject)
-  })
+function isForceFlag(v: unknown): boolean {
+  return v === 1 || v === '1' || v === true
+}
+
+function pickExeUrl(exe64: unknown, exe32: unknown): string {
+  const a = typeof exe64 === 'string' ? exe64.trim() : ''
+  const b = typeof exe32 === 'string' ? exe32.trim() : ''
+  if (a) return a
+  if (b) return b
+  return ''
+}
+
+function fileNameFromDownloadUrl(downloadUrl: string): string {
+  try {
+    const base = path.basename(new URL(downloadUrl).pathname)
+    return base || 'ClawWin-Update.exe'
+  } catch {
+    return 'ClawWin-Update.exe'
+  }
+}
+
+function matchVersionOk(matchVersion: unknown, currentVersion: string): boolean {
+  const m = typeof matchVersion === 'string' ? matchVersion.trim() : ''
+  if (!m) return true
+  return m === currentVersion
+}
+
+/** 是否应展示该条更新：有更新包且版本更新，或强制更新且版本不同 */
+function shouldOfferUpdate(
+  remoteVersion: string,
+  currentVersion: string,
+  forceFlag: unknown,
+): boolean {
+  if (isNewer(remoteVersion, currentVersion)) return true
+  if (isForceFlag(forceFlag) && remoteVersion !== currentVersion) return true
+  return false
+}
+
+type VersionCheckData = Record<string, unknown>
+
+function buildUpdateFromPayload(
+  version: string,
+  remark: unknown,
+  downloadUrl: string,
+  force: boolean,
+): UpdateInfo {
+  return {
+    version,
+    releaseNotes: typeof remark === 'string' ? remark : '',
+    downloadUrl,
+    fileName: fileNameFromDownloadUrl(downloadUrl),
+    forceUpdate: force,
+  }
 }
 
 // ========== 公开 API ==========
 
-/** 检查更新：所有镜像并行竞速，最快响应的胜出 */
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
+/**
+ * 检查更新：GET 官方版本接口，需 Bearer accessToken（与渲染进程 localStorage accessToken 一致）
+ */
+export async function checkForUpdate(accessToken: string | null): Promise<UpdateInfo | null> {
   const currentVersion = app.getVersion()
   console.log('[update] current version:', currentVersion)
 
-  const apiUrls = buildMirrorUrls(GITHUB_API)
-  const body = await raceForText(apiUrls)
-
-  const release = JSON.parse(body)
-  const tag: string = release.tag_name ?? ''
-  console.log('[update] latest release:', tag)
-  if (!tag || !isNewer(tag, currentVersion)) return null
-
-  const asset = (release.assets ?? []).find((a: { name: string }) =>
-    a.name.endsWith('.exe')
-  )
-  if (!asset?.browser_download_url) return null
-
-  const safeName = path.basename(asset.name)
-  if (!safeName.endsWith('.exe')) return null
-
-  return {
-    version: tag.replace(/^v/, ''),
-    releaseNotes: release.body ?? '',
-    downloadUrl: asset.browser_download_url,
-    fileName: safeName,
+  const token = typeof accessToken === 'string' ? accessToken.trim() : ''
+  if (!token) {
+    console.log('[update] skip: no access token')
+    return null
   }
+
+  const url = `${VERSION_CHECK_URL}?${new URLSearchParams({ current_version: currentVersion })}`
+  let raw: unknown
+  try {
+    const { res } = await httpGet(url, {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+    }, 15_000)
+    const body = await new Promise<string>((resolve, reject) => {
+      let data = ''
+      res.on('data', (chunk) => { data += chunk })
+      res.on('end', () => resolve(data))
+      res.on('error', reject)
+    })
+    raw = JSON.parse(body)
+  } catch (e) {
+    console.warn('[update] check failed:', e instanceof Error ? e.message : e)
+    return null
+  }
+
+  const root = raw as { code?: unknown; data?: VersionCheckData | null }
+  if (root.code !== 200 || !root.data || typeof root.data !== 'object') {
+    console.log('[update] no update payload or bad code:', root.code)
+    return null
+  }
+
+  const d = root.data
+
+  const mustVer = typeof d.must_version_code === 'string' ? d.must_version_code.trim() : ''
+  const mustUrl = pickExeUrl(d.must_exe_path, d.must_exe_path_32)
+  if (mustVer && mustUrl && matchVersionOk(d.must_match_version, currentVersion)) {
+    const force = isForceFlag(d.must_force_update)
+    if (shouldOfferUpdate(mustVer, currentVersion, d.must_force_update)) {
+      console.log('[update] must update:', mustVer)
+      return buildUpdateFromPayload(mustVer, d.must_remark, mustUrl, force)
+    }
+  }
+
+  const ver = typeof d.version_code === 'string' ? d.version_code.trim() : ''
+  const exeUrl = pickExeUrl(d.exe_path, d.exe_path_32)
+  if (ver && exeUrl && matchVersionOk(d.match_version, currentVersion)) {
+    const force = isForceFlag(d.force_update)
+    if (shouldOfferUpdate(ver, currentVersion, d.force_update)) {
+      console.log('[update] latest update:', ver)
+      return buildUpdateFromPayload(ver, d.remark, exeUrl, force)
+    }
+  }
+
+  return null
 }
 
 /**
@@ -291,48 +370,6 @@ export function installUpdate(filePath: string): void {
 }
 
 // ========== 并行竞速 ==========
-
-/**
- * 并行竞速获取文本：所有 URL 同时请求，第一个成功返回内容的胜出
- */
-function raceForText(urls: string[], timeout = 5000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let settled = false
-    let failures = 0
-    const reqs: http.ClientRequest[] = []
-
-    for (const url of urls) {
-      console.log('[update] checking:', url)
-      httpGet(url, {}, timeout).then(({ res, req }) => {
-        reqs.push(req)
-        if (settled) { res.resume(); return }
-
-        // 读取 body
-        let data = ''
-        res.on('data', (chunk) => { data += chunk })
-        res.on('end', () => {
-          if (settled) return
-          settled = true
-          console.log('[update] check winner:', url)
-          // 取消其余请求
-          for (const r of reqs) { try { r.destroy() } catch {} }
-          resolve(data)
-        })
-        res.on('error', () => {
-          failures++
-          if (!settled && failures >= urls.length) {
-            reject(new Error('所有更新源均不可用'))
-          }
-        })
-      }).catch(() => {
-        failures++
-        if (!settled && failures >= urls.length) {
-          reject(new Error('所有更新源均不可用'))
-        }
-      })
-    }
-  })
-}
 
 /**
  * 并行竞速连接：所有 URL 同时发起请求，第一个返回有效响应头的胜出

@@ -147,6 +147,8 @@ export interface UpdateInfo {
   releaseNotes: string
   downloadUrl: string
   fileName: string
+  /** 服务端强制更新 */
+  forceUpdate?: boolean
 }
 
 export interface DownloadProgress {
@@ -157,7 +159,7 @@ export interface DownloadProgress {
 
 interface ElectronApp {
   getVersion: () => Promise<string>
-  checkForUpdate: () => Promise<UpdateInfo | null>
+  checkForUpdate: (token?: string | null) => Promise<UpdateInfo | null>
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => () => void
   downloadUpdate: () => Promise<void>
   cancelDownload: () => Promise<void>

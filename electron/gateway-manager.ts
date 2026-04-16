@@ -72,6 +72,10 @@ export class GatewayManager {
     this.runtimeAccessToken = normalized || null
   }
 
+  getRuntimeAccessToken(): string | null {
+    return this.runtimeAccessToken
+  }
+
   // ========== 公开方法（通过锁串行化） ==========
 
   async start(): Promise<void> {

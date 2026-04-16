@@ -9,7 +9,7 @@ import { signDeviceAuth, type DeviceAuthParams } from './device-identity'
 import { scanSkills, getSkillsConfig, saveSkillsConfig, clearBinCache } from './skills-scanner'
 import { installSkillDep, canInstallSkill, getSkillInstallInfo } from './skills-installer'
 import { OllamaManager } from './ollama-manager'
-import { downloadUpdate, installUpdate, cancelDownload, type UpdateInfo } from './update-checker'
+import { downloadUpdate, installUpdate, cancelDownload, checkForUpdate, type UpdateInfo } from './update-checker'
 import { listAllChannelPairings, approvePairingCode, getEnabledChannels } from './pairing-manager'
 import { generateClaudeMd } from './claude-md-generator'
 
@@ -322,13 +322,13 @@ function setupIPC() {
     return app.getVersion()
   })
 
-  // Update checker
-  ipcMain.handle('app:checkForUpdate', async () => {
-
-    // const info = await checkForUpdate()
-    // if (info) pendingUpdateInfo = info
-    // return info
-    return null;
+  // Update checker（Bearer token 与渲染进程 localStorage accessToken 一致，可由 IPC 传入或回退到网关运行时 token）
+  ipcMain.handle('app:checkForUpdate', async (_event, token?: string | null) => {
+    const t = typeof token === 'string' ? token.trim() : ''
+    const accessToken = t || (gatewayManager?.getRuntimeAccessToken() ?? null)
+    const info = await checkForUpdate(accessToken)
+    if (info) pendingUpdateInfo = info
+    return info
   })
   ipcMain.handle('app:downloadUpdate', async () => {
     if (!pendingUpdateInfo) throw new Error('No update available')

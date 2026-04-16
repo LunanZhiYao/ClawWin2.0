@@ -144,7 +144,9 @@ export function UpdateNotification({ info, onClose, onBackground, initialStage }
               )}
             </div>
             <div className="update-dialog-actions">
-              <button className="btn-secondary" onClick={onClose}>暂不更新</button>
+              {!info.forceUpdate && (
+                <button className="btn-secondary" onClick={onClose}>暂不更新</button>
+              )}
               <button className="btn-update" onClick={handleDownload}>立即更新</button>
             </div>
           </>

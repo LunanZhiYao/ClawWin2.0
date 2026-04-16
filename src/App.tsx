@@ -449,9 +449,10 @@ function App() {
       setUpdateDialogVisible(true)
       setBgDownloadDone(false)
     })
+    
     // 主动检查一次（防止后端事件在 React 挂载前已发送而被错过）
     const timer = setTimeout(() => {
-      window.electronAPI.app.checkForUpdate().then((info) => {
+      window.electronAPI.app.checkForUpdate(localStorage.getItem('accessToken')).then((info) => {
         if (info) {
           setUpdateInfo(info)
           setUpdateDialogVisible(true)
@@ -1111,7 +1112,7 @@ function App() {
                         setUpdateChecking(true)
                         setUpdateCheckResult(null)
                         try {
-                          const info = await window.electronAPI.app.checkForUpdate()
+                          const info = await window.electronAPI.app.checkForUpdate(localStorage.getItem('accessToken'))
                           if (info) {
                             setUpdateInfo(info)
                             setUpdateDialogVisible(true)

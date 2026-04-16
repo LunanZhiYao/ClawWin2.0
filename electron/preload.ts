@@ -74,9 +74,10 @@ const electronAPI = {
   // App
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
-    checkForUpdate: (): Promise<{ version: string; releaseNotes: string; downloadUrl: string; fileName: string } | null> => ipcRenderer.invoke('app:checkForUpdate'),
-    onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string; downloadUrl: string; fileName: string }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, info: { version: string; releaseNotes: string; downloadUrl: string; fileName: string }) => callback(info)
+    checkForUpdate: (token?: string | null): Promise<{ version: string; releaseNotes: string; downloadUrl: string; fileName: string; forceUpdate?: boolean } | null> =>
+      ipcRenderer.invoke('app:checkForUpdate', token ?? null),
+    onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string; downloadUrl: string; fileName: string; forceUpdate?: boolean }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, info: { version: string; releaseNotes: string; downloadUrl: string; fileName: string; forceUpdate?: boolean }) => callback(info)
       ipcRenderer.on('app:updateAvailable', handler)
       return () => ipcRenderer.removeListener('app:updateAvailable', handler)
     },
