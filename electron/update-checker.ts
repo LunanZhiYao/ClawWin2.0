@@ -179,6 +179,9 @@ export async function checkForUpdate(accessToken: string | null): Promise<Update
     return null
   }
 
+  // cancelDownload() 会把 cancelled 置为 true；httpGet 与下载共用该标志，不重置则后续检查更新会立刻失败并返回 null（像“没发请求”）
+  cancelled = false
+
   const url = `${VERSION_CHECK_URL}?${new URLSearchParams({ current_version: currentVersion })}`
   let raw: unknown
   try {
