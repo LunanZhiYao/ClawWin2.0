@@ -19,7 +19,7 @@ const aliyunOpenSearchPlugin = {
       integrationName: {
         type: 'string',
         description:
-          '后端查询参数 name（如 aliyun）。密钥与 host 等均来自后端响应，插件仅做内存缓存。',
+          '后端查询参数 name（如 aliyun）。凭证 JSON 含 api_key、host、workspace、service_id，以及可选的 content_type（默认 summary）、top_k（默认 5，1–10）；插件仅做内存缓存。',
         default: 'aliyun',
       },
       queryRewrite: {
@@ -30,12 +30,14 @@ const aliyunOpenSearchPlugin = {
       contentType: {
         type: 'string',
         enum: ['snippet', 'summary'],
-        description: '默认内容类型',
+        description:
+          '默认内容类型；未在工具调用中指定时生效。优先于后端凭证中的 content_type；均未设置时为 summary。',
         default: 'summary',
       },
       topK: {
         type: 'number',
-        description: '默认返回结果数量（1-10）',
+        description:
+          '默认返回结果数量（1-10）；未在工具调用中指定时生效。优先于后端凭证中的 top_k；均未设置时为 5。',
         default: 5,
         minimum: 1,
         maximum: 10,

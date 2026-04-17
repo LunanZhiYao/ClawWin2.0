@@ -116,10 +116,27 @@ function parseCredentialPayload(data: unknown): Record<string, string> {
       ? (root.data as Record<string, unknown>)
       : root
   const toText = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  const contentTypeRaw = toText(inner.content_type) || toText(inner.contentType)
+  const content_type =
+    contentTypeRaw === 'snippet' || contentTypeRaw === 'summary' ? contentTypeRaw : 'summary'
   return {
     api_key: toText(inner.api_key) || toText(inner.apiKey) || toText(inner.key),
     host: toText(inner.host) || toText(inner.opensearch_host),
     workspace: toText(inner.workspace),
     service_id: toText(inner.service_id) || toText(inner.serviceId),
+    content_type,
+    top_k: normalizeTopKString(inner.top_k ?? inner.topK),
   }
+}
+
+function normalizeTopKString(v: unknown): string {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const n = Math.trunc(v)
+    if (n >= 1 && n <= 10) return String(n)
+  }
+  if (typeof v === 'string' && v.trim()) {
+    const n = parseInt(v.trim(), 10)
+    if (Number.isFinite(n) && n >= 1 && n <= 10) return String(n)
+  }
+  return '5'
 }

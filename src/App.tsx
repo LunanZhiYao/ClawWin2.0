@@ -137,6 +137,7 @@ function App() {
         exportEnvs[key] = value as string
       }
     }
+    console.log("[gateway:info] 注入环境变量:",JSON.stringify(Object.keys(exportEnvs)))
     void window.electronAPI.gateway.setExtraEnvs(exportEnvs).catch((err) => {
       console.warn('[gateway] 同步 extra envs 失败:', err)
     })

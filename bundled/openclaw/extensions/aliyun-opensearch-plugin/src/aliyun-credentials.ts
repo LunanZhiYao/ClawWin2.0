@@ -6,6 +6,8 @@ const aliyunSearchConfig = {
   host: '',
   workspace: '',
   service_id: '',
+  content_type: 'summary',
+  top_k: '5',
 }
 
 export async function resolveAliyunCredentials(
@@ -20,7 +22,7 @@ export async function resolveAliyunCredentials(
     endpoint: config.apiKeyEndpoint,
     integrationName,
     targetConfig: aliyunSearchConfig,
-    requiredFields: ['api_key', 'host', 'workspace', 'service_id'],
+    requiredFields: ['api_key', 'host', 'workspace', 'service_id', 'content_type', 'top_k'],
   })
   return toCredentialResult(runtimeConfig)
 }
@@ -41,6 +43,20 @@ function toCredentialResult(config: typeof aliyunSearchConfig): { apiKey: string
       host: config.host,
       workspace: config.workspace,
       serviceId: config.service_id,
+      contentType: normalizeContentType(config.content_type),
+      topK: normalizeTopK(config.top_k),
     },
   }
+}
+
+function normalizeContentType(raw: string | undefined): 'snippet' | 'summary' {
+  const t = raw?.trim()
+  if (t === 'snippet' || t === 'summary') return t
+  return 'summary'
+}
+
+function normalizeTopK(raw: string | undefined): number {
+  const n = parseInt(raw?.trim() || '5', 10)
+  if (Number.isFinite(n) && n >= 1 && n <= 10) return n
+  return 5
 }

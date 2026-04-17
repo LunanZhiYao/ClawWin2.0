@@ -21,7 +21,7 @@ export function createAliyunSearchTool(config: AliyunOpenSearchConfig): AnyAgent
         top_k: {
           type: 'number',
           description: '返回结果数量（1-10），默认为 5',
-          default: config.topK || 5,
+          default: config.topK ?? 5,
         },
         query_rewrite: {
           type: 'boolean',
@@ -34,7 +34,7 @@ export function createAliyunSearchTool(config: AliyunOpenSearchConfig): AnyAgent
           description:
             '搜索结果内容类型。snippet: 网页内容的简短描述（速度快）；' +
             'summary: 网页内容的文本摘要（内容更详细，耗时较长）',
-          default: config.contentType || 'snippet',
+          default: config.contentType ?? 'summary',
         },
         history: {
           type: 'array',
@@ -57,7 +57,7 @@ export function createAliyunSearchTool(config: AliyunOpenSearchConfig): AnyAgent
       const { apiKey, extras } = await resolveAliyunCredentials(config)
       const { host, workspace, serviceId } = normalizeConnectionConfig(extras)
       const url = `${host.replace(/\/$/, '')}/v3/openapi/workspaces/${workspace}/web-search/${serviceId}`
-      const requestBody = buildSearchRequestBody(params, config)
+      const requestBody = buildSearchRequestBody(params, config, extras)
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -90,12 +90,18 @@ function normalizeConnectionConfig(extras: CachedExtras): { host: string; worksp
   return { host, workspace, serviceId }
 }
 
-function buildSearchRequestBody(params: any, config: AliyunOpenSearchConfig): Record<string, any> {
+function buildSearchRequestBody(
+  params: any,
+  config: AliyunOpenSearchConfig,
+  extras: CachedExtras,
+): Record<string, any> {
+  const defaultTopK = config.topK ?? extras.topK ?? 5
+  const defaultContentType = config.contentType ?? extras.contentType ?? 'summary'
   return {
     query: params.query,
     query_rewrite: params.query_rewrite !== undefined ? params.query_rewrite : config.queryRewrite !== false,
-    top_k: Math.min(Math.max(params.top_k ?? config.topK ?? 5, 1), 10),
-    content_type: params.content_type || config.contentType || 'summary',
+    top_k: Math.min(Math.max(params.top_k ?? defaultTopK, 1), 10),
+    content_type: params.content_type || defaultContentType,
     history: params.history && Array.isArray(params.history) ? params.history : [],
   }
 }
