@@ -2,7 +2,6 @@ import https from 'node:https'
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { app } from 'electron'
 import { spawn } from 'node:child_process'
 
@@ -10,13 +9,6 @@ const VERSION_CHECK_URL = 'https://lnqy-server.shouhuisoft.com/api/v1/app/versio
 const MAX_REDIRECTS = 5
 const CONNECT_TIMEOUT = 10_000
 const DATA_TIMEOUT = 30_000
-
-// 内置 GitHub 镜像前缀
-const BUILTIN_MIRRORS = [
-  'https://mirror.ghproxy.com/',
-  'https://ghgo.xyz/',
-  'https://gh.llkk.cc/',
-]
 
 export interface UpdateInfo {
   version: string
@@ -37,8 +29,6 @@ export interface DownloadProgress {
 
 let cancelled = false
 let activeReq: http.ClientRequest | null = null
-// 竞速模式下所有进行中的请求，用于取消
-let racingReqs: http.ClientRequest[] = []
 
 // ========== 工具函数 ==========
 
@@ -54,34 +44,18 @@ function isNewer(remote: string, local: string): boolean {
   return false
 }
 
-/** 读取用户配置的自定义镜像地址 */
-function getCustomMirror(): string | null {
+/**
+ * 规范化下载 URL：合并路径中连续斜杠（如 https://host//uploadfiles/...），
+ * 否则 pathname 会变成 //uploadfiles/...，部分 CDN 会返回 404。
+ */
+function normalizeDownloadUrl(url: string): string {
   try {
-    const cfgPath = path.join(os.homedir(), '.openclaw', 'clawwin-ui.json')
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))
-    const url = cfg.updateMirrorUrl
-    return typeof url === 'string' && url.trim() ? url.trim() : null
-  } catch { return null }
-}
-
-/** 构建镜像 URL 列表：自定义镜像 > 内置镜像 > 直连 */
-function buildMirrorUrls(directUrl: string): string[] {
-  const urls: string[] = []
-  const custom = getCustomMirror()
-
-  if (custom) {
-    const prefix = custom.endsWith('/') ? custom : custom + '/'
-    urls.push(prefix + directUrl)
+    const u = new URL(url.trim())
+    u.pathname = u.pathname.replace(/\/{2,}/g, '/')
+    return u.href
+  } catch {
+    return url.trim()
   }
-
-  if (directUrl.includes('github.com') || directUrl.includes('api.github.com')) {
-    for (const mirror of BUILTIN_MIRRORS) {
-      urls.push(mirror + directUrl)
-    }
-  }
-
-  urls.push(directUrl)
-  return urls
 }
 
 /**
@@ -106,10 +80,13 @@ function httpGet(
       }, (res) => {
         clearTimeout(timer)
 
-        if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+        const redirect = res.statusCode === 301 || res.statusCode === 302
+          || res.statusCode === 303 || res.statusCode === 307 || res.statusCode === 308
+        if (redirect && res.headers.location) {
           res.resume()
           if (--redirects <= 0) { reject(new Error('重定向次数过多')); return }
-          request(res.headers.location)
+          const next = new URL(res.headers.location, targetUrl).href
+          request(next)
           return
         }
 
@@ -177,11 +154,12 @@ function buildUpdateFromPayload(
   downloadUrl: string,
   force: boolean,
 ): UpdateInfo {
+  const url = normalizeDownloadUrl(downloadUrl)
   return {
     version,
     releaseNotes: typeof remark === 'string' ? remark : '',
-    downloadUrl,
-    fileName: fileNameFromDownloadUrl(downloadUrl),
+    downloadUrl: url,
+    fileName: fileNameFromDownloadUrl(url),
     forceUpdate: force,
   }
 }
@@ -230,30 +208,38 @@ export async function checkForUpdate(accessToken: string | null): Promise<Update
 
   const mustVer = typeof d.must_version_code === 'string' ? d.must_version_code.trim() : ''
   const mustUrl = pickExeUrl(d.must_exe_path, d.must_exe_path_32)
+
+  // 优先 must_*：仅当 must 版本高于当前时使用 must 包地址（与当前相同时不占用 must 通道）
   if (mustVer && mustUrl && matchVersionOk(d.must_match_version, currentVersion)) {
-    const force = isForceFlag(d.must_force_update)
-    if (shouldOfferUpdate(mustVer, currentVersion, d.must_force_update)) {
+    if (isNewer(mustVer, currentVersion) && shouldOfferUpdate(mustVer, currentVersion, d.must_force_update)) {
       console.log('[update] must update:', mustVer)
-      return buildUpdateFromPayload(mustVer, d.must_remark, mustUrl, force)
+      return buildUpdateFromPayload(mustVer, d.must_remark, mustUrl, isForceFlag(d.must_force_update))
     }
   }
 
   const ver = typeof d.version_code === 'string' ? d.version_code.trim() : ''
   const exeUrl = pickExeUrl(d.exe_path, d.exe_path_32)
-  if (ver && exeUrl && matchVersionOk(d.match_version, currentVersion)) {
-    const force = isForceFlag(d.force_update)
-    if (shouldOfferUpdate(ver, currentVersion, d.force_update)) {
-      console.log('[update] latest update:', ver)
-      return buildUpdateFromPayload(ver, d.remark, exeUrl, force)
-    }
+
+  // must_version_code 与当前相同（或当前已不低于 must、或缺少 must 包地址）时，才用 version_code + exe_path / exe_path_32
+  const canUseOptionalExe =
+    !mustVer || !isNewer(mustVer, currentVersion) || !mustUrl
+
+  if (
+    canUseOptionalExe &&
+    ver &&
+    exeUrl &&
+    matchVersionOk(d.match_version, currentVersion) &&
+    isNewer(ver, currentVersion)
+  ) {
+    console.log('[update] latest update:', ver)
+    return buildUpdateFromPayload(ver, d.remark, exeUrl, isForceFlag(d.force_update))
   }
 
   return null
 }
 
 /**
- * 下载更新：所有镜像并行竞速连接，最快响应的下载
- * 支持断点续传，支持取消
+ * 下载更新：直连接口返回的地址，支持断点续传与取消
  */
 export async function downloadUpdate(
   downloadUrl: string,
@@ -264,7 +250,7 @@ export async function downloadUpdate(
   activeReq = null
 
   const destPath = path.join(app.getPath('temp'), fileName)
-  const urls = buildMirrorUrls(downloadUrl)
+  const url = normalizeDownloadUrl(downloadUrl)
 
   // 断点续传：读取已下载的字节数
   let existingBytes = 0
@@ -276,24 +262,23 @@ export async function downloadUpdate(
     console.log('[update] resuming from byte', existingBytes)
   }
 
-  // 并行竞速：所有 URL 同时连接，第一个成功响应的胜出
-  let res: http.IncomingMessage, req: http.ClientRequest, url: string
+  let res: http.IncomingMessage, req: http.ClientRequest
   try {
-    ({ res, req, url } = await raceForResponse(urls, headers))
+    ({ res, req } = await httpGet(url, headers))
   } catch (err) {
-    // Range 请求全部失败（416 或服务器不支持），删除临时文件从头下载
+    // Range 失败（416 或服务器不支持），删除临时文件从头下载
     if (existingBytes > 0) {
       console.log('[update] range request failed, retrying from scratch')
       try { fs.unlinkSync(destPath) } catch { /* ignore */ }
       existingBytes = 0
       headers = {}
-      ;({ res, req, url } = await raceForResponse(urls, headers))
+      ;({ res, req } = await httpGet(url, headers))
     } else {
       throw err
     }
   }
   activeReq = req
-  console.log('[update] winner:', url)
+  console.log('[update] downloading:', url)
 
   // 服务器返回 206 = 支持续传，200 = 不支持，从头开始
   const isResume = res.statusCode === 206
@@ -353,11 +338,6 @@ export function cancelDownload(): void {
   cancelled = true
   activeReq?.destroy()
   activeReq = null
-  // 取消所有竞速中的请求
-  for (const req of racingReqs) {
-    try { req.destroy() } catch { /* ignore */ }
-  }
-  racingReqs = []
 }
 
 /** 启动安装程序并退出应用 */
@@ -367,48 +347,4 @@ export function installUpdate(filePath: string): void {
   }
   spawn(filePath, [], { detached: true, stdio: 'ignore' }).unref()
   app.quit()
-}
-
-// ========== 并行竞速 ==========
-
-/**
- * 并行竞速连接：所有 URL 同时发起请求，第一个返回有效响应头的胜出
- * 其余请求立即取消，仅用胜出的连接进行下载
- */
-function raceForResponse(
-  urls: string[],
-  headers: Record<string, string> = {},
-): Promise<{ res: http.IncomingMessage; req: http.ClientRequest; url: string }> {
-  return new Promise((resolve, reject) => {
-    if (cancelled) { reject(new Error('下载已取消')); return }
-
-    let settled = false
-    let failures = 0
-    racingReqs = []
-
-    for (const url of urls) {
-      console.log('[update] racing:', url)
-      httpGet(url, headers).then(({ res, req }) => {
-        if (settled) {
-          // 已有赢家，销毁这个迟到的连接
-          res.resume()
-          req.destroy()
-          return
-        }
-        settled = true
-        // 从竞速列表中移除赢家，销毁其余
-        racingReqs = racingReqs.filter(r => r !== req)
-        for (const r of racingReqs) { try { r.destroy() } catch {} }
-        racingReqs = []
-        resolve({ res, req, url })
-      }).catch((err) => {
-        failures++
-        console.log('[update] race failed:', url, err instanceof Error ? err.message : err)
-        if (!settled && failures >= urls.length) {
-          racingReqs = []
-          reject(new Error('所有下载源均失败，请检查网络连接'))
-        }
-      })
-    }
-  })
 }
