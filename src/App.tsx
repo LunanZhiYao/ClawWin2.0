@@ -130,7 +130,14 @@ function App() {
      * 在 renderer 启动后把 Vite 注入的构建环境变量同步到主进程。
      * 这里采用运行时 IPC 注入，避免主进程初始化阶段拿不到 import.meta.env 的问题。
      */
-    void window.electronAPI.gateway.setExtraEnvs(import.meta.env).catch((err) => {
+    const exportEnvs: Record<string, string> = {}
+
+    for (const [key, value] of Object.entries(import.meta.env)) {
+      if (key.startsWith('VITE_EXPORT_')) {
+        exportEnvs[key] = value as string
+      }
+    }
+    void window.electronAPI.gateway.setExtraEnvs(exportEnvs).catch((err) => {
       console.warn('[gateway] 同步 extra envs 失败:', err)
     })
   }, [])

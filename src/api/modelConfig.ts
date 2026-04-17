@@ -2,7 +2,7 @@
  * 大模型配置相关 API 封装
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'
+const API_BASE_URL = import.meta.env.VITE_EXPORT_API_BASE_URL || 'http://localhost:8000/api/v1'
 
 interface ModelConfig {
   provider: string

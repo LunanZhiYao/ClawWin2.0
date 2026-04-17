@@ -14,7 +14,7 @@ const aliyunOpenSearchPlugin = {
       apiKeyEndpoint: {
         type: 'string',
         description:
-          '可选。凭证接口路径，默认 /api/v1/integrations/credentials；可填完整 URL，或填相对路径（将拼接到内置后端基址）。',
+          '可选。凭证接口路径，默认 /api/v1/integrations/credentials；完整 URL 或相对 CLAWWIN_SERVER_URL。可用环境变量 ALIYUN_OPENSEARCH_KEY_ENDPOINT 覆盖。',
       },
       integrationName: {
         type: 'string',

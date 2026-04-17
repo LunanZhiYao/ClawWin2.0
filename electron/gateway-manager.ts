@@ -84,7 +84,7 @@ export class GatewayManager {
    */
   setExtraEnvs(extraEnvs: Record<string, unknown> | null | undefined) {
 
-    this.log('info', `VITE-ENV:${JSON.stringify(extraEnvs)}`)
+    // this.log('info', `VITE-ENV:${JSON.stringify(extraEnvs)}`)
 
     const next: Record<string, string> = {}
     for (const [key, value] of Object.entries(extraEnvs ?? {})) {
