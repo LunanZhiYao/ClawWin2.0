@@ -1416,6 +1416,27 @@ app.whenReady().then(async () => {
 
   // Auto-start gateway if not first run
   if (!isFirstRun()) {
+    // 迁移旧配置：启用腾讯长期记忆时，关闭内置 session-memory，避免工具冲突
+    try {
+      const configPath = getOpenclawConfigPath()
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+        const tencentEnabled = config?.plugins?.entries?.['memory-tencentdb']?.enabled === true
+        const sessionEnabled = config?.hooks?.internal?.entries?.['session-memory']?.enabled === true
+        if (tencentEnabled && sessionEnabled) {
+          if (!config.hooks) config.hooks = {}
+          if (!config.hooks.internal) config.hooks.internal = { enabled: true, entries: {} }
+          if (!config.hooks.internal.entries) config.hooks.internal.entries = {}
+          config.hooks.internal.entries['session-memory'] = { enabled: false }
+          config.meta = { ...(config.meta ?? {}), lastTouchedAt: new Date().toISOString() }
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+          console.log('[memory] disabled legacy session-memory hook (using memory-tencentdb)')
+        }
+      }
+    } catch (err) {
+      console.error('[memory] session-memory migration failed:', err)
+    }
+
     // 自动同步 auth-profiles 到 agent 目录（修复旧版本只写全局文件的 bug）
     try {
       const globalAuthFile = path.join(os.homedir(), '.openclaw', 'auth-profiles.json')
@@ -1563,14 +1584,24 @@ app.whenReady().then(async () => {
         }
         const agentsPath = path.join(workspace, 'AGENTS.md')
         if (fs.existsSync(agentsPath)) {
-          const content = fs.readFileSync(agentsPath, 'utf-8')
+          let content = fs.readFileSync(agentsPath, 'utf-8')
           if (content.includes('读 SOUL.md — 你是谁') && !content.includes('读 IDENTITY.md')) {
-            const patched = content.replace(
+            content = content.replace(
               '1. 读 SOUL.md — 你是谁\n2. 读 USER.md — 你在帮谁\n3. 如果有 memory/ 目录，读今天和昨天的记录',
-              '1. 读 IDENTITY.md — 你的身份（名称、性格等）\n2. 读 USER.md — 你在帮谁\n3. 如果有 memory/ 目录，用 memory_search 搜索或直接读取 memory/ 下的文件\n4. 如果有 MEMORY.md，读取它\n\n**重要：** 你的身份信息在 IDENTITY.md 中。如果用户告诉你新的名字或身份信息，立即更新 IDENTITY.md。'
+              '1. 读 IDENTITY.md — 你的身份（名称、性格等）\n2. 读 USER.md — 你在帮谁\n3. 优先用 tdai_memory_search 搜索长期记忆（腾讯 memory-tencentdb）\n4. 仅在 tdai_memory_search 不可用时，才直接读取 memory/ 下的文件\n5. 如果有 MEMORY.md，仅作为兜底参考，不要优先于长期记忆插件\n\n**重要：** 你的身份信息在 IDENTITY.md 中。如果用户告诉你新的名字或身份信息，立即更新 IDENTITY.md。'
             )
-            fs.writeFileSync(agentsPath, patched, 'utf-8')
+            fs.writeFileSync(agentsPath, content, 'utf-8')
             console.log('[workspace] upgraded AGENTS.md with identity-first instructions')
+          }
+          if (content.includes('用 memory_search 搜索或直接读取 memory/ 下的文件')) {
+            const patched = content.replace(
+              '3. 如果有 memory/ 目录，用 memory_search 搜索或直接读取 memory/ 下的文件\n4. 如果有 MEMORY.md，读取它',
+              '3. 优先用 tdai_memory_search 搜索长期记忆（腾讯 memory-tencentdb）\n4. 仅在 tdai_memory_search 不可用时，才直接读取 memory/ 下的文件\n5. 如果有 MEMORY.md，仅作为兜底参考，不要优先于长期记忆插件'
+            )
+            if (patched !== content) {
+              fs.writeFileSync(agentsPath, patched, 'utf-8')
+              console.log('[workspace] switched AGENTS.md memory guidance to tdai_memory_search')
+            }
           }
         }
       }

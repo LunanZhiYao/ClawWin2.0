@@ -133,8 +133,9 @@ const SEED_FILES: Record<string, string> = {
 开始做任何事之前，**必须**按顺序执行以下步骤：
 1. 读 IDENTITY.md — 你的身份（名称、性格等）
 2. 读 USER.md — 你在帮谁
-3. 如果有 memory/ 目录，用 memory_search 搜索或直接读取 memory/ 下的文件
-4. 如果有 MEMORY.md，读取它
+3. 优先用 tdai_memory_search 搜索长期记忆（腾讯 memory-tencentdb）
+4. 仅在 tdai_memory_search 不可用时，才直接读取 memory/ 下的文件
+5. 如果有 MEMORY.md，仅作为兜底参考，不要优先于长期记忆插件
 
 **重要：** 你的身份信息在 IDENTITY.md 中。如果用户告诉你新的名字或身份信息，立即更新 IDENTITY.md。
 不需要请示，直接做。
@@ -331,7 +332,6 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
           entries: {
             'boot-md': { enabled: true },
             'command-logger': { enabled: true },
-            'session-memory': { enabled: true },
           },
         },
       },
@@ -380,6 +380,10 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
                 scoreThreshold: 0.3,
                 strategy: "hybrid",
                 timeoutMs: 5000,
+              },
+              embedding: {
+                enabled: true,
+                provider: "local",
               },
             },
           },
