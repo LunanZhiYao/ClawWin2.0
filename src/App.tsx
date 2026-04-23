@@ -266,6 +266,7 @@ function App() {
     url: wsUrl,
     token: gateway.token ?? undefined,
     enabled: gateway.state === 'ready',
+    userId: typeof currentUser?.id === 'number' ? currentUser.id : null,
     reconnectKey: wsReconnectKey,
   })
 

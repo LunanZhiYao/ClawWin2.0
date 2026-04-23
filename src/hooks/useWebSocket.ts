@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { GatewayClient, type GatewayEventFrame, type GatewayHelloOk } from '../lib/gateway-protocol'
 import type { ChatMessage, ChatAttachment, ChatToolCall, AgentInfo } from '../types'
+import { sendTelemetryEvent, type TelemetryAttachmentMeta } from '../api/telemetry'
 
 interface UseWebSocketOptions {
   url: string
   token?: string
   enabled: boolean
+  userId?: number | null
   /** 改变此值会销毁旧 GatewayClient 并创建新的，模拟完整重连 */
   reconnectKey?: number
 }
@@ -109,7 +111,17 @@ function translateError(msg: string): string {
   return msg
 }
 
-export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocketOptions): UseWebSocketReturn {
+/** 将聊天附件转为埋点所需元信息（文件名/类型/mime），随 user_message_sent 上报 */
+function buildAttachmentMeta(attachments?: ChatAttachment[]): TelemetryAttachmentMeta[] {
+  if (!attachments?.length) return []
+  return attachments.map((item) => ({
+    file_name: item.fileName || item.filePath.split(/[\\/]/).pop() || 'unknown',
+    file_type: item.type,
+    mime_type: item.mimeType || null,
+  }))
+}
+
+export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseWebSocketOptions): UseWebSocketReturn {
   const [connected, setConnected] = useState(false)
   const [hello, setHello] = useState<GatewayHelloOk | null>(null)
   const [agents, setAgents] = useState<AgentInfo[]>([])
@@ -146,6 +158,12 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
   const onCompactionEnd = useRef<(() => void) | null>(null)
   // agent 活动开始通知（用于清除 isWaiting 等待状态）
   const onStreamStart = useRef<(() => void) | null>(null)
+  /** 异步上报埋点：不 await，避免拖慢 WS 主流程 */
+  const emitTelemetry = useCallback((payload: Parameters<typeof sendTelemetryEvent>[0]) => {
+    void sendTelemetryEvent(payload).catch((err) => {
+      console.warn('[telemetry] send failed:', err)
+    })
+  }, [])
 
   useEffect(() => {
     if (!enabled || !url) return
@@ -608,6 +626,16 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
         status: 'done',
       }
       onMessageStream.current?.(msg)
+      // 埋点：本轮助手最终文本已确定
+      emitTelemetry({
+        event_name: 'assistant_message_rendered',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: sessionKey || null,
+        run_id: runId,
+        status: 'final',
+        content: msg.content,
+      })
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
@@ -639,6 +667,16 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
         status: 'error',
       }
       onMessageStream.current?.(msg)
+      // 埋点：助手回复以 error 结束
+      emitTelemetry({
+        event_name: 'assistant_message_rendered',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: sessionKey || null,
+        run_id: runId,
+        status: 'error',
+        content: msg.content,
+      })
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
@@ -663,6 +701,16 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
         status: 'done',
       }
       onMessageStream.current?.(msg)
+      // 埋点：用户中止生成
+      emitTelemetry({
+        event_name: 'assistant_message_rendered',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: sessionKey || null,
+        run_id: runId,
+        status: 'aborted',
+        content: msg.content,
+      })
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
@@ -688,6 +736,16 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
         status: 'done',
       }
       onMessageStream.current?.(msg)
+      // 埋点：上下文耗尽或进程终止导致的中断
+      emitTelemetry({
+        event_name: 'assistant_message_rendered',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: sessionKey || null,
+        run_id: runId,
+        status: 'terminated',
+        content: msg.content,
+      })
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
@@ -766,6 +824,20 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
     }
 
     try {
+      // 埋点：用户消息已发起（与 idempotencyKey 对齐，后端可能用其作为 run_id）
+      emitTelemetry({
+        event_name: 'user_message_sent',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: builtSessionKey,
+        content,
+        attachments: buildAttachmentMeta(attachments),
+        payload: {
+          agent_id: agentId || null,
+          model_override: modelOverride || null,
+          idempotency_key: idempotencyKey,
+        },
+      })
       const ack = await client.request<{ runId?: string; status?: string }>('chat.send', payload)
       return { ...ack, sessionKey: builtSessionKey, idempotencyKey }
     } catch (err) {
@@ -780,7 +852,7 @@ export function useWebSocket({ url, token, enabled, reconnectKey }: UseWebSocket
       onMessageStream.current?.(msg)
       return null
     }
-  }, [])
+  }, [emitTelemetry, userId])
 
   const abortSession = useCallback(async (sessionKey: string, agentId?: string) => {
     const client = clientRef.current
