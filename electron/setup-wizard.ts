@@ -351,6 +351,38 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
               "integrationName": "aliyun"
             },
           },
+          "memory-tencentdb": {
+            enabled: true,
+            config: {
+              storeBackend: "sqlite",
+              capture: {
+                enabled: true,
+                l0l1RetentionDays: 30,
+                cleanTime: "03:00",
+              },
+              extraction: {
+                enabled: true,
+                enableDedup: true,
+                maxMemoriesPerSession: 20,
+              },
+              pipeline: {
+                everyNConversations: 5,
+                enableWarmup: true,
+                l1IdleTimeoutSeconds: 60,
+                l2DelayAfterL1Seconds: 90,
+                l2MinIntervalSeconds: 300,
+                l2MaxIntervalSeconds: 1800,
+                sessionActiveWindowHours: 24,
+              },
+              recall: {
+                enabled: true,
+                maxResults: 5,
+                scoreThreshold: 0.3,
+                strategy: "hybrid",
+                timeoutMs: 5000,
+              },
+            },
+          },
         },
       },
     }
