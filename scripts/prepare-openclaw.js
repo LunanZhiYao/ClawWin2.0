@@ -11,6 +11,8 @@ const path = require('path')
 
 const TARGET_DIR = path.join(__dirname, '..', 'bundled', 'openclaw')
 const PACKAGE_NAME = 'openclaw'
+/** 与向导 `plugins.entries.memory-tencentdb` 对应；需打进安装包（见 npm 文档） */
+const TENCENT_MEMORY_PLUGIN = '@tencentdb-agent-memory/memory-tencentdb'
 
 function getDirSize(dirPath) {
   let totalSize = 0
@@ -168,6 +170,43 @@ function npmPackInstall() {
   }
 }
 
+/**
+ * 将腾讯长期记忆插件安装到 bundled/openclaw（与 exe 一并分发）。
+ * peer 依赖使用 --legacy-peer-deps，避免与宿主 openclaw 版本解析冲突。
+ */
+function ensureTencentMemoryPlugin() {
+  const entryJs = path.join(TARGET_DIR, 'dist', 'entry.js')
+  if (!fs.existsSync(entryJs)) {
+    console.log('[memory-tencentdb] 跳过：未找到 bundled/openclaw/dist/entry.js')
+    return
+  }
+
+  const marker = path.join(
+    TARGET_DIR,
+    'node_modules',
+    '@tencentdb-agent-memory',
+    'memory-tencentdb',
+    'package.json',
+  )
+  if (fs.existsSync(marker)) {
+    try {
+      const ver = JSON.parse(fs.readFileSync(marker, 'utf-8')).version
+      console.log(`[memory-tencentdb] 已安装 memory-tencentdb@${ver}`)
+    } catch {
+      console.log('[memory-tencentdb] 已安装，跳过')
+    }
+    return
+  }
+
+  console.log(`\n正在安装长期记忆插件 ${TENCENT_MEMORY_PLUGIN} ...`)
+  execSync(`npm install ${TENCENT_MEMORY_PLUGIN} --save --omit=dev --legacy-peer-deps`, {
+    cwd: TARGET_DIR,
+    stdio: 'inherit',
+    env: { ...process.env, NODE_ENV: 'production' },
+  })
+  console.log('[memory-tencentdb] 安装完成')
+}
+
 async function main() {
   console.log('=== 准备 openclaw ===\n')
 
@@ -176,7 +215,10 @@ async function main() {
   if (fs.existsSync(existingPkg) && fs.existsSync(path.join(TARGET_DIR, 'dist', 'entry.js'))) {
     const pkg = JSON.parse(fs.readFileSync(existingPkg, 'utf-8'))
     console.log(`openclaw@${pkg.version} 已安装在 bundled/ 中`)
-    console.log('跳过安装（如需更新请先删除 bundled/openclaw/ 目录）')
+    console.log('跳过 openclaw 安装（如需更新请先删除 bundled/openclaw/ 目录）')
+    ensureTencentMemoryPlugin()
+    console.log('\n')
+    require('./patch-openclaw')
     return
   }
 
@@ -214,6 +256,8 @@ async function main() {
     const removed = cleanupDir(nodeModulesDir)
     console.log(`已清理 ${removed} 个文件/目录`)
   }
+
+  ensureTencentMemoryPlugin()
 
   // 报告大小
   const totalSize = getDirSize(TARGET_DIR)
