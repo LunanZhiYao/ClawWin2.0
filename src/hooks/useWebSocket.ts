@@ -147,6 +147,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const activeRunIdRef = useRef<string | null>(null)
   // 指令消息（如 /model）的 runId 集合，用于过滤掉其响应不显示在聊天中
   const directiveRunIdsRef = useRef<Set<string>>(new Set())
+  // 记录每个会话最近一次已确认的 runId，供 abort 等非 chat 事件兜底关联
+  const lastRunIdBySessionRef = useRef<Map<string, string>>(new Map())
   // agent lifecycle.start 分配的 runId（工具调用流式消息用此 ID）
   // 与 chat 事件的 runId 可能不同，需要在 final 时用此 ID 确保消息正确替换
   const agentLifecycleRunIdRef = useRef<string | null>(null)
@@ -372,6 +374,9 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       ? agentLifecycleRunIdRef.current
       : chatRunId
     const sessionKey = normalizeSessionKey(payload.sessionKey as string | undefined)
+    if (sessionKey && runId) {
+      lastRunIdBySessionRef.current.set(sessionKey, runId)
+    }
 
     // 过滤指令消息的响应（如 /model 切换命令），不显示在聊天中
     if (directiveRunIdsRef.current.has(chatRunId)) {
@@ -493,6 +498,20 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                 idleCountRef.current.set(runId, idle)
                 // 超过 50 次空转（~6 秒）视为 final 丢失，自动停止
                 if (idle > 50) {
+                  // 监听场景：正文流长时间无增量，触发「流式超时兜底」
+                  emitTelemetry({
+                    event_name: 'stream_idle_fallback_triggered',
+                    event_time: new Date().toISOString(),
+                    user_id: userId ?? null,
+                    session_id: sessionKey || null,
+                    run_id: runId,
+                    status: 'text_stream',
+                    payload: {
+                      idle_count: idle,
+                      latest_length: latest.length,
+                      has_tool_calls: toolCallsBufferRef.current.length > 0,
+                    },
+                  })
                   streamThrottleRef.current.delete(runId)
                   lastPushedLenRef.current.delete(runId)
                   idleCountRef.current.delete(runId)
@@ -567,6 +586,19 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                 const idle = (idleCountRef.current.get(runId) ?? 0) + 1
                 idleCountRef.current.set(runId, idle)
                 if (idle > 50) {
+                  // 监听场景：仅 thinking 流长时间无变化，触发「流式超时兜底」
+                  emitTelemetry({
+                    event_name: 'stream_idle_fallback_triggered',
+                    event_time: new Date().toISOString(),
+                    user_id: userId ?? null,
+                    session_id: sessionKey || null,
+                    run_id: runId,
+                    status: 'thinking_stream',
+                    payload: {
+                      idle_count: idle,
+                      thinking_length: thinkingNow.length,
+                    },
+                  })
                   streamThrottleRef.current.delete(runId)
                   lastPushedLenRef.current.delete(runId)
                   idleCountRef.current.delete(runId)
@@ -839,6 +871,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         },
       })
       const ack = await client.request<{ runId?: string; status?: string }>('chat.send', payload)
+      // chat.send 一旦拿到 ack.runId，就提前建立 session -> run 关联，避免“快速中断”时 run_id 丢失
+      if (ack?.runId) {
+        activeRunIdRef.current = ack.runId
+        lastRunIdBySessionRef.current.set(normalizeSessionKey(builtSessionKey) || builtSessionKey, ack.runId)
+      }
       return { ...ack, sessionKey: builtSessionKey, idempotencyKey }
     } catch (err) {
       console.error('[ws] chat.send failed:', err)
@@ -857,12 +894,56 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const abortSession = useCallback(async (sessionKey: string, agentId?: string) => {
     const client = clientRef.current
     if (!client) return
+    const builtSessionKey = buildAgentSessionKey(sessionKey, agentId)
+    const normalizedSessionKey = normalizeSessionKey(builtSessionKey) || builtSessionKey
+    const runIdForAbort =
+      activeRunIdRef.current ||
+      agentLifecycleRunIdRef.current ||
+      lastRunIdBySessionRef.current.get(normalizedSessionKey) ||
+      null
+    // 监听场景：用户点击停止，发起 chat.abort 请求
+    emitTelemetry({
+      event_name: 'chat_abort_requested',
+      event_time: new Date().toISOString(),
+      user_id: userId ?? null,
+      session_id: builtSessionKey,
+      run_id: runIdForAbort,
+      status: 'requested',
+      payload: {
+        agent_id: agentId || null,
+      },
+    })
     try {
-      await client.request('chat.abort', { sessionKey: buildAgentSessionKey(sessionKey, agentId) })
+      await client.request('chat.abort', { sessionKey: builtSessionKey })
+      // 监听场景：chat.abort 请求执行成功
+      emitTelemetry({
+        event_name: 'chat_abort_result',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: builtSessionKey,
+        run_id: runIdForAbort,
+        status: 'success',
+        payload: {
+          agent_id: agentId || null,
+        },
+      })
     } catch (err) {
       console.error('[ws] chat.abort failed:', err)
+      // 监听场景：chat.abort 请求执行失败
+      emitTelemetry({
+        event_name: 'chat_abort_result',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: builtSessionKey,
+        run_id: runIdForAbort,
+        status: 'failed',
+        payload: {
+          agent_id: agentId || null,
+          error_message: err instanceof Error ? err.message : String(err),
+        },
+      })
     }
-  }, [])
+  }, [emitTelemetry, userId])
 
   const reconnect = useCallback(() => {
     clientRef.current?.stop()

@@ -5,7 +5,12 @@
 const API_BASE_URL = import.meta.env.VITE_EXPORT_API_BASE_URL || 'http://localhost:8000/api/v1'
 
 /** 当前支持的上报事件名 */
-export type TelemetryEventName = 'user_message_sent' | 'assistant_message_rendered'
+export type TelemetryEventName =
+  | 'user_message_sent'
+  | 'assistant_message_rendered'
+  | 'chat_abort_requested'
+  | 'chat_abort_result'
+  | 'stream_idle_fallback_triggered'
 
 export interface TelemetryAttachmentMeta {
   file_name: string
@@ -23,6 +28,7 @@ export interface TelemetryEventPayload {
   content?: string | null
   attachments?: TelemetryAttachmentMeta[]
   payload?: Record<string, unknown> | null
+  error_message?: string | null
 }
 
 /** POST /app/telemetry/events，失败仅打日志、不阻塞聊天主流程 */
