@@ -21,10 +21,19 @@ export interface CronJob {
   }
   sessionTarget?: string
   wakeMode?: string
+  // 显式声明 delivery，便于前端构造 { mode: 'none' } 且与 cron.list 返回结构对齐
+  delivery?: {
+    mode?: 'none' | 'announce' | 'webhook'
+    channel?: string
+    to?: string
+    bestEffort?: boolean
+  }
   payload: {
     kind: string
     text?: string
     message?: string
+    to?: string
+    channel?: string
   }
   enabled: boolean
   deleteAfterRun?: boolean
@@ -52,7 +61,7 @@ interface UseCronReturn {
   loading: boolean
   error: string | null
   runningCount: number
-  fetchJobs: () => Promise<void>
+  fetchJobs: (opts?: { silent?: boolean }) => Promise<void>
   addJob: (job: Omit<CronJob, 'id'>) => Promise<boolean>
   updateJob: (jobId: string, updates: Partial<CronJob>) => Promise<boolean>
   removeJob: (jobId: string) => Promise<boolean>
@@ -88,11 +97,13 @@ export function useCron({ client, connected }: UseCronOptions): UseCronReturn {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 用 ref 持有最新的 fetchJobs，避免 useEffect 闭包中使用过期引用
-  const fetchJobsRef = useRef<() => Promise<void>>()
+  const fetchJobsRef = useRef<(opts?: { silent?: boolean }) => Promise<void>>()
 
-  const fetchJobs = useCallback(async () => {
+  const fetchJobs = useCallback(async (opts?: { silent?: boolean }) => {
     if (!client || !connected) return
-    setLoading(true)
+    // 轮询/事件刷新走 silent，避免列表每次刷新都触发 loading 闪动
+    const silent = !!opts?.silent
+    if (!silent) setLoading(true)
     setError(null)
     try {
       const res = await client.request<{ jobs: CronJob[] }>('cron.list', { includeDisabled: true })
@@ -102,7 +113,7 @@ export function useCron({ client, connected }: UseCronOptions): UseCronReturn {
       const message = err instanceof Error ? err.message : String(err)
       setError(`获取任务列表失败: ${message}`)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [client, connected])
 
@@ -138,11 +149,12 @@ export function useCron({ client, connected }: UseCronOptions): UseCronReturn {
                 ...j.state,
                 runningAtMs: undefined,
                 lastRunAtMs: e.runAtMs ?? Date.now(),
-                lastStatus: e.status,
-                lastError: e.error,
+                lastStatus: e.status ?? j.state?.lastStatus,
+                lastError: e.error ?? j.state?.lastError,
                 lastDurationMs: e.durationMs,
                 nextRunAtMs: e.nextRunAtMs,
-                lastSummary: e.summary,
+                // 某些网关事件不会回传 summary，避免把已有摘要覆盖为 undefined
+                lastSummary: e.summary ?? j.state?.lastSummary,
               },
             }
           }
@@ -155,9 +167,9 @@ export function useCron({ client, connected }: UseCronOptions): UseCronReturn {
         })
       })
 
-      // added 事件 → 刷新列表获取完整数据
-      if (e.action === 'added') {
-        fetchJobsRef.current?.()
+      // added/finished 后静默刷新一次，补齐网关延迟落库的字段
+      if (e.action === 'added' || e.action === 'finished') {
+        fetchJobsRef.current?.({ silent: true })
       }
     }
 
@@ -165,7 +177,7 @@ export function useCron({ client, connected }: UseCronOptions): UseCronReturn {
 
     // 轮询兜底，每 10 秒刷新一次
     const interval = setInterval(() => {
-      fetchJobsRef.current?.()
+      fetchJobsRef.current?.({ silent: true })
     }, 10000)
 
     return () => {

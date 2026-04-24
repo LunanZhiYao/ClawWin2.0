@@ -38,7 +38,7 @@ function emptyForm(): CronFormData {
     scheduleKind: 'cron',
     scheduleExpr: '',
     tz: 'Asia/Shanghai',
-    sessionTarget: 'main',
+    sessionTarget: 'isolated',
     message: '',
     enabled: true,
     cronPreset: 'daily',
@@ -130,7 +130,7 @@ function jobToForm(job: CronJob): CronFormData {
   base.scheduleKind = job.schedule.kind
   base.scheduleExpr = job.schedule.expr
   base.tz = job.schedule.tz ?? 'Asia/Shanghai'
-  base.sessionTarget = job.sessionTarget ?? 'main'
+  base.sessionTarget = job.sessionTarget ?? 'isolated'
   base.message = job.payload.text ?? job.payload.message ?? ''
   base.enabled = job.enabled
 
@@ -156,9 +156,12 @@ function formToJobData(form: CronFormData): Omit<CronJob, 'id'> {
     },
     sessionTarget: isMain ? 'main' : 'isolated',
     wakeMode: 'next-heartbeat',
+    // 与网关 schema 对齐：main 用 systemEvent(text)，isolated 用 agentTurn(message)
     payload: isMain
       ? { kind: 'systemEvent', text: form.message }
       : { kind: 'agentTurn', message: form.message },
+    // isolated 默认可能走 announce 外发；这里固定 none，确保仅执行不对外发消息
+    ...(!isMain ? { delivery: { mode: 'none' as const } } : {}),
     enabled: form.enabled,
   }
 }
@@ -205,6 +208,11 @@ function CronJobForm({ initialData, onSave, onCancel }: CronJobFormProps) {
   const [form, setForm] = useState<CronFormData>(() =>
     initialData ? jobToForm(initialData) : emptyForm()
   )
+
+  // 编辑同一弹窗内切换任务或更新后重开时，确保表单回填为最新 initialData
+  useEffect(() => {
+    setForm(initialData ? jobToForm(initialData) : emptyForm())
+  }, [initialData])
 
   const updateField = useCallback(<K extends keyof CronFormData>(key: K, value: CronFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -428,8 +436,9 @@ function CronJobForm({ initialData, onSave, onCancel }: CronJobFormProps) {
               value={form.sessionTarget}
               onChange={(e) => updateField('sessionTarget', e.target.value)}
             >
-              <option value="main">main (主会话)</option>
               <option value="isolated">isolated (独立会话)</option>
+              {/* todo 这里有问题，需要后续版本更新修复暂时隐藏 */}
+              {/* <option value="main">main (主会话)</option> */}
             </select>
           </div>
 
@@ -538,8 +547,9 @@ function CronJobCard({ job, onToggle, onEdit, onDelete, onRun }: CronJobCardProp
   }
 
   const lastStatus = job.state?.lastStatus
-  const statusIcon = lastStatus === 'ok' ? '\u2713' : lastStatus === 'error' ? '\u2717' : lastStatus === 'skipped' ? '\u2014' : ''
-  const statusClass = lastStatus === 'ok' ? 'cron-status-ok' : lastStatus === 'error' ? 'cron-status-error' : ''
+  const hasDiagnostic = !!(job.state?.lastSummary || job.state?.lastError)
+  const statusIcon = lastStatus === 'error' ? '\u2717' : lastStatus === 'skipped' ? '\u2014' : lastStatus === 'ok' && hasDiagnostic ? '\u2713' : ''
+  const statusClass = lastStatus === 'error' ? 'cron-status-error' : lastStatus === 'ok' && hasDiagnostic ? 'cron-status-ok' : ''
   const hasResult = !!(job.state?.lastSummary || job.state?.lastError || job.state?.lastRunAtMs)
 
   return (
@@ -600,7 +610,13 @@ function CronJobCard({ job, onToggle, onEdit, onDelete, onRun }: CronJobCardProp
           {/* Status header */}
           <div className="cron-result-header">
             <span className={`cron-result-status ${statusClass}`}>
-              {lastStatus === 'ok' ? '\u2713 执行成功' : lastStatus === 'error' ? '\u2717 执行失败' : lastStatus === 'skipped' ? '\u2014 已跳过' : ''}
+              {lastStatus === 'ok'
+                ? (hasDiagnostic ? '\u2713 执行成功' : '\u2022 执行完成')
+                : lastStatus === 'error'
+                  ? '\u2717 执行失败'
+                  : lastStatus === 'skipped'
+                    ? '\u2014 已跳过'
+                    : ''}
             </span>
             {job.state?.lastDurationMs != null && (
               <span className="cron-result-duration">
@@ -632,7 +648,7 @@ function CronJobCard({ job, onToggle, onEdit, onDelete, onRun }: CronJobCardProp
 
           {/* No summary hint */}
           {!job.state?.lastSummary && !job.state?.lastError && lastStatus === 'ok' && (
-            <div className="cron-result-no-summary">任务已成功执行，无摘要信息</div>
+            <div className="cron-result-no-summary">任务已执行完成</div>
           )}
         </div>
       )}
@@ -685,10 +701,9 @@ export function CronManager({ client, connected, onClose }: CronManagerProps) {
 
   // Fetch jobs on mount and when connection changes
   useEffect(() => {
-    if (connected && client) {
-      cron.fetchJobs()
-    }
-  }, [connected, client])
+    if (!connected || !client) return
+    cron.fetchJobs()
+  }, [connected, client, cron.fetchJobs])
 
   const handleAdd = useCallback(() => {
     setEditingJob(null)
