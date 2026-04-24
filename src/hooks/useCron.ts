@@ -77,6 +77,19 @@ function jobsEqual(a: CronJob[], b: CronJob[]): boolean {
     if (aj.id !== bj.id) return false
     if (aj.enabled !== bj.enabled) return false
     if (aj.name !== bj.name) return false
+    // 比较编辑弹窗依赖的任务核心字段，避免误判“未变化”导致回填旧数据
+    if (aj.schedule.kind !== bj.schedule.kind ||
+        aj.schedule.expr !== bj.schedule.expr ||
+        aj.schedule.tz !== bj.schedule.tz) return false
+    if (aj.sessionTarget !== bj.sessionTarget) return false
+    if (aj.wakeMode !== bj.wakeMode) return false
+    if (aj.payload.kind !== bj.payload.kind ||
+        aj.payload.text !== bj.payload.text ||
+        aj.payload.message !== bj.payload.message) return false
+    if (aj.delivery?.mode !== bj.delivery?.mode ||
+        aj.delivery?.channel !== bj.delivery?.channel ||
+        aj.delivery?.to !== bj.delivery?.to ||
+        aj.delivery?.bestEffort !== bj.delivery?.bestEffort) return false
     // 比较 state
     const as = aj.state, bs = bj.state
     if (!as && !bs) continue
