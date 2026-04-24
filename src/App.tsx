@@ -169,6 +169,7 @@ function App() {
   const [showUserCenter, setShowUserCenter] = useState(false)
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const abortSessionRef = useRef<(sessionKey: string, agentId?: string) => Promise<void>>(async () => {})
   const [autoCompact, setAutoCompact] = useState(true)
   const [shellHints, setShellHints] = useState(true)
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([])
@@ -232,9 +233,14 @@ function App() {
     if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current)
     waitingTimerRef.current = setTimeout(() => {
       setIsWaiting(false)
+      // 超时自动中断任务
+      const sid = activeSessionIdRef.current
+      if (sid) {
+        const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
+        void abortSessionRef.current(sid, session?.agentId)
+      }
       // 添加一条超时错误消息
       setSessions((prev) => {
-        const sid = activeSessionIdRef.current
         if (!sid) return prev
         return prev.map((s) => {
           if (s.id !== sid) return s
@@ -242,7 +248,7 @@ function App() {
           const errMsg: ChatMessage = {
             id: generateId(),
             role: 'assistant',
-            content: `AI 响应超时（已等待 ${secs} 秒），可能的原因：\n1. 当前超时时间设置较短，可在"设置"中调大响应超时\n2. 网络连接不稳定\n3. API Key 无效或额度已用尽\n4. 所选模型服务暂时不可用`,
+            content: `AI 响应超时（已等待 ${secs} 秒），系统已自动停止本次任务。可能的原因：\n1. 当前超时时间设置较短，可在"设置"中调大响应超时\n2. 网络连接不稳定\n3. API Key 无效或额度已用尽\n4. 所选模型服务暂时不可用`,
             timestamp: Date.now(),
             status: 'error',
           }
@@ -269,6 +275,7 @@ function App() {
     userId: typeof currentUser?.id === 'number' ? currentUser.id : null,
     reconnectKey: wsReconnectKey,
   })
+  abortSessionRef.current = ws.abortSession
 
   /** 重启 Gateway 并销毁旧 WebSocket 客户端，模拟完整重启 */
   const restartGateway = useCallback(async () => {
@@ -303,8 +310,7 @@ function App() {
       const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
       ws.abortSession(sid, session?.agentId)
     }
-    stopWaiting()
-  }, [ws, stopWaiting])
+  }, [ws])
 
   /**
    * 扫码仅拿到 access_token；用户与 model_config 一律走 fetchMeSession（/auth/me），与冷启动一致。
@@ -538,8 +544,10 @@ function App() {
         runIdUserMessageMapRef.current.delete(msg.id)
       }
 
-      // AI response has started arriving, stop showing waiting indicator
-      stopWaiting()
+      // 仅在终态消息时停止 waiting，避免工具调用阶段停止按钮/加载态提前消失
+      if (msg.status === 'done' || msg.status === 'error') {
+        stopWaiting()
+      }
       markUserMessageComplete(sid, userMessageId)
 
       setSessions((prev) =>
@@ -564,7 +572,7 @@ function App() {
         })
       )
     },
-    [] // 不依赖外部状态，通过 ref 获取最新值
+    [markUserMessageComplete, stopWaiting] // 不依赖会变化的业务状态，通过 ref 获取最新值
   )
 
   // 自动压缩上下文：usage 超 70% 时自动发 /compact

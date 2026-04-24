@@ -66,6 +66,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
+  const hasStreamingMessage = messages.some((msg) => msg.status === 'streaming')
 
   // 点击外部关闭 agent 选择器和创建表单
   useEffect(() => {
@@ -391,7 +392,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     onCopy={() => handleCopy(msg.content)}
                   />
                 ))}
-              {isWaiting && (
+              {isWaiting && !isStreaming && !hasStreamingMessage && (
                 <div className="message-bubble message-assistant message-bubble-waiting">
                   <div className="message-body">
                     <div className="message-content message-content-assistant">

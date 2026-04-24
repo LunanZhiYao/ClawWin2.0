@@ -716,7 +716,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     } else if (state === 'aborted') {
       // 被中断的响应，使用已有内容
       setBackendStatus('')
-      const text = streamBufferRef.current.get(runId) || '（已中断）'
+      const text = `${streamBufferRef.current.get(runId) || ''}(已中断)`
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
       lastPushedLenRef.current.delete(runId)
