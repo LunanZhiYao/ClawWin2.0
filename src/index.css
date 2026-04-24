@@ -2198,6 +2198,11 @@ body {
   justify-content: center;
   z-index: 1000;
   animation: reveal 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* 避免与无边框标题栏区域、顶部 drag 带重叠时点击被系统吞掉 */
+  padding: 80px 24px 24px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  -webkit-app-region: no-drag;
 }
 
 /* 关闭确认层：须高于视频启动屏(.video-splash 9999)，否则 pre-main 阶段弹不出 */
@@ -2246,6 +2251,7 @@ body {
   align-items: center;
   justify-content: center;
   transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  -webkit-app-region: no-drag;
 }
 
 .settings-close:hover {
@@ -3543,6 +3549,10 @@ body {
   align-items: center;
   justify-content: center;
   animation: fadeIn 0.2s ease-out;
+  padding: 80px 24px 24px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  -webkit-app-region: no-drag;
 }
 
 .channel-dialog {
