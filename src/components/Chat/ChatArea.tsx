@@ -84,7 +84,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
   const hasStreamingMessage = messages.some((msg) => msg.status === 'streaming')
   const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
-  const usagePercent = Math.round(usageRate * 100)
+  // 显示口径与自动压缩阈值体验保持一致：不提前四舍五入进位。
+  // 例如 49.6% 不应显示成 50%，否则用户会误以为“到 50% 还没触发自动压缩”。
+  const usagePercent = Math.floor(usageRate * 100)
   const usageTotalLabel = formatTokensShort(contextUsageTotal)
   const contextWindowLabel = formatTokensShort(contextWindow)
   const ringRadius = 10

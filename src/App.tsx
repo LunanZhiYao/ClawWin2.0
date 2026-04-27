@@ -710,6 +710,19 @@ function App() {
   }, [ws, triggerAutoCompact])
   refreshSessionUsageRef.current = refreshSessionUsage
 
+  /**
+   * 处理“延后压缩”会话：
+   * 不直接盲发 /compact，而是先按统一口径重拉 usage 并走阈值判断。
+   * 这样可避免上一轮已压缩到低占用后，仍因旧 pending 标记再次触发重复压缩。
+   */
+  const flushPendingAutoCompact = useCallback(async () => {
+    const pendingSessionId = pendingAutoCompactSessionRef.current
+    if (!pendingSessionId) return
+    // 先清空标记，避免异常路径下重复进入死循环。
+    pendingAutoCompactSessionRef.current = null
+    await refreshSessionUsageRef.current(pendingSessionId, true)
+  }, [])
+
   // Gateway 连接恢复后，主动为已有会话回填 usage，避免重启后所有会话先显示 0%。
   useEffect(() => {
     if (!ws.connected) return
@@ -729,10 +742,8 @@ function App() {
   // 若阈值命中时正好处于 streaming，流结束后补触发一次自动压缩。
   useEffect(() => {
     if (ws.isStreaming) return
-    const pendingSessionId = pendingAutoCompactSessionRef.current
-    if (!pendingSessionId) return
-    void triggerAutoCompact(pendingSessionId)
-  }, [ws.isStreaming, triggerAutoCompact])
+    void flushPendingAutoCompact()
+  }, [ws.isStreaming, flushPendingAutoCompact])
 
   // 正常路径：根据本轮 input token 占 contextWindow 的比例触发自动压缩
   ws.onFinalUsage.current = useCallback(({ sessionKey }: { input: number; sessionKey?: string }) => {
@@ -756,11 +767,8 @@ function App() {
       autoCompactUnlockTimerRef.current = null
     }
     isAutoCompactingRef.current = false
-    // 若压缩期间积压了新的待压缩会话，优先补触发，避免阈值命中被吞掉。
-    const pendingSessionId = pendingAutoCompactSessionRef.current
-    if (pendingSessionId) {
-      void triggerAutoCompact(pendingSessionId)
-    }
+    // 若压缩期间积压了新的待压缩会话，按阈值口径补判定，避免重复压缩。
+    void flushPendingAutoCompact()
     // 优先使用压缩事件来源会话，避免用户切换会话后把占用率刷到错误会话。
     const sid = sessionKey ?? activeSessionIdRef.current
     if (sid) {
@@ -796,7 +804,7 @@ function App() {
       }
       void refreshWithRetry()
     }
-  }, [ws])
+  }, [ws, flushPendingAutoCompact])
 
 
   // Get active session
