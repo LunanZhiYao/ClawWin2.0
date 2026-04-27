@@ -261,6 +261,10 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
           maxConcurrent: 4,
           subagents: { maxConcurrent: 8 },
           compaction: { mode: 'safeguard' },
+          // 关键配置：禁用内置 memory_search 工具
+          // OpenClaw 的 memory_search 工具是通过此配置控制的
+          // 必须设置 enabled: false 才能真正禁用它，让模型使用腾讯长期记忆插件的 tdai_memory_search
+          memorySearch: { enabled: false },
           ...(hasModel ? {
             model: {
               primary: providerModelKey,
@@ -332,6 +336,10 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
           entries: {
             'boot-md': { enabled: true },
             'command-logger': { enabled: true },
+            // 明确关闭内置 session-memory，避免其注册 memory_search 与腾讯长期记忆工具冲突。
+            // 注意：这里必须显式写 false，而不是省略该字段；
+            // 因为 openclaw 内部对缺省项可能按“启用”处理。
+            'session-memory': { enabled: false },
           },
         },
       },
@@ -383,7 +391,10 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
               },
               embedding: {
                 enabled: true,
-                provider: "local",
+                // 按官方文档默认值：provider=none。
+                // 这会关闭向量检索，但插件整体仍可工作（走关键词/规则路径），
+                // 适合没有可用 embedding 模型或暂不希望接远端 embedding 的场景。
+                provider: "none",
               },
             },
           },

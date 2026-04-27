@@ -231,7 +231,11 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   let embeddingConfigError: string | undefined;
 
   // Embedding config: determine provider based on user input and apiKey availability
-  const embeddingApiKey = str(embeddingGroup, "apiKey") ?? "";
+  // 支持在配置中写环境变量名（例如 "OPENAI_API_KEY"）或 "${OPENAI_API_KEY}"：
+  // - 若命中环境变量，则使用环境变量真实值；
+  // - 否则按原字符串使用（向后兼容已有明文/固定 key 配置）。
+  // 这样可与主进程 runtime 注入 OPENAI_API_KEY 的机制协同工作，避免把真实密钥落盘。
+  const embeddingApiKey = resolveEnvBackedValue(str(embeddingGroup, "apiKey") ?? "");
   const embeddingBaseUrl = str(embeddingGroup, "baseUrl") ?? "";
   const embeddingProviderRaw = str(embeddingGroup, "provider") ?? "none";
   const embeddingModelRaw = str(embeddingGroup, "model") ?? "";
@@ -479,4 +483,37 @@ function normalizeCleanTime(input: string | undefined): string | undefined {
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return undefined;
 
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+/**
+ * Resolve env-backed secret value.
+ *
+ * Supported forms:
+ * 1) "OPENAI_API_KEY"      -> reads process.env.OPENAI_API_KEY
+ * 2) "${OPENAI_API_KEY}"   -> reads process.env.OPENAI_API_KEY
+ *
+ * If env is missing/empty, fallback to original literal to preserve
+ * backward compatibility with explicit plain-text keys.
+ */
+function resolveEnvBackedValue(raw: string): string {
+  const value = raw.trim();
+  if (!value) return "";
+
+  // 形式1：直接把环境变量名写在配置里（本项目当前采用这种写法）。
+  const directEnv = process.env[value];
+  if (typeof directEnv === "string" && directEnv.trim()) {
+    return directEnv.trim();
+  }
+
+  // 形式2：兼容 ${ENV_NAME} 写法。
+  const m = /^\$\{([A-Z0-9_]+)\}$/.exec(value);
+  if (m) {
+    const envValue = process.env[m[1]];
+    if (typeof envValue === "string" && envValue.trim()) {
+      return envValue.trim();
+    }
+  }
+
+  // 未命中环境变量：保持原值，兼容旧配置（明文 key 场景）。
+  return value;
 }

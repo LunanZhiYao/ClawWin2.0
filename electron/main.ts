@@ -1416,21 +1416,55 @@ app.whenReady().then(async () => {
 
   // Auto-start gateway if not first run
   if (!isFirstRun()) {
-    // 迁移旧配置：启用腾讯长期记忆时，关闭内置 session-memory，避免工具冲突
+    // 迁移旧配置：启用腾讯长期记忆时，强制关闭内置 session-memory，避免工具冲突；
+    // 同时修复 embedding=local 的旧配置（当前插件用户态不再支持 local，默认回退到 provider=none）。
     try {
       const configPath = getOpenclawConfigPath()
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
         const tencentEnabled = config?.plugins?.entries?.['memory-tencentdb']?.enabled === true
-        const sessionEnabled = config?.hooks?.internal?.entries?.['session-memory']?.enabled === true
-        if (tencentEnabled && sessionEnabled) {
+        // 旧逻辑只在 session-memory 已显式为 true 时才关闭；
+        // 但在某些版本中“缺省不写”也会被当成启用，导致仍出现 memory_search。
+        // 因此这里改为：只要启用了腾讯插件，就无条件写入 session-memory=false。
+        if (tencentEnabled) {
           if (!config.hooks) config.hooks = {}
           if (!config.hooks.internal) config.hooks.internal = { enabled: true, entries: {} }
           if (!config.hooks.internal.entries) config.hooks.internal.entries = {}
           config.hooks.internal.entries['session-memory'] = { enabled: false }
+
+          // 关键修复：禁用内置 memory_search 工具
+          // OpenClaw 的 memory_search 工具是通过 agents.defaults.memorySearch 配置控制的
+          // 必须设置 enabled: false 才能真正禁用它，否则模型仍会使用 memory_search
+          if (!config.agents) config.agents = {}
+          if (!config.agents.defaults) config.agents.defaults = {}
+          config.agents.defaults.memorySearch = { enabled: false }
+
+          // ---- memory-tencentdb embedding 迁移 ----
+          // 背景：新版插件在用户配置层禁用了 provider=local。
+          // 若用户没有可用 embedding 模型，官方建议可直接 provider=none（仅禁用向量检索）。
+          // 这里采用最稳妥的默认修复：把不可用/不完整配置统一回退为 none。
+          if (!config.plugins) config.plugins = {}
+          if (!config.plugins.entries) config.plugins.entries = {}
+          if (!config.plugins.entries['memory-tencentdb']) config.plugins.entries['memory-tencentdb'] = { enabled: true, config: {} }
+          const memoryEntry = config.plugins.entries['memory-tencentdb']
+          if (!memoryEntry.config || typeof memoryEntry.config !== 'object') memoryEntry.config = {}
+          const memoryCfg = memoryEntry.config as Record<string, unknown>
+          if (!memoryCfg.embedding || typeof memoryCfg.embedding !== 'object') memoryCfg.embedding = {}
+          const embedding = memoryCfg.embedding as Record<string, unknown>
+
+          const embProvider = typeof embedding.provider === 'string' ? embedding.provider.trim() : ''
+          if (embProvider === 'local') {
+            embedding.enabled = true
+            embedding.provider = 'none'
+            delete embedding.baseUrl
+            delete embedding.apiKey
+            delete embedding.model
+            delete embedding.dimensions
+          }
+
           config.meta = { ...(config.meta ?? {}), lastTouchedAt: new Date().toISOString() }
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-          console.log('[memory] disabled legacy session-memory hook (using memory-tencentdb)')
+          console.log('[memory] forced session-memory=disabled and migrated local embedding to none (memory-tencentdb)')
         }
       }
     } catch (err) {
