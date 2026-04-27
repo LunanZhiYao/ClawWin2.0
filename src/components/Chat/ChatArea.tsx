@@ -29,6 +29,18 @@ function getAgentDisplayName(agent: AgentInfo): string {
   return agent.identity?.name || agent.name || agent.id
 }
 
+/**
+ * 将 token 数量格式化为更易读的展示：
+ * - >= 1000 使用 k 单位（保留 1 位小数）
+ * - < 1000 保持整数
+ */
+function formatTokensShort(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value < 1000) return String(Math.round(value))
+  const inK = value / 1000
+  return `${inK.toFixed(1)}k`
+}
+
 export const ChatArea: React.FC<ChatAreaProps> = ({
   messages,
   onSend,
@@ -73,6 +85,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const hasStreamingMessage = messages.some((msg) => msg.status === 'streaming')
   const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
   const usagePercent = Math.round(usageRate * 100)
+  const usageTotalLabel = formatTokensShort(contextUsageTotal)
+  const contextWindowLabel = formatTokensShort(contextWindow)
   const ringRadius = 10
   const ringCircumference = 2 * Math.PI * ringRadius
   const ringOffset = ringCircumference * (1 - usageRate)
@@ -346,8 +360,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
           <div
             className="chat-context-usage"
-            title={`当前上下文使用率 ${usagePercent}%（${contextUsageTotal}/${contextWindow || 0} tokens）`}
-            aria-label={`当前上下文使用率 ${usagePercent}%`}
+            title={`当前上下文使用率 ${usagePercent}%（${usageTotalLabel}/${contextWindowLabel}）`}
+            aria-label={`当前上下文使用率 ${usagePercent}%，已用 ${usageTotalLabel}，总窗口 ${contextWindowLabel}`}
           >
             <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
               <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />

@@ -182,6 +182,9 @@ function App() {
   sessionContextWindowMapRef.current = sessionContextWindowMap
   const isAutoCompactingRef = useRef(false)
   const autoCompactUnlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 记录“因流式进行中而延后”的自动压缩目标会话。
+  // 根因：达到阈值时若 ws.isStreaming=true，旧逻辑会直接 return，导致本轮遗漏压缩。
+  const pendingAutoCompactSessionRef = useRef<string | null>(null)
   // 递增此值会销毁旧 GatewayClient 并创建新的，模拟完整重启
   const [wsReconnectKey, setWsReconnectKey] = useState(0)
 
@@ -615,16 +618,25 @@ function App() {
    * - usage 达阈值触发
    * - context overflow 终止兜底触发
    */
-  const triggerAutoCompact = useCallback((targetSessionId?: string) => {
-    if (!autoCompactRef.current) return
-    if (isAutoCompactingRef.current) return
-    // 关键修复：如果模型正在回复，不触发自动压缩，避免中断任务
-    if (ws.isStreaming) return
+  const triggerAutoCompact = useCallback((targetSessionId?: string): boolean => {
+    if (!autoCompactRef.current) return false
     // 优先使用触发来源会话，避免多会话时压缩错会话；兜底再回退到当前激活会话。
     const sid = targetSessionId || activeSessionIdRef.current
-    if (!sid) return
+    if (!sid) return false
+    if (isAutoCompactingRef.current) {
+      // 当前正在压缩，先记录待处理会话，待 compaction.end 后补触发。
+      pendingAutoCompactSessionRef.current = sid
+      return false
+    }
+    // 模型仍在流式输出时先延后，避免中断当前回复；流结束后会自动补触发。
+    if (ws.isStreaming) {
+      pendingAutoCompactSessionRef.current = sid
+      return false
+    }
 
     isAutoCompactingRef.current = true
+    // 本次已正式发起压缩，清空待处理标记。
+    pendingAutoCompactSessionRef.current = null
     if (autoCompactUnlockTimerRef.current) clearTimeout(autoCompactUnlockTimerRef.current)
     // 兜底解锁：避免 compaction end 事件丢失导致后续一直不再触发自动压缩
     autoCompactUnlockTimerRef.current = setTimeout(() => {
@@ -634,6 +646,7 @@ function App() {
 
     const compactSession = sessionsRef.current.find((s) => s.id === sid)
     void ws.sendMessage(sid, '/compact', undefined, compactSession?.agentId)
+    return true
   }, [ws, ws.isStreaming])
 
   const refreshSessionUsage = useCallback(async (sessionId: string, checkAutoCompact: boolean) => {
@@ -673,22 +686,53 @@ function App() {
     }
     if (!usage) return
 
-    // 始终写入 total（包含 0），保证压缩后 UI 百分比能即时回落，不残留旧值。
-    setSessionUsageTotalMap((prev) => ({ ...prev, [sessionId]: usage.input }))
+    // 页面展示值与自动压缩判定值必须同源同口径：
+    // 统一使用本次 sessions.list 读取到的 usage.input（会话累计值）。
+    const currentUsageTotal = usage.input
+    setSessionUsageTotalMap((prev) => ({ ...prev, [sessionId]: currentUsageTotal }))
     if (usage.contextWindow && usage.contextWindow > 0) {
       setSessionContextWindowMap((prev) => ({ ...prev, [sessionId]: usage.contextWindow as number }))
     }
 
-    if (!checkAutoCompact) return
+    // 自动压缩判定必须与页面展示口径一致：
+    // 1) 优先用本次 usage 返回的 contextWindow；
+    // 2) 若本次缺失，则回退到该会话已缓存的 contextWindow（页面展示同样使用该值）；
+    // 3) 最后再回退到全局默认配置。
+    // 之前遗漏了第 2 步，会出现“页面显示 80%，但判定拿到 0 导致不触发压缩”的情况。
     const ctxWindow = usage.contextWindow && usage.contextWindow > 0
       ? usage.contextWindow
-      : ctxWindowRef.current
+      : (prevContextWindow && prevContextWindow > 0 ? prevContextWindow : ctxWindowRef.current)
+    if (!checkAutoCompact) return
     if (ctxWindow <= 0) return
-    if (usage.input / ctxWindow < 0.7) return
+    if (currentUsageTotal / ctxWindow < 0.7) return
     // 用 usage 所属会话触发压缩，避免会话切换导致目标偏移。
     triggerAutoCompact(sessionId)
   }, [ws, triggerAutoCompact])
   refreshSessionUsageRef.current = refreshSessionUsage
+
+  // Gateway 连接恢复后，主动为已有会话回填 usage，避免重启后所有会话先显示 0%。
+  useEffect(() => {
+    if (!ws.connected) return
+    if (!sessionsLoaded) return
+    if (sessionsRef.current.length === 0) return
+    sessionsRef.current.forEach((session) => {
+      void refreshSessionUsageRef.current(session.id, false)
+    })
+  }, [ws.connected, sessionsLoaded])
+
+  // 切换会话时懒刷新一次，保证会话列表较多时当前会话的占用率优先准确。
+  useEffect(() => {
+    if (!ws.connected || !activeSessionId) return
+    void refreshSessionUsageRef.current(activeSessionId, false)
+  }, [ws.connected, activeSessionId])
+
+  // 若阈值命中时正好处于 streaming，流结束后补触发一次自动压缩。
+  useEffect(() => {
+    if (ws.isStreaming) return
+    const pendingSessionId = pendingAutoCompactSessionRef.current
+    if (!pendingSessionId) return
+    void triggerAutoCompact(pendingSessionId)
+  }, [ws.isStreaming, triggerAutoCompact])
 
   // 正常路径：根据本轮 input token 占 contextWindow 的比例触发自动压缩
   ws.onFinalUsage.current = useCallback(({ sessionKey }: { input: number; sessionKey?: string }) => {
@@ -712,11 +756,18 @@ function App() {
       autoCompactUnlockTimerRef.current = null
     }
     isAutoCompactingRef.current = false
+    // 若压缩期间积压了新的待压缩会话，优先补触发，避免阈值命中被吞掉。
+    const pendingSessionId = pendingAutoCompactSessionRef.current
+    if (pendingSessionId) {
+      void triggerAutoCompact(pendingSessionId)
+    }
     // 优先使用压缩事件来源会话，避免用户切换会话后把占用率刷到错误会话。
     const sid = sessionKey ?? activeSessionIdRef.current
     if (sid) {
       // 压缩结束后主动拉一次最新 usage，让 UI 展示压缩后的真实占用率而不是旧值。
-      // 增加重试机制，确保获取到有效的 usage 数据
+      // 增加重试机制，确保获取到有效的 usage 数据。
+      // 关键修复：不能把 usage.input > 0 当作唯一“有效值”。
+      // 压缩后 input 可能合法地回落到 0；若拒绝 0，会导致 UI 停留旧占用率并误判压缩未生效。
       const refreshWithRetry = async (attempt: number = 0) => {
         if (attempt > 5) return // 最多重试5次
         
@@ -725,15 +776,23 @@ function App() {
         
         const session = sessionsRef.current.find((s) => s.id === sid)
         const usage = await ws.getSessionTokenUsage(sid, session?.agentId)
-        
-        if (usage && usage.input > 0 && usage.contextWindow && usage.contextWindow > 0) {
-          // 成功获取到有效数据，更新 UI
+        const prevContextWindow = sessionContextWindowMapRef.current[sid]
+        const nextContextWindow = usage?.contextWindow && usage.contextWindow > 0
+          ? usage.contextWindow
+          : prevContextWindow
+
+        // 只要拿到了 usage，并且上下文窗口可判定（本次返回或历史缓存），就更新展示值；
+        // input 允许为 0（压缩后常见），否则会卡住旧占用率。
+        if (usage && nextContextWindow && nextContextWindow > 0) {
           setSessionUsageTotalMap((prev) => ({ ...prev, [sid]: usage.input }))
-          setSessionContextWindowMap((prev) => ({ ...prev, [sid]: usage.contextWindow as number }))
-        } else {
-          // 数据无效，继续重试
-          await refreshWithRetry(attempt + 1)
+          if (usage.contextWindow && usage.contextWindow > 0) {
+            setSessionContextWindowMap((prev) => ({ ...prev, [sid]: usage.contextWindow as number }))
+          }
+          return
         }
+
+        // 数据暂未稳定，继续重试
+        await refreshWithRetry(attempt + 1)
       }
       void refreshWithRetry()
     }
@@ -759,7 +818,6 @@ function App() {
     console.log('[app] handleSwitchModel:', { modelKey, defaultModelKey, isDefault, override, activeSessionId })
 
     if (!activeSessionId) {
-      // 没有活动会话时，自动创建一个并设置 modelOverride
       const session: ChatSession = {
         id: generateId(),
         title: '新对话',
@@ -780,7 +838,6 @@ function App() {
         : s
       )
     )
-    // 通过 /model 指令切换模型，直接写入 session store，比 sessions.patch 更可靠
     ws.sendModelDirective(activeSessionId, modelKey, sessionsRef.current.find((s) => s.id === activeSessionId)?.agentId)
   }, [activeSessionId, defaultModelKey, ws])
 
