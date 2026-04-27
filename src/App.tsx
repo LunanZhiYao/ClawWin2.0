@@ -173,7 +173,15 @@ function App() {
   const [autoCompact, setAutoCompact] = useState(true)
   const [shellHints, setShellHints] = useState(true)
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([])
+  const [sessionUsageTotalMap, setSessionUsageTotalMap] = useState<Record<string, number>>({})
+  const [sessionContextWindowMap, setSessionContextWindowMap] = useState<Record<string, number>>({})
+  // 使用 ref 持有最新 usage 映射，供异步重试逻辑读取“当前 UI 值”避免闭包拿旧值。
+  const sessionUsageTotalMapRef = useRef<Record<string, number>>({})
+  const sessionContextWindowMapRef = useRef<Record<string, number>>({})
+  sessionUsageTotalMapRef.current = sessionUsageTotalMap
+  sessionContextWindowMapRef.current = sessionContextWindowMap
   const isAutoCompactingRef = useRef(false)
+  const autoCompactUnlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 递增此值会销毁旧 GatewayClient 并创建新的，模拟完整重启
   const [wsReconnectKey, setWsReconnectKey] = useState(0)
 
@@ -194,6 +202,11 @@ function App() {
   const runIdUserMessageMapRef = useRef<Map<string, string>>(new Map())
   // 追踪最近一次发送消息的 sessionId
   const lastSendSessionIdRef = useRef<string | null>(null)
+  const refreshSessionUsageRef = useRef<(sessionId: string, checkAutoCompact: boolean) => Promise<void>>(async () => {})
+  // 记录每个会话的 usage 延迟补拉定时器：
+  // chat.final 后网关会异步写回 sessions.list，首轮常出现“立即拉取仍是旧值”。
+  // 这里做一次可取消的补拉，保证最终 UI 与会话累计 usage 一致。
+  const usageSyncTimerBySessionRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   const markUserMessageComplete = useCallback((sessionId: string, userMessageId?: string) => {
     setSessions((prev) =>
@@ -547,6 +560,22 @@ function App() {
       // 仅在终态消息时停止 waiting，避免工具调用阶段停止按钮/加载态提前消失
       if (msg.status === 'done' || msg.status === 'error') {
         stopWaiting()
+        void refreshSessionUsageRef.current(sid, msg.status === 'done')
+        if (msg.status === 'done') {
+          // 先清理该会话上一次遗留的补拉任务，避免快速连续回复时并发覆盖。
+          const prevTimer = usageSyncTimerBySessionRef.current.get(sid)
+          if (prevTimer) {
+            clearTimeout(prevTimer)
+            usageSyncTimerBySessionRef.current.delete(sid)
+          }
+          // 再延迟补拉一次 authoritative usage：
+          // 目的不是“多做防御”，而是对齐网关已确认存在的异步写回时序。
+          const timer = setTimeout(() => {
+            usageSyncTimerBySessionRef.current.delete(sid)
+            void refreshSessionUsageRef.current(sid, true)
+          }, 900)
+          usageSyncTimerBySessionRef.current.set(sid, timer)
+        }
       }
       markUserMessageComplete(sid, userMessageId)
 
@@ -581,26 +610,142 @@ function App() {
   const ctxWindowRef = useRef(setup.config.contextWindow ?? 0)
   ctxWindowRef.current = setup.config.contextWindow ?? 0
 
-  ws.onFinalUsage.current = useCallback(({ input }: { input: number }) => {
+  /**
+   * 统一自动压缩入口：
+   * - usage 达阈值触发
+   * - context overflow 终止兜底触发
+   */
+  const triggerAutoCompact = useCallback((targetSessionId?: string) => {
     if (!autoCompactRef.current) return
     if (isAutoCompactingRef.current) return
-    const ctxWindow = ctxWindowRef.current
-    if (ctxWindow <= 0) return
-    if (input / ctxWindow < 0.7) return
-    const sid = activeSessionIdRef.current
+    // 关键修复：如果模型正在回复，不触发自动压缩，避免中断任务
+    if (ws.isStreaming) return
+    // 优先使用触发来源会话，避免多会话时压缩错会话；兜底再回退到当前激活会话。
+    const sid = targetSessionId || activeSessionIdRef.current
     if (!sid) return
-    isAutoCompactingRef.current = true
-    const compactSession = sessionsRef.current.find((s) => s.id === sid)
-    ws.sendMessage(sid, '/compact', undefined, compactSession?.agentId)
-  }, [ws])
 
-  ws.onCompactionEnd.current = useCallback(() => {
-    isAutoCompactingRef.current = false
+    isAutoCompactingRef.current = true
+    if (autoCompactUnlockTimerRef.current) clearTimeout(autoCompactUnlockTimerRef.current)
+    // 兜底解锁：避免 compaction end 事件丢失导致后续一直不再触发自动压缩
+    autoCompactUnlockTimerRef.current = setTimeout(() => {
+      isAutoCompactingRef.current = false
+      autoCompactUnlockTimerRef.current = null
+    }, 15000)
+
+    const compactSession = sessionsRef.current.find((s) => s.id === sid)
+    void ws.sendMessage(sid, '/compact', undefined, compactSession?.agentId)
+  }, [ws, ws.isStreaming])
+
+  const refreshSessionUsage = useCallback(async (sessionId: string, checkAutoCompact: boolean) => {
+    const session = sessionsRef.current.find((s) => s.id === sessionId)
+    const prevTotal = sessionUsageTotalMapRef.current[sessionId]
+    const prevContextWindow = sessionContextWindowMapRef.current[sessionId]
+    let usage = await ws.getSessionTokenUsage(sessionId, session?.agentId)
+    // 网关在 chat.final 后可能有短暂写回延迟（尤其新会话首轮），
+    // 这里统一做短重试：首读为 null 或值未变化都重试，确保第一条回复后占用率也能及时刷新。
+    if (checkAutoCompact) {
+      // 首轮回复后 sessions.list 的 usage 可能延迟写回（实测可超过 800ms），
+      // 这里适当拉长重试窗口，避免 UI 长时间停留在 0。
+      for (let attempt = 0; attempt < 10; attempt++) {
+        if (usage) {
+          // 首轮通常还没有 prevTotal；这时“读到 0”并不代表真实写回完成，
+          // 不能把 undefined -> 0 当成“已变化”提前退出重试。
+          const hasPrevTotal = typeof prevTotal === 'number'
+          const sameTotal = hasPrevTotal ? usage.input === prevTotal : usage.input === 0
+          const nextContextWindow = usage.contextWindow && usage.contextWindow > 0 ? usage.contextWindow : prevContextWindow
+          const sameContextWindow = nextContextWindow === prevContextWindow
+          // 只有拿到“可信变化”才停止：
+          // 1) 已有历史值：total 发生变化；或
+          // 2) 首轮无历史值：input 从 0 变为正值；或
+          // 3) contextWindow 出现有效变化。
+          // 这样可避免首次 reply 时因临时 0 值提前退出，导致占用率卡 0。
+          const totalReady = hasPrevTotal ? !sameTotal : usage.input > 0
+          const contextReady = !sameContextWindow
+          if (totalReady || contextReady) break
+        }
+        // 每次重试间隔稍微放大，降低短时抖动读到旧值的概率。
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        const retried = await ws.getSessionTokenUsage(sessionId, session?.agentId)
+        // 无论 retried 是否为空都覆盖 usage，确保“最后一次有效值”被保留。
+        usage = retried ?? usage
+        // 首次从 null 变成可用 usage 后继续由下一轮判断是否还需要重试。
+      }
+    }
+    if (!usage) return
+
+    // 始终写入 total（包含 0），保证压缩后 UI 百分比能即时回落，不残留旧值。
+    setSessionUsageTotalMap((prev) => ({ ...prev, [sessionId]: usage.input }))
+    if (usage.contextWindow && usage.contextWindow > 0) {
+      setSessionContextWindowMap((prev) => ({ ...prev, [sessionId]: usage.contextWindow as number }))
+    }
+
+    if (!checkAutoCompact) return
+    const ctxWindow = usage.contextWindow && usage.contextWindow > 0
+      ? usage.contextWindow
+      : ctxWindowRef.current
+    if (ctxWindow <= 0) return
+    if (usage.input / ctxWindow < 0.7) return
+    // 用 usage 所属会话触发压缩，避免会话切换导致目标偏移。
+    triggerAutoCompact(sessionId)
+  }, [ws, triggerAutoCompact])
+  refreshSessionUsageRef.current = refreshSessionUsage
+
+  // 正常路径：根据本轮 input token 占 contextWindow 的比例触发自动压缩
+  ws.onFinalUsage.current = useCallback(({ sessionKey }: { input: number; sessionKey?: string }) => {
+    // 关键约束：不再使用 final usage 直接覆盖 UI 占用率。
+    // 原因：该值在部分网关实现中是“单轮 token”，会导致占用率忽大忽小、非累计。
+    // 统一只信 sessions.list 的会话累计值，并且只在明确 sessionKey 时刷新对应会话。
+    if (!sessionKey) return
+    void refreshSessionUsageRef.current(sessionKey, true)
   }, [])
+
+  // 兜底路径：若已出现上下文溢出错误，立即尝试自动压缩一次
+  ws.onContextOverflow.current = useCallback((sessionId?: string) => {
+    // overflow 事件同样按来源会话触发，避免误压缩当前激活会话。
+    triggerAutoCompact(sessionId)
+  }, [triggerAutoCompact])
+
+  // 收到压缩完成事件后解锁，允许后续再次自动触发
+  ws.onCompactionEnd.current = useCallback((sessionKey?: string) => {
+    if (autoCompactUnlockTimerRef.current) {
+      clearTimeout(autoCompactUnlockTimerRef.current)
+      autoCompactUnlockTimerRef.current = null
+    }
+    isAutoCompactingRef.current = false
+    // 优先使用压缩事件来源会话，避免用户切换会话后把占用率刷到错误会话。
+    const sid = sessionKey ?? activeSessionIdRef.current
+    if (sid) {
+      // 压缩结束后主动拉一次最新 usage，让 UI 展示压缩后的真实占用率而不是旧值。
+      // 增加重试机制，确保获取到有效的 usage 数据
+      const refreshWithRetry = async (attempt: number = 0) => {
+        if (attempt > 5) return // 最多重试5次
+        
+        const delay = 500 + attempt * 200 // 首次500ms，每次增加200ms
+        await new Promise(resolve => setTimeout(resolve, delay))
+        
+        const session = sessionsRef.current.find((s) => s.id === sid)
+        const usage = await ws.getSessionTokenUsage(sid, session?.agentId)
+        
+        if (usage && usage.input > 0 && usage.contextWindow && usage.contextWindow > 0) {
+          // 成功获取到有效数据，更新 UI
+          setSessionUsageTotalMap((prev) => ({ ...prev, [sid]: usage.input }))
+          setSessionContextWindowMap((prev) => ({ ...prev, [sid]: usage.contextWindow as number }))
+        } else {
+          // 数据无效，继续重试
+          await refreshWithRetry(attempt + 1)
+        }
+      }
+      void refreshWithRetry()
+    }
+  }, [ws])
 
 
   // Get active session
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null
+  const currentContextWindow = activeSessionId
+    ? (sessionContextWindowMap[activeSessionId] ?? setup.config.contextWindow ?? 0)
+    : (setup.config.contextWindow ?? 0)
+  const currentUsageTotal = activeSessionId ? (sessionUsageTotalMap[activeSessionId] ?? 0) : 0
 
   // 模型热切换
   const defaultModelKey = setup.config.provider && setup.config.modelId
@@ -1085,6 +1230,8 @@ function App() {
               availableModels={availableModels}
               currentModelKey={currentModelKey}
               onSwitchModel={handleSwitchModel}
+              contextUsageTotal={currentUsageTotal}
+              contextWindow={currentContextWindow}
             />
           </div>
         </div>

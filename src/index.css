@@ -1223,6 +1223,45 @@ body {
   margin-right: 4px;
 }
 
+.chat-context-usage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  position: relative;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+  cursor: default;
+}
+
+.chat-context-usage svg {
+  transform: rotate(-90deg);
+}
+
+.chat-context-usage-track {
+  fill: none;
+  stroke: #e5e7eb;
+  stroke-width: 3;
+}
+
+.chat-context-usage-progress {
+  fill: none;
+  stroke: #4f46e5;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+.chat-context-usage-label {
+  position: absolute;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
 /* ============================================
    Thinking Bar (header 下方)
    ============================================ */

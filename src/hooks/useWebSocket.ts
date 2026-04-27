@@ -22,11 +22,13 @@ interface UseWebSocketReturn {
   isStreaming: boolean
   backendStatus: string
   onMessageStream: React.MutableRefObject<((msg: ChatMessage) => void) | null>
-  onFinalUsage: React.MutableRefObject<((usage: { input: number; output: number }) => void) | null>
-  onCompactionEnd: React.MutableRefObject<(() => void) | null>
+  onFinalUsage: React.MutableRefObject<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>
+  onContextOverflow: React.MutableRefObject<((sessionKey?: string) => void) | null>
+  onCompactionEnd: React.MutableRefObject<((sessionKey?: string) => void) | null>
   onStreamStart: React.MutableRefObject<(() => void) | null>
   patchSessionModel: (sessionKey: string, model: string | null, agentId?: string) => Promise<void>
   sendModelDirective: (sessionKey: string, modelKey: string, agentId?: string) => Promise<void>
+  getSessionTokenUsage: (sessionKey: string, agentId?: string) => Promise<{ input: number; output: number; contextWindow?: number } | null>
   reconnect: () => void
   refreshAgents: () => void
   client: GatewayClient | null
@@ -156,8 +158,9 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   // thinking/tool 阶段不推送流式文本，只推送工具调用和思考内容
   const phaseRef = useRef<'idle' | 'thinking' | 'tool' | 'text'>('idle')
   // 自动压缩：暴露给 App.tsx 的回调
-  const onFinalUsage = useRef<((usage: { input: number; output: number }) => void) | null>(null)
-  const onCompactionEnd = useRef<(() => void) | null>(null)
+  const onFinalUsage = useRef<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>(null)
+  const onContextOverflow = useRef<((sessionKey?: string) => void) | null>(null)
+  const onCompactionEnd = useRef<((sessionKey?: string) => void) | null>(null)
   // agent 活动开始通知（用于清除 isWaiting 等待状态）
   const onStreamStart = useRef<(() => void) | null>(null)
   /** 异步上报埋点：不 await，避免拖慢 WS 主流程 */
@@ -166,6 +169,116 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       console.warn('[telemetry] send failed:', err)
     })
   }, [])
+
+  /** 兼容网关返回的 number / string token 数值 */
+  const parseUsageNumber = (value: unknown): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+    if (typeof value === 'string') {
+      const n = Number(value)
+      return Number.isFinite(n) ? n : 0
+    }
+    return 0
+  }
+
+  /**
+   * 从 chat.final 事件中提取 usage。
+   * 兼容不同网关/适配器的字段命名与嵌套层级，避免自动压缩因字段不一致失效。
+   */
+  const extractUsage = (payload: Record<string, unknown>): { input: number; output: number } | null => {
+    const directUsage = payload.usage
+    const messageObj = payload.message && typeof payload.message === 'object'
+      ? payload.message as Record<string, unknown>
+      : null
+    const detailsObj = payload.details && typeof payload.details === 'object'
+      ? payload.details as Record<string, unknown>
+      : null
+    const usageObj = (
+      (directUsage && typeof directUsage === 'object' ? directUsage : null) ||
+      (messageObj?.usage && typeof messageObj.usage === 'object' ? messageObj.usage as Record<string, unknown> : null) ||
+      (detailsObj?.usage && typeof detailsObj.usage === 'object' ? detailsObj.usage as Record<string, unknown> : null)
+    ) as Record<string, unknown> | null
+
+    const extractFromCandidate = (candidate: Record<string, unknown>): { input: number; output: number } | null => {
+      // 兼容更多上游字段：不同 provider/gateway 可能使用驼峰、下划线或 Count 后缀命名。
+      const input = parseUsageNumber(
+        candidate.input
+        ?? candidate.input_tokens
+        ?? candidate.inputTokens
+        ?? candidate.inputTokenCount
+        ?? candidate.input_token_count
+        ?? candidate.prompt_tokens
+        ?? candidate.promptTokens
+        ?? candidate.promptTokenCount
+        ?? candidate.prompt_token_count
+        ?? candidate.input_token_count
+        ?? candidate.tokens_in
+        ?? candidate.tokensIn
+        ?? candidate.total_input_tokens
+        ?? candidate.totalInputTokens
+      )
+      // 输出 token 同样补齐常见别名，避免只拿到一侧字段导致 usage 被误判为空。
+      const output = parseUsageNumber(
+        candidate.output
+        ?? candidate.output_tokens
+        ?? candidate.outputTokens
+        ?? candidate.outputTokenCount
+        ?? candidate.output_token_count
+        ?? candidate.completion_tokens
+        ?? candidate.completionTokens
+        ?? candidate.completionTokenCount
+        ?? candidate.completion_token_count
+        ?? candidate.output_token_count
+        ?? candidate.tokens_out
+        ?? candidate.tokensOut
+        ?? candidate.total_output_tokens
+        ?? candidate.totalOutputTokens
+      )
+      // 某些实现只回传 total_tokens；此时把“总 token”兜底映射到 input，
+      // 目的是让 UI 首轮先有占用率显示，后续 sessions.list 会再校正到精确 input/output。
+      const total = parseUsageNumber(
+        candidate.total_tokens
+        ?? candidate.totalTokens
+        ?? candidate.token_count
+        ?? candidate.tokenCount
+      )
+      const normalizedInput = input > 0 ? input : (total > 0 ? total : 0)
+      if (normalizedInput <= 0 && output <= 0) return null
+      return { input: normalizedInput, output }
+    }
+
+    if (usageObj) {
+      const direct = extractFromCandidate(usageObj)
+      if (direct) return direct
+    }
+
+    // 兜底：不同网关适配器可能把 usage 放在更深层结构中，这里做有限深度递归扫描
+    const visited = new Set<unknown>()
+    const queue: unknown[] = [payload]
+    let depth = 0
+    while (queue.length > 0 && depth < 6) {
+      const levelSize = queue.length
+      for (let i = 0; i < levelSize; i++) {
+        const node = queue.shift()
+        if (!node || typeof node !== 'object' || visited.has(node)) continue
+        visited.add(node)
+
+        if (!Array.isArray(node)) {
+          const candidate = extractFromCandidate(node as Record<string, unknown>)
+          if (candidate) return candidate
+          for (const v of Object.values(node as Record<string, unknown>)) {
+            if (v && typeof v === 'object') queue.push(v)
+          }
+        } else {
+          for (const v of node) {
+            if (v && typeof v === 'object') queue.push(v)
+          }
+        }
+      }
+      depth += 1
+    }
+
+    return null
+  }
 
   useEffect(() => {
     if (!enabled || !url) return
@@ -355,7 +468,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           setBackendStatus('正在压缩上下文...')
         } else if (phase === 'end') {
           setBackendStatus('压缩完成，正在思考...')
-          onCompactionEnd.current?.()
+          // 透传压缩事件的 sessionKey，避免 App 层在多会话场景下刷新错会话占用率。
+          onCompactionEnd.current?.(normalizeSessionKey(p.sessionKey as string | undefined))
         }
       }
       return
@@ -673,13 +787,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       phaseRef.current = 'idle'
       toolCallsBufferRef.current = []
 
-      // 提取 usage 供自动压缩判断
-      const rawUsage = payload.usage as Record<string, unknown> | undefined
-      if (rawUsage) {
-        const input = (rawUsage.input ?? rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0) as number
-        const output = (rawUsage.output ?? rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0) as number
-        if (input > 0) onFinalUsage.current?.({ input, output })
-      }
+      // 提取 usage 供自动压缩判断（兼容不同字段命名/层级）
+      const usage = extractUsage(payload)
+      // 只要提取到 usage 就立刻回传给 App，避免首轮因为字段差异导致占用率一直停在 0。
+      if (usage) onFinalUsage.current?.({ ...usage, sessionKey })
     } else if (state === 'error') {
       setBackendStatus('')
       const errorMessage = translateError((payload.errorMessage as string) || '发生错误')
@@ -768,6 +879,17 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         status: 'done',
       }
       onMessageStream.current?.(msg)
+      // 终止原因命中上下文溢出时，通知 App 层触发一次自动压缩兜底。
+      // 这里把 sessionKey 一并透出，避免 App 层误压缩当前激活之外的其它会话。
+      const terminateReason = String(payload.errorMessage ?? payload.reason ?? '').toLowerCase()
+      if (
+        terminateReason.includes('context overflow')
+        || terminateReason.includes('prompt too large')
+        || (terminateReason.includes('context') && terminateReason.includes('too large'))
+        || (terminateReason.includes('context') && terminateReason.includes('overflow'))
+      ) {
+        onContextOverflow.current?.(sessionKey)
+      }
       // 埋点：上下文耗尽或进程终止导致的中断
       emitTelemetry({
         event_name: 'assistant_message_rendered',
@@ -1000,5 +1122,129 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       .catch((err) => console.warn('[ws] agents.list refresh failed:', err))
   }, [])
 
-  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, onMessageStream, onFinalUsage, onCompactionEnd, onStreamStart, patchSessionModel, sendModelDirective, reconnect, refreshAgents, client: clientRef.current }
+  const getSessionTokenUsage = useCallback(async (sessionKey: string, agentId?: string) => {
+    const client = clientRef.current
+    if (!client) return null
+    try {
+      const builtSessionKey = buildAgentSessionKey(sessionKey, agentId)
+      const payload = await client.request<{
+        defaults?: { contextTokens?: number; contextWindow?: number }
+        sessions?: Array<Record<string, unknown>>
+      }>('sessions.list', {})
+      const sessions = Array.isArray(payload?.sessions) ? payload.sessions : []
+      const hit = sessions.find((item) => {
+        const key = typeof item.key === 'string' ? item.key : ''
+        return key === builtSessionKey || normalizeSessionKey(key) === sessionKey
+      })
+      if (!hit) return null
+      // 兼容 sessions.list 的多种 usage 字段形态（平铺/嵌套 usage/tokenUsage）。
+      // 压缩后某些网关实现会只在嵌套对象里返回最新 input，不兼容会被误读为 0。
+      const usageContainer = (
+        (hit.usage && typeof hit.usage === 'object' ? hit.usage : null)
+        || (hit.tokenUsage && typeof hit.tokenUsage === 'object' ? hit.tokenUsage : null)
+      ) as Record<string, unknown> | null
+      // 逐个兜底读取“输入” token（该字段在不同网关实现里可能是单轮值，不一定累计）。
+      // 保留解析是为了兼容历史返回结构，但最终展示值会优先用 total（累计）口径。
+      const input = parseUsageNumber(
+        hit.input
+        ?? hit.inputTokens
+        ?? hit.input_tokens
+        ?? hit.inputTokenCount
+        ?? hit.input_token_count
+        ?? hit.prompt_tokens
+        ?? hit.promptTokens
+        ?? hit.promptTokenCount
+        ?? hit.prompt_token_count
+        ?? hit.tokens_in
+        ?? hit.tokensIn
+        ?? hit.total_input_tokens
+        ?? hit.totalInputTokens
+        ?? usageContainer?.input
+        ?? usageContainer?.inputTokens
+        ?? usageContainer?.input_tokens
+        ?? usageContainer?.inputTokenCount
+        ?? usageContainer?.input_token_count
+        ?? usageContainer?.prompt_tokens
+        ?? usageContainer?.promptTokens
+        ?? usageContainer?.promptTokenCount
+        ?? usageContainer?.prompt_token_count
+        ?? usageContainer?.tokens_in
+        ?? usageContainer?.tokensIn
+        ?? usageContainer?.total_input_tokens
+        ?? usageContainer?.totalInputTokens
+      )
+      // 会话占用率应使用“累计口径”。
+      // 对应网关字段通常是 total_tokens / totalTokens / token_count；
+      // 若该值存在，必须优先使用它，避免误用单轮 input 导致占用率忽大忽小。
+      const total = parseUsageNumber(
+        hit.total_tokens
+        ?? hit.totalTokens
+        ?? hit.token_count
+        ?? hit.tokenCount
+        ?? hit.total
+        ?? hit.totalTokenCount
+        ?? usageContainer?.total_tokens
+        ?? usageContainer?.totalTokens
+        ?? usageContainer?.token_count
+        ?? usageContainer?.tokenCount
+        ?? usageContainer?.total
+        ?? usageContainer?.totalTokenCount
+      )
+      // 输出 token 同样做兼容读取，保持 usage 结构稳定。
+      const output = parseUsageNumber(
+        hit.output
+        ?? hit.outputTokens
+        ?? hit.output_tokens
+        ?? hit.outputTokenCount
+        ?? hit.output_token_count
+        ?? hit.completion_tokens
+        ?? hit.completionTokens
+        ?? hit.completionTokenCount
+        ?? hit.completion_token_count
+        ?? hit.tokens_out
+        ?? hit.tokensOut
+        ?? hit.total_output_tokens
+        ?? hit.totalOutputTokens
+        ?? usageContainer?.output
+        ?? usageContainer?.outputTokens
+        ?? usageContainer?.output_tokens
+        ?? usageContainer?.outputTokenCount
+        ?? usageContainer?.output_token_count
+        ?? usageContainer?.completion_tokens
+        ?? usageContainer?.completionTokens
+        ?? usageContainer?.completionTokenCount
+        ?? usageContainer?.completion_token_count
+        ?? usageContainer?.tokens_out
+        ?? usageContainer?.tokensOut
+        ?? usageContainer?.total_output_tokens
+        ?? usageContainer?.totalOutputTokens
+      )
+      // normalizedInput 是 UI 展示的“当前会话上下文已占用 token”。
+      // 正确口径：优先 total（累计，通常=输入+输出）；
+      // 若 total 缺失，则回退到 input + output，避免只按输入计算导致占用率偏低。
+      const summedInputOutput = input + output
+      const normalizedInput = total > 0 ? total : (summedInputOutput > 0 ? summedInputOutput : (input > 0 ? input : 0))
+      // context window 兼容 contextWindow/context_tokens 等不同命名。
+      const contextWindow = parseUsageNumber(
+        hit.contextWindow
+        ?? hit.contextTokens
+        ?? hit.context_tokens
+        ?? hit.contextTokenCount
+        ?? hit.context_token_count
+        ?? usageContainer?.contextWindow
+        ?? usageContainer?.contextTokens
+        ?? usageContainer?.context_tokens
+        ?? usageContainer?.contextTokenCount
+        ?? usageContainer?.context_token_count
+        ?? payload?.defaults?.contextWindow
+        ?? payload?.defaults?.contextTokens
+      )
+      return { input: normalizedInput, output, contextWindow: contextWindow > 0 ? contextWindow : undefined }
+    } catch (err) {
+      console.warn('[ws] getSessionTokenUsage failed:', err)
+      return null
+    }
+  }, [])
+
+  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, onMessageStream, onFinalUsage, onContextOverflow, onCompactionEnd, onStreamStart, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current }
 }

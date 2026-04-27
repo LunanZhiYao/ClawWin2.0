@@ -21,6 +21,8 @@ interface ChatAreaProps {
   availableModels: AvailableModel[]
   currentModelKey: string
   onSwitchModel: (modelKey: string) => void
+  contextUsageTotal: number
+  contextWindow: number
 }
 
 function getAgentDisplayName(agent: AgentInfo): string {
@@ -45,6 +47,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   availableModels,
   currentModelKey,
   onSwitchModel,
+  contextUsageTotal,
+  contextWindow,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
@@ -67,6 +71,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
   const hasStreamingMessage = messages.some((msg) => msg.status === 'streaming')
+  const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
+  const usagePercent = Math.round(usageRate * 100)
+  const ringRadius = 10
+  const ringCircumference = 2 * Math.PI * ringRadius
+  const ringOffset = ringCircumference * (1 - usageRate)
 
   // 点击外部关闭 agent 选择器和创建表单
   useEffect(() => {
@@ -335,6 +344,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
             </div>
           )}
+          <div
+            className="chat-context-usage"
+            title={`当前上下文使用率 ${usagePercent}%（${contextUsageTotal}/${contextWindow || 0} tokens）`}
+            aria-label={`当前上下文使用率 ${usagePercent}%`}
+          >
+            <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+              <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />
+              <circle
+                className="chat-context-usage-progress"
+                cx="14"
+                cy="14"
+                r={ringRadius}
+                strokeDasharray={ringCircumference}
+                strokeDashoffset={ringOffset}
+              />
+            </svg>
+            <span className="chat-context-usage-label">{usagePercent}%</span>
+          </div>
           <button
             className="chat-header-badge"
             onClick={handleCompact}
