@@ -361,6 +361,10 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
           },
           "memory-tencentdb": {
             enabled: true,
+            // OpenClaw v2026.4.5+：若为 false 会拦截 before_prompt_build，长期记忆召回静默失效（npm 文档要求保持 true）
+            hooks: {
+              allowPromptInjection: true,
+            },
             config: {
               storeBackend: "sqlite",
               capture: {

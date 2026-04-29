@@ -1422,11 +1422,67 @@ app.whenReady().then(async () => {
       const configPath = getOpenclawConfigPath()
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-        const tencentEnabled = config?.plugins?.entries?.['memory-tencentdb']?.enabled === true
+        // 升级场景关键点：1.0.0 没有腾讯插件配置，直接升级到 1.0.3 时这里必须“补配置”。
+        if (!config.plugins) config.plugins = {}
+        if (!config.plugins.entries) config.plugins.entries = {}
+        // 先取旧配置（如果存在），后续按“缺失补默认、已有保留”的策略处理。
+        const existingMemoryEntry = config.plugins.entries['memory-tencentdb']
+        // 逐层保底：确保插件条目对象存在，避免旧版本配置缺字段导致访问异常。
+        if (!existingMemoryEntry || typeof existingMemoryEntry !== 'object') {
+          config.plugins.entries['memory-tencentdb'] = { enabled: true, config: {} }
+        }
+        const memoryEntry = config.plugins.entries['memory-tencentdb'] as Record<string, unknown>
+        // 明确启用腾讯长期记忆插件：符合 1.0.3 升级目标（从原生记忆切换到腾讯记忆）。
+        memoryEntry.enabled = true
+        // 确保 config 为对象，后续才能安全补齐默认字段。
+        if (!memoryEntry.config || typeof memoryEntry.config !== 'object') memoryEntry.config = {}
+        const memoryCfg = memoryEntry.config as Record<string, unknown>
+        // 缺失 storeBackend 时默认 sqlite，保证升级后无需额外配置即可落地到本地存储。
+        if (typeof memoryCfg.storeBackend !== 'string' || !memoryCfg.storeBackend.trim()) {
+          memoryCfg.storeBackend = 'sqlite'
+        }
+        // 缺失 capture 配置时补默认采集参数，保证 L0/L1 采集任务可按预期运行。
+        if (!memoryCfg.capture || typeof memoryCfg.capture !== 'object') {
+          memoryCfg.capture = {
+            enabled: true,
+            l0l1RetentionDays: 30,
+            cleanTime: '03:00',
+          }
+        }
+        // 缺失 extraction 配置时补默认提取参数，保证对话后可提取结构化记忆。
+        if (!memoryCfg.extraction || typeof memoryCfg.extraction !== 'object') {
+          memoryCfg.extraction = {
+            enabled: true,
+            enableDedup: true,
+            maxMemoriesPerSession: 20,
+          }
+        }
+        // 缺失 pipeline 配置时补默认调度参数，保证 L1/L2/L3 的调度链路可运行。
+        if (!memoryCfg.pipeline || typeof memoryCfg.pipeline !== 'object') {
+          memoryCfg.pipeline = {
+            everyNConversations: 5,
+            enableWarmup: true,
+            l1IdleTimeoutSeconds: 60,
+            l2DelayAfterL1Seconds: 90,
+            l2MinIntervalSeconds: 300,
+            l2MaxIntervalSeconds: 1800,
+            sessionActiveWindowHours: 24,
+          }
+        }
+        // 缺失 recall 配置时补默认召回参数，保证会话前检索链路具备基础可用性。
+        if (!memoryCfg.recall || typeof memoryCfg.recall !== 'object') {
+          memoryCfg.recall = {
+            enabled: true,
+            maxResults: 5,
+            scoreThreshold: 0.3,
+            strategy: 'hybrid',
+            timeoutMs: 5000,
+          }
+        }
         // 旧逻辑只在 session-memory 已显式为 true 时才关闭；
         // 但在某些版本中“缺省不写”也会被当成启用，导致仍出现 memory_search。
-        // 因此这里改为：只要启用了腾讯插件，就无条件写入 session-memory=false。
-        if (tencentEnabled) {
+        // 因此这里改为：完成插件条目补齐后，无条件写入 session-memory=false。
+        {
           if (!config.hooks) config.hooks = {}
           if (!config.hooks.internal) config.hooks.internal = { enabled: true, entries: {} }
           if (!config.hooks.internal.entries) config.hooks.internal.entries = {}
@@ -1443,10 +1499,6 @@ app.whenReady().then(async () => {
           // 背景：新版插件在用户配置层禁用了 provider=local。
           // 若用户没有可用 embedding 模型，官方建议可直接 provider=none（仅禁用向量检索）。
           // 这里采用最稳妥的默认修复：把不可用/不完整配置统一回退为 none。
-          if (!config.plugins) config.plugins = {}
-          if (!config.plugins.entries) config.plugins.entries = {}
-          if (!config.plugins.entries['memory-tencentdb']) config.plugins.entries['memory-tencentdb'] = { enabled: true, config: {} }
-          const memoryEntry = config.plugins.entries['memory-tencentdb']
           if (!memoryEntry.config || typeof memoryEntry.config !== 'object') memoryEntry.config = {}
           const memoryCfg = memoryEntry.config as Record<string, unknown>
           if (!memoryCfg.embedding || typeof memoryCfg.embedding !== 'object') memoryCfg.embedding = {}
@@ -1461,10 +1513,22 @@ app.whenReady().then(async () => {
             delete embedding.model
             delete embedding.dimensions
           }
+          // 缺失 provider 时默认补 none：与 1.0.3 向导默认值保持一致，避免升级用户出现“未定义 provider”。
+          if (typeof embedding.provider !== 'string' || !embedding.provider.trim()) {
+            embedding.enabled = true
+            embedding.provider = 'none'
+          }
+
+          // OpenClaw v2026.4.5+：安全开关；为 false 时插件 before_prompt_build 不注册，升级新版宿主后易表现为「长期记忆坏了」
+          if (!memoryEntry.hooks || typeof memoryEntry.hooks !== 'object') memoryEntry.hooks = {}
+          const memHooks = memoryEntry.hooks as Record<string, unknown>
+          if (memHooks.allowPromptInjection !== true) {
+            memHooks.allowPromptInjection = true
+          }
 
           config.meta = { ...(config.meta ?? {}), lastTouchedAt: new Date().toISOString() }
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-          console.log('[memory] forced session-memory=disabled and migrated local embedding to none (memory-tencentdb)')
+          console.log('[memory] ensured memory-tencentdb defaults, disabled builtin memory, migrated embedding/hook config')
         }
       }
     } catch (err) {

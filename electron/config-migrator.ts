@@ -127,6 +127,27 @@ export class ConfigMigrator {
       this.log('info', '已将 openai 的 API 格式从 openai-completions 迁移为 openai-responses（官方 API 端点）')
     }
 
+    // 腾讯长期记忆升级兼容：
+    // 目标场景是 1.0.0（仅原生记忆）直接升级到 1.0.3（腾讯记忆方案）。
+    // 这里做“缺失即补齐”的迁移，保证升级后配置可直接使用。
+    if (!newConfig.plugins || typeof newConfig.plugins !== 'object') newConfig.plugins = {}
+    if (!newConfig.plugins.entries || typeof newConfig.plugins.entries !== 'object') newConfig.plugins.entries = {}
+    const pluginEntries = newConfig.plugins.entries as Record<string, unknown>
+    if (!pluginEntries['memory-tencentdb'] || typeof pluginEntries['memory-tencentdb'] !== 'object') {
+      pluginEntries['memory-tencentdb'] = { enabled: true, config: {} }
+      this.log('info', '已补齐 memory-tencentdb 插件条目（升级兼容）')
+    }
+    const memEntry = pluginEntries['memory-tencentdb'] as Record<string, unknown>
+    // 升级到 1.0.3 后默认启用腾讯长期记忆插件。
+    memEntry.enabled = true
+    // v2026.4.5+ 兼容：允许 before_prompt_build 注入记忆上下文，避免静默失效。
+    if (!memEntry.hooks || typeof memEntry.hooks !== 'object') memEntry.hooks = {}
+    const h = memEntry.hooks as Record<string, unknown>
+    if (h.allowPromptInjection !== true) {
+      h.allowPromptInjection = true
+      this.log('info', '已为 memory-tencentdb 设置 hooks.allowPromptInjection=true（升级兼容）')
+    }
+
     // 确保 gateway.auth.token 存在（如果有 gateway 配置）
     if (newConfig.gateway) {
       if (!newConfig.gateway.auth) {
