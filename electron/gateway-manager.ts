@@ -322,6 +322,10 @@ export class GatewayManager {
       this.process = null
     }
 
+    // OpenClaw 在 %TEMP%/openclaw/gateway.*.lock 中记录网关 PID；Windows 会复用 PID，
+    // 若旧锁未删而同一 PID 已变成其他进程（如 IDE），会误报「gateway already running」导致子进程秒退
+    this.cleanupStaleGatewayLocks()
+
     const entryScript = this.findEntryScript()
     const token = this.readGatewayToken()
 
@@ -432,6 +436,103 @@ export class GatewayManager {
       this.setState('error')
       this.process = null
     })
+  }
+
+  /**
+   * 删除 %TEMP%/openclaw/ 下「已失效」的 gateway 锁文件，避免误拦启动。
+   * 锁文件为 JSON：{ pid, createdAt, configPath }。若 pid 无进程、或存在但非 node.exe，则视为陈旧。
+   */
+  private cleanupStaleGatewayLocks(): void {
+    // 与 openclaw 使用同一目录名，见上游 OS 临时目录下的 openclaw 子目录
+    const lockDir = path.join(os.tmpdir(), 'openclaw')
+    if (!fs.existsSync(lockDir)) {
+      return
+    }
+    let names: string[]
+    try {
+      names = fs.readdirSync(lockDir)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (!name.startsWith('gateway.') || !name.endsWith('.lock')) {
+        continue
+      }
+      const fullPath = path.join(lockDir, name)
+      let parsed: { pid?: unknown }
+      try {
+        parsed = JSON.parse(fs.readFileSync(fullPath, 'utf-8')) as { pid?: unknown }
+      } catch {
+        continue
+      }
+      const pid = typeof parsed.pid === 'number' && Number.isFinite(parsed.pid) ? parsed.pid : NaN
+      if (!Number.isFinite(pid) || pid <= 0) {
+        try {
+          fs.unlinkSync(fullPath)
+          this.log('info', `已删除无效网关锁: ${name}`)
+        } catch {
+          // 忽略仅读/占用等不可删情况
+        }
+        continue
+      }
+      if (!this.isLockPidStale(pid)) {
+        continue
+      }
+      try {
+        fs.unlinkSync(fullPath)
+        this.log('info', `已删除陈旧网关锁 (PID ${pid}): ${name}`)
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * 锁内 PID 是否应被忽略：无此进程，或（Win）进程存在但不是 node（说明 PID 被复用给别的程序）。
+   */
+  private isLockPidStale(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+    } catch (e: unknown) {
+      const code = e && typeof e === 'object' && 'code' in e ? (e as NodeJS.ErrnoException).code : undefined
+      if (code === 'ESRCH') {
+        return true
+      }
+      // 无权限等：不删锁，避免误伤其他会话的网关
+      return false
+    }
+    if (process.platform !== 'win32') {
+      // 非 Windows：能 kill(0) 即认为仍可能为同一网关，不自动删
+      return false
+    }
+    const image = this.getWindowsTasklistImageName(pid)
+    if (!image) {
+      return true
+    }
+    const lower = image.toLowerCase()
+    // 本应用通过 node.exe 拉起 openclaw.mjs，锁应只对应 node；若变为 Cursor/其他 exe 则锁必陈旧
+    return lower !== 'node.exe'
+  }
+
+  /**
+   * 用 tasklist 解析 PID 对应映像名（首字段 CSV），失败返回 null。
+   */
+  private getWindowsTasklistImageName(pid: number): string | null {
+    try {
+      const out = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, {
+        encoding: 'utf-8',
+        timeout: 5000,
+        windowsHide: true,
+      })
+      const firstLine = out.trim().split(/\r?\n/)[0] ?? ''
+      if (!firstLine || /INFO:\s*No tasks/i.test(firstLine)) {
+        return null
+      }
+      const m = firstLine.match(/^"([^"]+)"/)
+      return m ? m[1] : null
+    } catch {
+      return null
+    }
   }
 
   private findEntryScript(): string {
