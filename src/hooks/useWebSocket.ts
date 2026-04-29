@@ -38,6 +38,48 @@ function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
+/**
+ * 对后端返回文本做统一脱敏，防止敏感凭证被展示到 UI。
+ * 说明：
+ * 1) 这里是“最后一道前端展示闸门”，即使上游模型误回显，也会被替换。
+ * 2) 规则尽量覆盖常见凭证形态（API Key / Bearer / JWT / 环境变量赋值）。
+ * 3) 采用纯文本替换，不抛错、不终止流式过程，避免影响正常会话体验。
+ */
+function redactSensitiveText(input: string): string {
+  // 非字符串或空串直接返回，避免不必要处理开销。
+  if (!input || typeof input !== 'string') return input
+
+  // 用局部变量逐步替换，保证每条规则都作用在最新文本上。
+  let output = input
+
+  // 规则1：OpenAI 风格密钥（sk-...）直接整体替换。
+  // 例如：sk-xxxx... 这类高风险模式一律不允许透出。
+  output = output.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+
+  // 规则2：常见 Bearer Token（Authorization 头）替换。
+  // 保留 "Bearer " 前缀便于上下文可读，但令牌正文全部抹除。
+  output = output.replace(/\b(Bearer)\s+[A-Za-z0-9\-._~+/]+=*\b/gi, '$1 [REDACTED]')
+
+  // 规则3：JWT（三段式 base64url）替换，避免会话 token 外泄。
+  output = output.replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/g, '[REDACTED]')
+
+  // 规则4：API Key/Token/Password 等键值对（含中英文 key 名）替换值部分。
+  // 只替换赋值右侧，尽量保留字段名帮助用户定位问题来源。
+  output = output.replace(
+    /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|private[_-]?key|OPENAI_API_KEY|ACCESS_TOKEN)\b\s*[:=]\s*["']?([^\s"',`]+)["']?/gi,
+    (_m, key) => `${key}: [REDACTED]`,
+  )
+
+  // 规则5：环境变量导出/设置语句中的高风险变量值替换。
+  // 覆盖 bash `export X=...`、PowerShell `$env:X=...`、Windows `set X=...`。
+  output = output.replace(
+    /\b(export|set|\$env:)\s*(OPENAI_API_KEY|ACCESS_TOKEN|API_KEY|AUTH_TOKEN)\s*=\s*([^\s"']+)/gi,
+    (_m, cmd, key) => `${cmd} ${key}=[REDACTED]`,
+  )
+
+  return output
+}
+
 /** 构造 gateway 可解析的 sessionKey: agent:{agentId}:{originalId} */
 function buildAgentSessionKey(sessionKey: string, agentId?: string): string {
   if (!agentId || agentId === 'main') return sessionKey
@@ -59,18 +101,18 @@ function normalizeSessionKey(sessionKey?: string): string | undefined {
  */
 function extractText(message: unknown): string {
   // 直接是字符串
-  if (typeof message === 'string') return message
+  if (typeof message === 'string') return redactSensitiveText(message)
   if (!message || typeof message !== 'object') return ''
 
   const msg = message as Record<string, unknown>
   const content = msg.content
 
   // content 是字符串
-  if (typeof content === 'string') return content
+  if (typeof content === 'string') return redactSensitiveText(content)
 
   // content 是数组 [{type: "text", text: "..."}, ...]
   if (Array.isArray(content)) {
-    return content
+    return redactSensitiveText(content
       .map((block: unknown) => {
         if (typeof block === 'string') return block
         if (block && typeof block === 'object' && 'text' in block) {
@@ -78,18 +120,20 @@ function extractText(message: unknown): string {
         }
         return ''
       })
-      .join('')
+      .join(''))
   }
 
   // 备用：直接使用 text 字段
-  if (typeof msg.text === 'string') return msg.text
+  if (typeof msg.text === 'string') return redactSensitiveText(msg.text)
 
   return ''
 }
 
 /** 将常见英文错误消息翻译为中文 */
 function translateError(msg: string): string {
-  const lower = msg.toLowerCase()
+  // 先做一次脱敏，避免错误消息里夹带服务端返回的原始凭证。
+  const safeMsg = redactSensitiveText(msg)
+  const lower = safeMsg.toLowerCase()
   if (lower.includes('insufficient') && (lower.includes('balance') || lower.includes('credit') || lower.includes('fund') || lower.includes('quota')))
     return '余额不足，请充值后再试'
   if (lower.includes('402') || lower.includes('payment required'))
@@ -110,7 +154,7 @@ function translateError(msg: string): string {
     return '模型不可用，请切换其他模型'
   if (lower.includes('context') && (lower.includes('length') || lower.includes('exceed') || lower.includes('too long')))
     return '上下文长度超限，请压缩对话或开启新会话'
-  return msg
+  return safeMsg
 }
 
 /** 将聊天附件转为埋点所需元信息（文件名/类型/mime），随 user_message_sent 上报 */
@@ -404,7 +448,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           let result: string | undefined
           for (const key of ['result', 'output', 'content', 'text', 'response', 'stdout']) {
             const val = data[key]
-            if (typeof val === 'string' && val) { result = val; break }
+            if (typeof val === 'string' && val) { result = redactSensitiveText(val); break }
           }
           // 更新最后一个 running 状态的工具调用
           const buf = toolCallsBufferRef.current
@@ -827,7 +871,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     } else if (state === 'aborted') {
       // 被中断的响应，使用已有内容
       setBackendStatus('')
-      const text = `${streamBufferRef.current.get(runId) || ''}(已中断)`
+      const text = `${redactSensitiveText(streamBufferRef.current.get(runId) || '')}(已中断)`
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
       lastPushedLenRef.current.delete(runId)
@@ -861,7 +905,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     } else if (state === 'terminated') {
       // 上下文耗尽或进程被终止
       setBackendStatus('')
-      const buffered = streamBufferRef.current.get(runId) || ''
+      const buffered = redactSensitiveText(streamBufferRef.current.get(runId) || '')
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
       lastPushedLenRef.current.delete(runId)

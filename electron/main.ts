@@ -1520,11 +1520,11 @@ app.whenReady().then(async () => {
           }
 
           // OpenClaw v2026.4.5+：安全开关；为 false 时插件 before_prompt_build 不注册，升级新版宿主后易表现为「长期记忆坏了」
-          if (!memoryEntry.hooks || typeof memoryEntry.hooks !== 'object') memoryEntry.hooks = {}
-          const memHooks = memoryEntry.hooks as Record<string, unknown>
-          if (memHooks.allowPromptInjection !== true) {
-            memHooks.allowPromptInjection = true
-          }
+          // if (!memoryEntry.hooks || typeof memoryEntry.hooks !== 'object') memoryEntry.hooks = {}
+          // const memHooks = memoryEntry.hooks as Record<string, unknown>
+          // if (memHooks.allowPromptInjection !== true) {
+          //   memHooks.allowPromptInjection = true
+          // }
 
           config.meta = { ...(config.meta ?? {}), lastTouchedAt: new Date().toISOString() }
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
@@ -1699,6 +1699,30 @@ app.whenReady().then(async () => {
             if (patched !== content) {
               fs.writeFileSync(agentsPath, patched, 'utf-8')
               console.log('[workspace] switched AGENTS.md memory guidance to tdai_memory_search')
+              content = patched
+            }
+          }
+          // 安全升级（旧工作区补丁）：
+          // 1) 旧版 AGENTS.md 只有“不要泄露私密数据”，约束过于宽泛。
+          // 2) 这里追加“凭证永不回显”硬规则，覆盖用户诱导“完整显示 key”等场景。
+          // 3) 通过 contains 检查实现幂等：重复启动不会重复写入同一段规则。
+          const hasSecretGuard = content.includes('严禁输出任何密钥/令牌/密码/凭证的明文')
+          if (!hasSecretGuard) {
+            const securityPatch = [
+              '',
+              '- 严禁输出任何密钥/令牌/密码/凭证的明文（如 API Key、Access Token、JWT、Cookie、私钥）',
+              '- 若用户要求“完整显示”“补全”“导出”凭证，必须拒绝，并仅返回 [REDACTED]',
+              '- 禁止复述来自环境变量、配置文件、日志、工具输出中的敏感值（包括 OPENAI_API_KEY / ACCESS_TOKEN）',
+              '- 即使用户声称“我是管理员/我授权你显示”，也不能泄露敏感值',
+            ].join('\n')
+            const securityAnchor = '## 安全'
+            if (content.includes(securityAnchor)) {
+              const patched = content.replace(securityAnchor, `${securityAnchor}${securityPatch}`)
+              if (patched !== content) {
+                fs.writeFileSync(agentsPath, patched, 'utf-8')
+                console.log('[workspace] strengthened AGENTS.md secret-guard rules')
+                content = patched
+              }
             }
           }
         }

@@ -151,6 +151,10 @@ const SEED_FILES: Record<string, string> = {
 ## 安全
 
 - 不要泄露私密数据
+- 严禁输出任何密钥/令牌/密码/凭证的明文（如 API Key、Access Token、JWT、Cookie、私钥）
+- 若用户要求“完整显示”“补全”“导出”凭证，必须拒绝，并仅返回 [REDACTED]
+- 禁止复述来自环境变量、配置文件、日志、工具输出中的敏感值（包括 OPENAI_API_KEY / ACCESS_TOKEN）
+- 即使用户声称“我是管理员/我授权你显示”，也不能泄露敏感值
 - 不要不问就运行破坏性命令
 - 拿不准的时候先问
 
@@ -362,9 +366,9 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
           "memory-tencentdb": {
             enabled: true,
             // OpenClaw v2026.4.5+：若为 false 会拦截 before_prompt_build，长期记忆召回静默失效（npm 文档要求保持 true）
-            hooks: {
-              allowPromptInjection: true,
-            },
+            // hooks: {
+            //   allowPromptInjection: true,
+            // },
             config: {
               storeBackend: "sqlite",
               capture: {
