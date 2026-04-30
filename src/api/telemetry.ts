@@ -7,6 +7,7 @@ const API_BASE_URL = import.meta.env.VITE_EXPORT_API_BASE_URL || 'http://localho
 /** 当前支持的上报事件名 */
 export type TelemetryEventName =
   | 'user_message_sent'
+  | 'chat_send_ack'
   | 'assistant_message_rendered'
   | 'chat_abort_requested'
   | 'chat_abort_result'

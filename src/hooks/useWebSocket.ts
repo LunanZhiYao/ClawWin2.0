@@ -1037,6 +1037,20 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         },
       })
       const ack = await client.request<{ runId?: string; status?: string }>('chat.send', payload)
+      // 埋点：chat.send 已收到 ack，建立 idempotency_key -> run_id 映射
+      emitTelemetry({
+        event_name: 'chat_send_ack',
+        event_time: new Date().toISOString(),
+        user_id: userId ?? null,
+        session_id: builtSessionKey,
+        run_id: ack?.runId || null,
+        status: ack?.status || 'accepted',
+        payload: {
+          agent_id: agentId || null,
+          model_override: modelOverride || null,
+          idempotency_key: idempotencyKey,
+        },
+      })
       // chat.send 一旦拿到 ack.runId，就提前建立 session -> run 关联，避免“快速中断”时 run_id 丢失
       if (ack?.runId) {
         activeRunIdRef.current = ack.runId
