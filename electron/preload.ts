@@ -187,10 +187,24 @@ const electronAPI = {
     getConfig: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('skills:getConfig'),
     saveConfig: (config: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('skills:saveConfig', config),
+    fetchWebSkills: (params: { q?: string; page?: number; size?: number }): Promise<{
+      ok: boolean
+      error?: string
+      data?: { items: unknown[]; total: number; page: number; size: number }
+    }> => ipcRenderer.invoke('skills:fetchWebSkills', params),
+    downloadWebSkill: (params: { namespace: string; slug: string; displayName?: string }): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('skills:downloadWebSkill', params),
+    onWebDownloadStatus: (callback: (status: { namespace: string; slug: string; status: 'running' | 'success' | 'error'; error?: string; installedNames?: string[] }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: { namespace: string; slug: string; status: 'running' | 'success' | 'error'; error?: string; installedNames?: string[] }) => callback(status)
+      ipcRenderer.on('skills:webDownloadStatus', handler)
+      return () => ipcRenderer.removeListener('skills:webDownloadStatus', handler)
+    },
     canInstall: (skillName: string): Promise<{ canInstall: boolean; reason?: string }> =>
       ipcRenderer.invoke('skills:canInstall', skillName),
     installDep: (skillName: string): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('skills:installDep', skillName),
+    deleteLocalSkill: (params: { name: string; source: 'local' | 'workspace' }): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('skills:deleteLocalSkill', params),
   },
 
   // Pairing

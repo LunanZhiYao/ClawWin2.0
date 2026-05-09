@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { SkillInfo, SkillEntryConfig } from '../../types'
 import { SKILL_CN } from '../../constants/skillCn'
 
@@ -6,7 +6,17 @@ interface SkillSettingsProps {
   onClose: () => void
 }
 
-type TabKey = 'enabled' | 'all' | 'recommended' | 'local'
+type TabKey = 'enabled' | 'all' | 'recommended' | 'local' | 'store'
+
+interface WebSkillItem {
+  id: number
+  slug: string
+  displayName: string
+  summary: string
+  status: string
+  namespace: string
+  downloadCount: number
+}
 
 const RECOMMENDED_SKILLS = [
   '天气查询', '新闻资讯', '百度搜索', '高德地图',
@@ -46,10 +56,14 @@ const KEY_TIPS: Record<string, string> = {
   'TAVILY_API_KEY': '前往 Tavily 官网注册获取 API Key（免费额度可用）',
 }
 
+/** 商城连续多个一键安装成功时，合并为一次网关重启（毫秒） */
+const SKILL_STORE_GATEWAY_RESTART_DEBOUNCE_MS = 2000
+
 const TABS: { key: TabKey; label: string }[] = [
   // { key: 'recommended', label: '推荐技能' },
   { key: 'enabled', label: '已开启' },
   { key: 'all', label: '全部技能' },
+  { key: 'store', label: '技能商城' },
   { key: 'local', label: '本地技能' },
 ]
 
@@ -79,6 +93,21 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
   const [tab, setTab] = useState<TabKey>('enabled')
   const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [installing, setInstalling] = useState<Record<string, boolean>>({})
+  const [deleting, setDeleting] = useState<Record<string, boolean>>({})
+  /** 本地技能卡片右上角菜单：当前展开的技能 name */
+  const [localSkillMenuOpen, setLocalSkillMenuOpen] = useState<string | null>(null)
+  const [storeSkills, setStoreSkills] = useState<WebSkillItem[]>([])
+  const [storeLoading, setStoreLoading] = useState(false)
+  const [storePage, setStorePage] = useState(0)
+  const [storeSize] = useState(20)
+  const [storeTotal, setStoreTotal] = useState(0)
+  const [storeDownloading, setStoreDownloading] = useState<Record<string, boolean>>({})
+  const [storeInstalledMap, setStoreInstalledMap] = useState<Record<string, string>>({})
+  const [storeRefreshTick, setStoreRefreshTick] = useState(0)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [skillToDelete, setSkillToDelete] = useState<SkillInfo | null>(null)
+  const downloadBeforeNamesRef = useRef<Record<string, Set<string>>>({})
+  const gatewayRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -94,6 +123,55 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
     })()
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim())
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  useEffect(() => {
+    if (tab !== 'store') return
+    let cancelled = false
+    setStoreLoading(true)
+    ;(async () => {
+      try {
+        const result = await window.electronAPI.skills.fetchWebSkills({
+          q: debouncedSearch || undefined,
+          page: storePage,
+          size: storeSize,
+        })
+        if (cancelled) return
+        if (!result.ok || !result.data) {
+          setStoreSkills([])
+          setStoreTotal(0)
+          setStatus({ type: 'error', message: result.error ?? '加载技能商城失败' })
+          return
+        }
+        const mapped = (result.data.items as Array<Record<string, unknown>>).map((item) => ({
+          id: Number(item.id ?? 0),
+          slug: String(item.slug ?? ''),
+          displayName: String(item.displayName ?? item.slug ?? ''),
+          summary: String(item.summary ?? ''),
+          status: String(item.status ?? ''),
+          namespace: String(item.namespace ?? ''),
+          downloadCount: Number(item.downloadCount ?? 0),
+        }))
+        setStoreSkills(mapped)
+        setStoreTotal(Number(result.data.total ?? 0))
+      } catch {
+        if (!cancelled) {
+          setStoreSkills([])
+          setStoreTotal(0)
+          setStatus({ type: 'error', message: '加载技能商城失败' })
+        }
+      } finally {
+        if (!cancelled) setStoreLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [tab, debouncedSearch, storePage, storeSize, storeRefreshTick])
 
   const filtered = useMemo(() => {
     let list = skills
@@ -117,6 +195,34 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
     }
     return list
   }, [skills, tab, search])
+
+  useEffect(() => {
+    setStorePage(0)
+  }, [debouncedSearch])
+
+  useEffect(() => {
+    if (tab !== 'local') setLocalSkillMenuOpen(null)
+  }, [tab])
+
+  useEffect(() => {
+    if (!skillToDelete) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSkillToDelete(null)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [skillToDelete])
+
+  useEffect(() => {
+    if (!localSkillMenuOpen) return
+    const onMouseDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-local-skill-menu-root="1"]')) return
+      setLocalSkillMenuOpen(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [localSkillMenuOpen])
 
   const handleToggle = useCallback((name: string) => {
     setSkills(prev => prev.map(s =>
@@ -189,9 +295,167 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
     } catch { /* ignore */ }
   }, [])
 
-  const handleOpenStore = useCallback(() => {
-    window.electronAPI.shell.openExternal('https://clawhub.ai/')
+  const handleDeleteLocalSkill = useCallback(async (skill: SkillInfo) => {
+    if (skill.source !== 'local' && skill.source !== 'workspace') return
+
+    setDeleting(prev => ({ ...prev, [skill.name]: true }))
+    setStatus(null)
+    try {
+      const result = await window.electronAPI.skills.deleteLocalSkill({ name: skill.name, source: skill.source })
+      if (!result.ok) {
+        setStatus({ type: 'error', message: result.error ?? `删除 ${skill.name} 失败` })
+        return
+      }
+      const list = await window.electronAPI.skills.list()
+      setSkills(list)
+      setStatus({ type: 'success', message: `${skill.name} 已删除并同步更新配置` })
+    } catch {
+      setStatus({ type: 'error', message: `删除 ${skill.name} 失败` })
+    } finally {
+      setDeleting(prev => ({ ...prev, [skill.name]: false }))
+    }
   }, [])
+
+  const findInstalledSkill = useCallback((webSkill: WebSkillItem) => {
+    const mapKey = `${webSkill.namespace}/${webSkill.slug}`
+    const mappedName = storeInstalledMap[mapKey]
+    if (mappedName) {
+      const mapped = skills.find(s => s.name === mappedName)
+      if (mapped) return mapped
+    }
+    const byDisplayName = skills.find(s => s.name === webSkill.displayName)
+    if (byDisplayName) return byDisplayName
+    return skills.find(s => s.name === webSkill.slug)
+  }, [skills, storeInstalledMap])
+
+  const refreshLocalSkills = useCallback(async () => {
+    const list = await window.electronAPI.skills.list()
+    setSkills(list)
+    return list
+  }, [])
+
+  const handleDownloadWebSkill = useCallback(async (webSkill: WebSkillItem) => {
+    const key = `${webSkill.namespace}/${webSkill.slug}`
+    downloadBeforeNamesRef.current[key] = new Set(skills.map(s => s.name))
+    setStoreDownloading(prev => ({ ...prev, [key]: true }))
+    setStatus(null)
+    try {
+      const result = await window.electronAPI.skills.downloadWebSkill({
+        namespace: webSkill.namespace,
+        slug: webSkill.slug,
+        displayName: webSkill.displayName,
+      })
+      if (!result.ok) {
+        setStatus({ type: 'error', message: result.error ?? '安装失败' })
+        setStoreDownloading(prev => ({ ...prev, [key]: false }))
+        delete downloadBeforeNamesRef.current[key]
+        return
+      }
+      setStatus({ type: 'success', message: `${webSkill.displayName} 已加入后台安装队列` })
+    } catch {
+      setStatus({ type: 'error', message: '一键安装失败' })
+      setStoreDownloading(prev => ({ ...prev, [key]: false }))
+      delete downloadBeforeNamesRef.current[key]
+    }
+  }, [skills])
+
+  useEffect(() => {
+    const dispose = window.electronAPI.skills.onWebDownloadStatus(async (event) => {
+      const key = `${event.namespace}/${event.slug}`
+      if (event.status === 'running') {
+        setStoreDownloading(prev => ({ ...prev, [key]: true }))
+        return
+      }
+
+      setStoreDownloading(prev => ({ ...prev, [key]: false }))
+      if (event.status === 'error') {
+        delete downloadBeforeNamesRef.current[key]
+        setStatus({ type: 'error', message: event.error ?? `${event.slug} 安装失败` })
+        return
+      }
+
+      let nextSkills = await refreshLocalSkills()
+      const relatedWebSkill = storeSkills.find(s => `${s.namespace}/${s.slug}` === key)
+      const beforeNames = downloadBeforeNamesRef.current[key] ?? new Set<string>()
+      delete downloadBeforeNamesRef.current[key]
+
+      const installedNamesFromEvent = Array.isArray(event.installedNames) ? event.installedNames : []
+      let installedSkill = relatedWebSkill
+        ? nextSkills.find(s => s.name === relatedWebSkill.displayName || s.name === relatedWebSkill.slug)
+        : undefined
+      if (!installedSkill && installedNamesFromEvent.length > 0) {
+        installedSkill = nextSkills.find(s => installedNamesFromEvent.includes(s.name))
+      }
+      if (!installedSkill) {
+        installedSkill = nextSkills.find(s => !beforeNames.has(s.name) && (s.source === 'local' || s.source === 'workspace'))
+      }
+      if (!installedSkill) {
+        for (let i = 0; i < 4 && !installedSkill; i++) {
+          await new Promise(resolve => setTimeout(resolve, 500))
+          nextSkills = await refreshLocalSkills()
+          installedSkill = relatedWebSkill
+            ? nextSkills.find(s => s.name === relatedWebSkill.displayName || s.name === relatedWebSkill.slug)
+            : undefined
+          if (!installedSkill && installedNamesFromEvent.length > 0) {
+            installedSkill = nextSkills.find(s => installedNamesFromEvent.includes(s.name))
+          }
+          if (!installedSkill) {
+            installedSkill = nextSkills.find(s => !beforeNames.has(s.name) && (s.source === 'local' || s.source === 'workspace'))
+          }
+        }
+      }
+      setStoreRefreshTick(t => t + 1)
+      const label = relatedWebSkill?.displayName ?? event.slug
+
+      if (!installedSkill) {
+        setStatus({ type: 'error', message: `${label} 已解压到技能文件夹，但未识别到可安装技能，请检查压缩包结构` })
+        return
+      }
+
+      const installedName = installedSkill.name
+      setStoreInstalledMap(prev => ({ ...prev, [key]: installedName }))
+      if (!installedSkill.enabled) {
+        const config: Record<string, SkillEntryConfig> = {}
+        nextSkills.forEach(s => {
+          config[s.name] = { enabled: s.name === installedName ? true : s.enabled }
+          if (s.apiKey) config[s.name].apiKey = s.apiKey
+        })
+        const saveResult = await window.electronAPI.skills.saveConfig(config)
+        if (!saveResult.ok) {
+          setStatus({ type: 'error', message: saveResult.error ?? `${label} 配置保存失败，请稍后重试` })
+          return
+        }
+        await refreshLocalSkills()
+      }
+
+      setStatus({ type: 'success', message: `${label} 一键安装成功` })
+
+      if (gatewayRestartTimerRef.current) {
+        clearTimeout(gatewayRestartTimerRef.current)
+      }
+      gatewayRestartTimerRef.current = setTimeout(async () => {
+        gatewayRestartTimerRef.current = null
+        try {
+          await window.electronAPI.gateway.restart()
+          setStatus({ type: 'success', message: '网关已重启，新技能在对话中已生效' })
+        } catch {
+          setStatus({
+            type: 'error',
+            message: '网关重启失败，请点击「应用新技能」或重启应用后再试',
+          })
+        }
+      }, SKILL_STORE_GATEWAY_RESTART_DEBOUNCE_MS)
+    })
+    return () => {
+      if (gatewayRestartTimerRef.current) {
+        clearTimeout(gatewayRestartTimerRef.current)
+        gatewayRestartTimerRef.current = null
+        // 避免关闭面板时清掉定时器导致网关从未重启
+        void window.electronAPI.gateway.restart().catch(() => {})
+      }
+      dispose()
+    }
+  }, [refreshLocalSkills, storeSkills])
 
   const statusLabel = (s: SkillInfo) => {
     switch (s.status) {
@@ -248,7 +512,7 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
           <input
             type="text"
             className="input-field"
-            placeholder="搜索技能名称或描述..."
+            placeholder={tab === 'store' ? '搜索商城技能名称...' : '搜索技能名称或描述...'}
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -256,23 +520,138 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
 
         {/* grid */}
         <div key={tab} className="skill-list-scroll">
-          {filtered.length === 0 ? (
+          {tab === 'store' ? (
+            storeLoading ? (
+              <div style={{ textAlign: 'center', padding: '2rem 0', opacity: 0.6 }}>
+                正在加载技能商城...
+              </div>
+            ) : storeSkills.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '2rem 0', opacity: 0.5 }}>
+                {search ? '技能商城中没有匹配结果' : '技能商城暂无可用技能'}
+              </div>
+            ) : (
+              <>
+                <div className="skill-settings-grid">
+                  {storeSkills.map((skill) => {
+                    const installed = findInstalledSkill(skill)
+                    const downloadKey = `${skill.namespace}/${skill.slug}`
+                    const downloading = !!storeDownloading[downloadKey]
+                    return (
+                      <div
+                        key={`store-${skill.namespace}-${skill.slug}`}
+                        className={`skill-card${installed?.enabled ? ' skill-card-active' : ''}`}
+                      >
+                        <div className="skill-card-header">
+                          <span className="skill-icon">🛒</span>
+                          <div className="skill-info">
+                            <span className="skill-name">{skill.displayName}</span>
+                            <span className="skill-desc" title={skill.summary}>{skill.summary || '暂无描述'}</span>
+                          </div>
+                        </div>
+                        <div className="skill-card-meta">
+                          <span className={`skill-status-badge ${installed ? 'skill-status-ready' : 'skill-status-disabled'}`}>
+                            {installed ? '已安装' : '未安装'}
+                          </span>
+                          <span className="skill-tag">下载 {skill.downloadCount}</span>
+                          <div style={{ flex: 1 }} />
+                          {installed ? (
+                            <div
+                              className={`skill-toggle${installed.enabled ? ' skill-toggle-on' : ''}`}
+                              onClick={() => handleToggle(installed.name)}
+                            >
+                              <div className="skill-toggle-thumb" />
+                            </div>
+                          ) : (
+                            <button
+                              className="skill-install-btn"
+                              disabled={downloading}
+                              onClick={() => handleDownloadWebSkill(skill)}
+                            >
+                              {downloading ? '安装中...' : '一键安装'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+                  <span style={{ opacity: 0.7, fontSize: 12 }}>
+                    第 {storePage + 1} 页 / 共 {Math.max(1, Math.ceil(storeTotal / storeSize))} 页，共 {storeTotal} 项
+                  </span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn-secondary" disabled={storePage <= 0} onClick={() => setStorePage(p => Math.max(0, p - 1))}>
+                      上一页
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      disabled={(storePage + 1) * storeSize >= storeTotal}
+                      onClick={() => setStorePage(p => p + 1)}
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              </>
+            )
+          ) : filtered.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '2rem 0', opacity: 0.5 }}>
               {search ? '没有匹配的技能' : tab === 'enabled' ? '暂无已开启的技能' : tab === 'local' ? '暂无本地技能' : '暂无可用技能'}
             </div>
           ) : (
-            <div className="skill-settings-grid">
-              {filtered.map((skill) => (
+            <div className={`skill-settings-grid${tab === 'local' && localSkillMenuOpen ? ' skill-settings-grid-menu-open' : ''}`}>
+              {filtered.map((skill) => {
+                const showLocalMore = tab === 'local' && (skill.source === 'local' || skill.source === 'workspace')
+                const menuOpen = localSkillMenuOpen === skill.name
+                return (
                 <div
                   key={`${tab}-${skill.name}`}
-                  className={`skill-card${skill.enabled ? ' skill-card-active' : ''}${skill.status === 'blocked' || skill.status === 'missing' ? ' disabled' : ''}`}
+                  className={`skill-card${skill.enabled ? ' skill-card-active' : ''}${skill.status === 'blocked' || skill.status === 'missing' ? ' disabled' : ''}${menuOpen ? ' skill-card-menu-popover-open' : ''}`}
                 >
-                  <div className="skill-card-header">
+                  <div className={`skill-card-header${showLocalMore ? ' skill-card-header-with-more' : ''}`}>
                     <span className="skill-icon">{skill.emoji || '🧩'}</span>
                     <div className="skill-info">
                       <span className="skill-name">{skill.name}</span>
                       <span className="skill-desc" title={SKILL_CN[skill.name] || skill.description}>{SKILL_CN[skill.name] || skill.description}</span>
                     </div>
+                    {showLocalMore && (
+                      <div className="skill-card-more-root" data-local-skill-menu-root="1">
+                        <button
+                          type="button"
+                          className={`skill-card-more-btn${localSkillMenuOpen === skill.name ? ' skill-card-more-btn-active' : ''}`}
+                          aria-expanded={localSkillMenuOpen === skill.name}
+                          aria-haspopup="menu"
+                          aria-label="更多操作"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setLocalSkillMenuOpen(prev => (prev === skill.name ? null : skill.name))
+                          }}
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <circle cx="12" cy="5" r="2" />
+                            <circle cx="12" cy="12" r="2" />
+                            <circle cx="12" cy="19" r="2" />
+                          </svg>
+                        </button>
+                        {localSkillMenuOpen === skill.name && (
+                          <div className="skill-card-more-dropdown" role="menu">
+                            <button
+                              type="button"
+                              className="skill-card-more-item skill-card-more-item-danger"
+                              role="menuitem"
+                              disabled={deleting[skill.name]}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setLocalSkillMenuOpen(null)
+                                setSkillToDelete(skill)
+                              }}
+                            >
+                              {deleting[skill.name] ? '删除中...' : '删除技能'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="skill-card-meta">
@@ -348,7 +727,8 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
                     </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
@@ -368,9 +748,6 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
             <button className="btn-secondary" onClick={handleOpenFolder}>
               📂 打开技能文件夹
             </button>
-            <button className="btn-secondary" onClick={handleOpenStore}>
-              🛒 技能商城
-            </button>
           </div>
           <button
             className="btn-primary"
@@ -381,6 +758,37 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
           </button>
         </div>
       </div>
+      {skillToDelete && (
+        <div className="session-delete-confirm-overlay">
+          <div
+            className="session-delete-confirm-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="session-delete-confirm-title">删除这个技能？</div>
+            <div className="session-delete-confirm-desc">
+              {`"${skillToDelete.name}" 将从本地技能列表中移除。`}
+            </div>
+            <div className="session-delete-confirm-actions">
+              <button
+                className="session-delete-cancel-btn"
+                onClick={() => setSkillToDelete(null)}
+              >
+                取消
+              </button>
+              <button
+                className="session-delete-confirm-btn"
+                disabled={deleting[skillToDelete.name]}
+                onClick={async () => {
+                  await handleDeleteLocalSkill(skillToDelete)
+                  setSkillToDelete(null)
+                }}
+              >
+                {deleting[skillToDelete.name] ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 

@@ -4676,6 +4676,10 @@ body {
   overflow: hidden;
 }
 
+.skill-settings-grid.skill-settings-grid-menu-open {
+  overflow: visible;
+}
+
 /* -- Skill Card (redesigned for grid) -- */
 .settings-panel-skills .skill-card {
   background: rgba(255, 255, 255, 0.07);
@@ -4707,10 +4711,97 @@ body {
   cursor: not-allowed;
 }
 
+.settings-panel-skills .skill-card.skill-card-menu-popover-open {
+  position: relative;
+  z-index: 6;
+  overflow: visible;
+}
+
 .settings-panel-skills .skill-card-header {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+}
+
+.settings-panel-skills .skill-card-header.skill-card-header-with-more {
+  position: relative;
+}
+
+.settings-panel-skills .skill-card-more-root {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+  align-self: flex-start;
+}
+
+.settings-panel-skills .skill-card-more-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.settings-panel-skills .skill-card-more-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.settings-panel-skills .skill-card-more-btn-active {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.settings-panel-skills .skill-card-more-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 128px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(34, 34, 38, 0.98);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  z-index: 80;
+}
+
+.settings-panel-skills .skill-card-more-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.settings-panel-skills .skill-card-more-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.settings-panel-skills .skill-card-more-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-panel-skills .skill-card-more-item-danger {
+  color: #f87171;
+}
+
+.settings-panel-skills .skill-card-more-item-danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.12);
 }
 
 .settings-panel-skills .skill-icon {
