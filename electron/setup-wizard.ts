@@ -290,6 +290,8 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
           token: gatewayToken,
         },
         controlUi: {
+          // 关闭浏览器可访问的 Gateway Control UI；WS/程序内连接仍可用
+          enabled: false,
           dangerouslyDisableDeviceAuth: true,
           allowInsecureAuth: true,
           allowedOrigins: ['*'], // 允许所有来源访问
