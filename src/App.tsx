@@ -167,6 +167,7 @@ function App() {
   const [skipUpdateCheck, setSkipUpdateCheck] = useState(true)
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [showUserCenter, setShowUserCenter] = useState(false)
+  const [leftPanelsCollapsed, setLeftPanelsCollapsed] = useState(false)
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortSessionRef = useRef<(sessionKey: string, agentId?: string) => Promise<void>>(async () => {})
@@ -1219,8 +1220,21 @@ function App() {
           )}
         </div>
         <div className="app-main">
-          <div className="system-sidebar">
-            <div className="system-sidebar-icons">
+          <div className={`left-panels ${leftPanelsCollapsed ? 'collapsed' : ''}`}>
+            <div className="system-sidebar">
+              <div className="system-sidebar-top">
+                <button
+                  className="sidebar-collapse-toggle"
+                  onClick={() => setLeftPanelsCollapsed((prev) => !prev)}
+                  aria-label={leftPanelsCollapsed ? '展开会话列表' : '折叠会话列表'}
+                  title={leftPanelsCollapsed ? '展开会话列表' : '折叠会话列表'}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    {leftPanelsCollapsed ? <polyline points="9 18 15 12 9 6" /> : <polyline points="15 18 9 12 15 6" />}
+                  </svg>
+                </button>
+              </div>
+              <div className="system-sidebar-icons">
               {/* <div className="system-icon-item" style={{animationDelay: '0s'}} onClick={() => setShowModelSettings(true)}>
                 <div className="system-icon-circle">
                   <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1263,19 +1277,20 @@ function App() {
                 <span className="system-icon-label">设置</span>
               </div>
 
+              </div>
             </div>
-          </div>
-          <div className="sidebar">
-            <SessionList
-              sessions={sessions}
-              activeSessionId={activeSessionId}
-              agents={ws.agents}
-              defaultAgentId={ws.defaultAgentId}
-              onSelectSession={setActiveSessionId}
-              onNewSession={createSession}
-              onDeleteSession={deleteSession}
-              onRestartGateway={() => restartGateway()}
-            />
+            <div className="sidebar">
+              <SessionList
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                agents={ws.agents}
+                defaultAgentId={ws.defaultAgentId}
+                onSelectSession={setActiveSessionId}
+                onNewSession={createSession}
+                onDeleteSession={deleteSession}
+                onRestartGateway={() => restartGateway()}
+              />
+            </div>
           </div>
           <div className="main-content">
             <ChatArea
