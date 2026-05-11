@@ -1,6 +1,5 @@
 import { ChildProcess, spawn, execSync } from 'node:child_process'
 import net from 'node:net'
-import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -19,9 +18,13 @@ export interface GatewayManagerOptions {
 }
 
 export class GatewayManager {
+  /** 新版网关常见 /health；部分发行版仅挂载 Canvas 等路由，/health 会 404。 */
+  private static readonly GATEWAY_HTTP_PROBE_PATHS = ['/health', '/__openclaw__/canvas/', '/__openclaw__/canvas']
+
   private process: ChildProcess | null = null
   private state: GatewayState = 'stopped'
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null
+  private healthProbeInFlight = false
   private consecutiveFailures = 0
   private readonly MAX_FAILURES = 60
   private readonly HEALTH_CHECK_INTERVAL = 5000
@@ -280,22 +283,28 @@ export class GatewayManager {
   }
 
   /**
+   * 依次探测若干 HTTP 路径，任一返回 2xx 即视为本应用可用的 Gateway。
+   */
+  private async probeGatewayHttp(port: number): Promise<boolean> {
+    const base = `http://127.0.0.1:${port}`
+    for (const probePath of GatewayManager.GATEWAY_HTTP_PROBE_PATHS) {
+      try {
+        const res = await fetch(`${base}${probePath}`, { signal: AbortSignal.timeout(3000) })
+        if (res.ok) {
+          return true
+        }
+      } catch {
+        // 尝试下一路径
+      }
+    }
+    return false
+  }
+
+  /**
    * 尝试 HTTP 请求验证端口上运行的是否是真正的 Gateway
    */
   private isRealGateway(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const req = http.get(`http://127.0.0.1:${port}/health`, { timeout: 3000 }, (res) => {
-        res.resume()
-        resolve(res.statusCode === 200)
-      })
-      req.on('timeout', () => {
-        req.destroy()
-        resolve(false)
-      })
-      req.on('error', () => {
-        resolve(false)
-      })
-    })
+    return this.probeGatewayHttp(port)
   }
 
   /**
@@ -577,31 +586,34 @@ export class GatewayManager {
    * 健康检查：用 HTTP 请求验证 Gateway 是否可用
    */
   private performHealthCheck() {
-    if (this.stopping) {
+    if (this.stopping || this.healthProbeInFlight) {
       return
     }
-
-    const req = http.get(`http://127.0.0.1:${this.opts.port}/health`, { timeout: 3000 }, (res) => {
-      res.resume()
-      if (res.statusCode === 200) {
-        this.consecutiveFailures = 0
-        if (this.state !== 'ready') {
-          this.setState('ready')
-          this.log('info', 'Gateway 已就绪')
+    this.healthProbeInFlight = true
+    void this.probeGatewayHttp(this.opts.port)
+      .then((ok) => {
+        this.healthProbeInFlight = false
+        if (this.stopping) {
+          return
         }
-      } else {
-        this.onHealthCheckFailed(`HTTP ${res.statusCode}`)
-      }
-    })
-
-    req.on('timeout', () => {
-      req.destroy()
-      this.onHealthCheckFailed('超时')
-    })
-
-    req.on('error', (err) => {
-      this.onHealthCheckFailed(err.message)
-    })
+        if (ok) {
+          this.consecutiveFailures = 0
+          if (this.state !== 'ready') {
+            this.setState('ready')
+            this.log('info', 'Gateway 已就绪')
+          }
+        } else {
+          this.onHealthCheckFailed('HTTP 探测失败（无 2xx 响应）')
+        }
+      })
+      .catch((err: unknown) => {
+        this.healthProbeInFlight = false
+        if (this.stopping) {
+          return
+        }
+        const msg = err instanceof Error ? err.message : String(err)
+        this.onHealthCheckFailed(msg)
+      })
   }
 
   private onHealthCheckFailed(reason: string) {
