@@ -43,6 +43,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [newName, setNewName] = useState('')
   const [createError, setCreateError] = useState('')
   const [creating, setCreating] = useState(false)
+  const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
 
   // 点击外部关闭
@@ -57,6 +58,17 @@ export const SessionList: React.FC<SessionListProps> = ({
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [showPicker])
+
+  useEffect(() => {
+    if (!sessionToDelete) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSessionToDelete(null)
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [sessionToDelete])
 
   const handleCreate = useCallback(async () => {
     const id = newId.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
@@ -211,7 +223,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                   className="btn-delete-session"
                   onClick={(e) => {
                     e.stopPropagation()
-                    onDeleteSession(session.id)
+                    setSessionToDelete(session)
                   }}
                   title="删除"
                 >
@@ -222,6 +234,38 @@ export const SessionList: React.FC<SessionListProps> = ({
           })
         )}
       </div>
+      {sessionToDelete && (
+        <div
+          className="session-delete-confirm-overlay"
+        >
+          <div
+            className="session-delete-confirm-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="session-delete-confirm-title">关闭这个对话？</div>
+            <div className="session-delete-confirm-desc">
+              {`"${sessionToDelete.title || '新对话'}" 将从列表中移除。`}
+            </div>
+            <div className="session-delete-confirm-actions">
+              <button
+                className="session-delete-cancel-btn"
+                onClick={() => setSessionToDelete(null)}
+              >
+                取消
+              </button>
+              <button
+                className="session-delete-confirm-btn"
+                onClick={() => {
+                  onDeleteSession(sessionToDelete.id)
+                  setSessionToDelete(null)
+                }}
+              >
+                确认关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

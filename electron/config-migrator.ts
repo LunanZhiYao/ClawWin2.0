@@ -157,6 +157,14 @@ export class ConfigMigrator {
       if (!newConfig.gateway.auth.token && oldConfig.gateway?.token) {
         newConfig.gateway.auth.token = oldConfig.gateway.token
       }
+      // ClawWin：不对外提供浏览器 Control UI，仅保留本机程序通过 WS 使用 Gateway
+      if (!newConfig.gateway.controlUi || typeof newConfig.gateway.controlUi !== 'object') {
+        newConfig.gateway.controlUi = {}
+      }
+      if (newConfig.gateway.controlUi.enabled !== false) {
+        newConfig.gateway.controlUi.enabled = false
+        this.log('info', '已设置 gateway.controlUi.enabled=false（禁止浏览器打开网关 Web UI）')
+      }
     }
 
     // 完整保留所有其他字段：
