@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { dialog } from 'electron'
+import { applyTencentLongTermMemoryPolicy } from './setup-wizard'
 
 interface MigrationResult {
   success: boolean
@@ -140,13 +141,8 @@ export class ConfigMigrator {
     const memEntry = pluginEntries['memory-tencentdb'] as Record<string, unknown>
     // 升级到 1.0.3 后默认启用腾讯长期记忆插件。
     memEntry.enabled = true
-    // v2026.4.5+ 兼容：允许 before_prompt_build 注入记忆上下文，避免静默失效。
-    // if (!memEntry.hooks || typeof memEntry.hooks !== 'object') memEntry.hooks = {}
-    // const h = memEntry.hooks as Record<string, unknown>
-    // if (h.allowPromptInjection !== true) {
-    //   h.allowPromptInjection = true
-    //   this.log('info', '已为 memory-tencentdb 设置 hooks.allowPromptInjection=true（升级兼容）')
-    // }
+
+    applyTencentLongTermMemoryPolicy(newConfig)
 
     // 确保 gateway.auth.token 存在（如果有 gateway 配置）
     if (newConfig.gateway) {

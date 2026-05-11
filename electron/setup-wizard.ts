@@ -133,8 +133,8 @@ const SEED_FILES: Record<string, string> = {
 开始做任何事之前，**必须**按顺序执行以下步骤：
 1. 读 IDENTITY.md — 你的身份（名称、性格等）
 2. 读 USER.md — 你在帮谁
-3. 优先用 tdai_memory_search 搜索长期记忆（腾讯 memory-tencentdb）
-4. 仅在 tdai_memory_search 不可用时，才直接读取 memory/ 下的文件
+3. **凡涉及用户偏好、约定、事实背景，必须先**调用腾讯长期记忆工具（tdai_memory_*）检索与写入；本地文件仅为补充
+4. 当用户要求“记住/记录/保存进度”时，**先写入长期记忆**；仅在长期记忆工具不可用时，才写 memory/*.md
 5. 如果有 MEMORY.md，仅作为兜底参考，不要优先于长期记忆插件
 
 **重要：** 你的身份信息在 IDENTITY.md 中。如果用户告诉你新的名字或身份信息，立即更新 IDENTITY.md。
@@ -183,6 +183,109 @@ const SEED_FILES: Record<string, string> = {
 - 用户的桌面路径: ~/Desktop
 - 用户的文档路径: ~/Documents
 `,
+}
+
+/**
+ * 在工作区创建 skills、memory 子目录，并写入种子 Markdown（不覆盖已存在文件）
+ */
+export function seedWorkspaceFromDefaults(workspace: string): void {
+  ensureDir(workspace)
+  ensureDir(path.join(workspace, 'skills'))
+  ensureDir(path.join(workspace, 'memory'))
+  for (const [filename, content] of Object.entries(SEED_FILES)) {
+    const filePath = path.join(workspace, filename)
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, content, 'utf-8')
+    }
+  }
+}
+
+/**
+ * 统一策略：不论有多少个 agent，均启用腾讯长期记忆插件、禁用内置 memory_search。
+ * 注意：当前 OpenClaw schema 不接受 plugins.entries.memory-tencentdb.hooks 字段，
+ * 这里会显式移除该字段，避免 gateway 因配置校验失败退出。
+ */
+export function applyTencentLongTermMemoryPolicy(config: Record<string, unknown>): boolean {
+  let changed = false
+
+  if (!config.plugins || typeof config.plugins !== 'object') {
+    config.plugins = { entries: {} }
+    changed = true
+  }
+  const plugins = config.plugins as Record<string, unknown>
+  if (!plugins.entries || typeof plugins.entries !== 'object') {
+    plugins.entries = {}
+    changed = true
+  }
+  const entries = plugins.entries as Record<string, unknown>
+
+  let mem = entries['memory-tencentdb']
+  if (!mem || typeof mem !== 'object') {
+    entries['memory-tencentdb'] = { enabled: true, config: {} }
+    changed = true
+    mem = entries['memory-tencentdb']
+  }
+  const memObj = mem as Record<string, unknown>
+  if (memObj.enabled !== true) {
+    memObj.enabled = true
+    changed = true
+  }
+  if ('hooks' in memObj) {
+    delete memObj.hooks
+    changed = true
+  }
+
+  if (!config.hooks || typeof config.hooks !== 'object') {
+    config.hooks = {}
+    changed = true
+  }
+  const rootHooks = config.hooks as Record<string, unknown>
+  if (!rootHooks.internal || typeof rootHooks.internal !== 'object') {
+    rootHooks.internal = { enabled: true, entries: {} }
+    changed = true
+  }
+  const internal = rootHooks.internal as Record<string, unknown>
+  if (!internal.entries || typeof internal.entries !== 'object') {
+    internal.entries = {}
+    changed = true
+  }
+  const internalEntries = internal.entries as Record<string, unknown>
+  const sm = internalEntries['session-memory'] as Record<string, unknown> | undefined
+  if (!sm || sm.enabled !== false) {
+    internalEntries['session-memory'] = { enabled: false }
+    changed = true
+  }
+
+  if (!config.agents || typeof config.agents !== 'object') {
+    config.agents = {}
+    changed = true
+  }
+  const agents = config.agents as Record<string, unknown>
+  if (!agents.defaults || typeof agents.defaults !== 'object') {
+    agents.defaults = {}
+    changed = true
+  }
+  const defs = agents.defaults as Record<string, unknown>
+  const dms = defs.memorySearch as Record<string, unknown> | undefined
+  if (!dms || typeof dms !== 'object' || dms.enabled !== false) {
+    defs.memorySearch = { enabled: false }
+    changed = true
+  }
+
+  const list = agents.list
+  if (Array.isArray(list)) {
+    for (const raw of list) {
+      if (!raw || typeof raw !== 'object') continue
+      const agent = raw as Record<string, unknown>
+      const ams = agent.memorySearch as Record<string, unknown> | undefined
+      if (!ams || typeof ams !== 'object' || ams.enabled !== false) {
+        agent.memorySearch = { enabled: false }
+        changed = true
+      }
+    }
+  }
+
+  return changed
 }
 
 /**
@@ -367,10 +470,6 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
           },
           "memory-tencentdb": {
             enabled: true,
-            // OpenClaw v2026.4.5+：若为 false 会拦截 before_prompt_build，长期记忆召回静默失效（npm 文档要求保持 true）
-            // hooks: {
-            //   allowPromptInjection: true,
-            // },
             config: {
               storeBackend: "sqlite",
               capture: {
@@ -417,6 +516,8 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
       carryOverModelBlocksIfMissing(openclawConfig, existingOnDisk)
     }
 
+    applyTencentLongTermMemoryPolicy(openclawConfig)
+
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(openclawConfig, null, 2), 'utf-8')
 
     // ===== 2. Write auth-profiles.json =====
@@ -441,17 +542,7 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
     }
 
     // ===== 3. Create workspace directory and seed files =====
-    ensureDir(workspace)
-    ensureDir(path.join(workspace, 'skills'))
-    ensureDir(path.join(workspace, 'memory'))
-
-    for (const [filename, content] of Object.entries(SEED_FILES)) {
-      const filePath = path.join(workspace, filename)
-      // Only write seed files if they don't already exist
-      if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, content, 'utf-8')
-      }
-    }
+    seedWorkspaceFromDefaults(workspace)
 
     return { ok: true }
   } catch (err) {

@@ -5,6 +5,7 @@ import { spawn, execFile, execSync, type ChildProcess } from 'node:child_process
 import https from 'node:https'
 import http from 'node:http'
 import type { BrowserWindow } from 'electron'
+import { applyTencentLongTermMemoryPolicy } from './setup-wizard'
 
 // 预置模型列表 - 从 hf-mirror.com 下载 GGUF（按推荐度排序，最新最强在前）
 const LOCAL_MODELS = [
@@ -739,6 +740,9 @@ export class OllamaManager {
     if (!config.hooks.internal) config.hooks.internal = { enabled: true, entries: {} }
     if (!config.hooks.internal.entries) config.hooks.internal.entries = {}
     config.hooks.internal.entries['session-memory'] = { enabled: false }
+
+    // 无论模型如何切换，始终强制“长期记忆插件优先”策略（检索/写入都走腾讯插件）
+    applyTencentLongTermMemoryPolicy(config)
 
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
 

@@ -3,7 +3,15 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { GatewayManager } from './gateway-manager'
-import { isFirstRun, getOpenclawConfigPath, writeSetupConfig, validateApiKey, getDefaultUserWorkspacePath } from './setup-wizard'
+import {
+  isFirstRun,
+  getOpenclawConfigPath,
+  writeSetupConfig,
+  validateApiKey,
+  getDefaultUserWorkspacePath,
+  applyTencentLongTermMemoryPolicy,
+  seedWorkspaceFromDefaults,
+} from './setup-wizard'
 import { getNodePath, getOpenclawPath } from './node-runtime'
 import { signDeviceAuth, type DeviceAuthParams } from './device-identity'
 import { scanSkills, getSkillsConfig, saveSkillsConfig, clearBinCache } from './skills-scanner'
@@ -786,6 +794,8 @@ function setupIPC() {
         fs.writeFileSync(agentAuthFile, authJson, 'utf-8')
       }
 
+      applyTencentLongTermMemoryPolicy(config)
+
       // Update meta
       if (!config.meta) config.meta = {}
       config.meta.lastTouchedAt = now
@@ -827,6 +837,9 @@ function setupIPC() {
         delete config.channels
       }
 
+      // 任何配置写回都强制保持“腾讯长期记忆优先”策略（含多 agent 场景）
+      applyTencentLongTermMemoryPolicy(config)
+
       if (!config.meta) config.meta = {}
       config.meta.lastTouchedAt = new Date().toISOString()
 
@@ -851,6 +864,9 @@ function setupIPC() {
       if (!config.agents) config.agents = {}
       if (!config.agents.defaults) config.agents.defaults = {}
       config.agents.defaults.workspace = workspace
+
+      // 任何配置写回都强制保持“腾讯长期记忆优先”策略（含多 agent 场景）
+      applyTencentLongTermMemoryPolicy(config)
 
       if (!config.meta) config.meta = {}
       config.meta.lastTouchedAt = new Date().toISOString()
@@ -1097,13 +1113,15 @@ function setupIPC() {
       const workspace = path.join(os.homedir(), `clawd-${agentId}`)
       config.agents.list.push({ id: agentId, name, workspace })
 
+      applyTencentLongTermMemoryPolicy(config)
+
       if (!config.meta) config.meta = {}
       config.meta.lastTouchedAt = new Date().toISOString()
 
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
 
-      // 创建 workspace 目录
-      if (!fs.existsSync(workspace)) fs.mkdirSync(workspace, { recursive: true })
+      // 创建 workspace 目录并种子化（AGENTS.md 等：优先腾讯长期记忆）
+      seedWorkspaceFromDefaults(workspace)
 
       // 创建 agent 目录并复制 auth-profiles
       const openclawHome = path.join(os.homedir(), '.openclaw')
@@ -1135,6 +1153,8 @@ function setupIPC() {
         const list = config?.agents?.list as Array<{ id: string }> | undefined
         if (list) {
           config.agents.list = list.filter(a => a.id !== agentId)
+          // 删除 agent 后重写策略，避免遗留 agent 条目导致记忆配置不一致
+          applyTencentLongTermMemoryPolicy(config)
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
         }
       }
@@ -1519,12 +1539,7 @@ app.whenReady().then(async () => {
             embedding.provider = 'none'
           }
 
-          // OpenClaw v2026.4.5+：安全开关；为 false 时插件 before_prompt_build 不注册，升级新版宿主后易表现为「长期记忆坏了」
-          // if (!memoryEntry.hooks || typeof memoryEntry.hooks !== 'object') memoryEntry.hooks = {}
-          // const memHooks = memoryEntry.hooks as Record<string, unknown>
-          // if (memHooks.allowPromptInjection !== true) {
-          //   memHooks.allowPromptInjection = true
-          // }
+          applyTencentLongTermMemoryPolicy(config)
 
           config.meta = { ...(config.meta ?? {}), lastTouchedAt: new Date().toISOString() }
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
@@ -1533,6 +1548,28 @@ app.whenReady().then(async () => {
       }
     } catch (err) {
       console.error('[memory] session-memory migration failed:', err)
+    }
+
+    // 所有 agent 工作区补齐种子文件（含 AGENTS.md：优先腾讯长期记忆）
+    try {
+      const seedConfigPath = getOpenclawConfigPath()
+      if (fs.existsSync(seedConfigPath)) {
+        const cfg = JSON.parse(fs.readFileSync(seedConfigPath, 'utf-8')) as Record<string, unknown>
+        const agentsRoot = cfg.agents as Record<string, unknown> | undefined
+        const paths = new Set<string>()
+        const defObj = agentsRoot?.defaults as Record<string, unknown> | undefined
+        const defWs = defObj?.workspace
+        if (typeof defWs === 'string' && defWs.trim()) paths.add(defWs.trim())
+        const agentList = agentsRoot?.list as Array<{ workspace?: string }> | undefined
+        if (Array.isArray(agentList)) {
+          for (const a of agentList) {
+            if (typeof a.workspace === 'string' && a.workspace.trim()) paths.add(a.workspace.trim())
+          }
+        }
+        for (const p of paths) seedWorkspaceFromDefaults(p)
+      }
+    } catch (err) {
+      console.error('[workspace] seed all agent workspaces failed:', err)
     }
 
     // 自动同步 auth-profiles 到 agent 目录（修复旧版本只写全局文件的 bug）
@@ -1700,6 +1737,26 @@ app.whenReady().then(async () => {
               fs.writeFileSync(agentsPath, patched, 'utf-8')
               console.log('[workspace] switched AGENTS.md memory guidance to tdai_memory_search')
               content = patched
+            }
+          }
+          // 记忆策略强化（旧工作区补丁）：
+          // 用户要求“记住/记录进度”时，必须优先写入腾讯长期记忆工具；
+          // memory/*.md 只在长期记忆工具不可用时作为兜底。
+          const hasWritePriorityGuard = content.includes('先写入长期记忆')
+          if (!hasWritePriorityGuard) {
+            const anchor = '## 每次会话（必须执行）'
+            if (content.includes(anchor)) {
+              const addition = [
+                '',
+                '- 当用户要求“记住/记录/保存进度”时，先调用腾讯长期记忆工具（tdai_memory_*）写入长期记忆',
+                '- 仅在 tdai_memory_* 工具不可用时，才写入 memory/*.md 作为兜底',
+              ].join('\n')
+              const patched = content.replace(anchor, `${anchor}${addition}`)
+              if (patched !== content) {
+                fs.writeFileSync(agentsPath, patched, 'utf-8')
+                console.log('[workspace] strengthened AGENTS.md write-memory priority rules')
+                content = patched
+              }
             }
           }
           // 安全升级（旧工作区补丁）：

@@ -8,6 +8,38 @@ const os = require('os');
 
 const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
 
+function applyTencentLongTermMemoryPolicy(config) {
+  if (!config.plugins || typeof config.plugins !== 'object') config.plugins = {};
+  if (!config.plugins.entries || typeof config.plugins.entries !== 'object') config.plugins.entries = {};
+  if (!config.plugins.entries['memory-tencentdb'] || typeof config.plugins.entries['memory-tencentdb'] !== 'object') {
+    config.plugins.entries['memory-tencentdb'] = { enabled: true, config: {} };
+  }
+  config.plugins.entries['memory-tencentdb'].enabled = true;
+  if ('hooks' in config.plugins.entries['memory-tencentdb']) {
+    delete config.plugins.entries['memory-tencentdb'].hooks;
+  }
+
+  if (!config.hooks || typeof config.hooks !== 'object') config.hooks = {};
+  if (!config.hooks.internal || typeof config.hooks.internal !== 'object') {
+    config.hooks.internal = { enabled: true, entries: {} };
+  }
+  if (!config.hooks.internal.entries || typeof config.hooks.internal.entries !== 'object') {
+    config.hooks.internal.entries = {};
+  }
+  config.hooks.internal.entries['session-memory'] = { enabled: false };
+
+  if (!config.agents || typeof config.agents !== 'object') config.agents = {};
+  if (!config.agents.defaults || typeof config.agents.defaults !== 'object') config.agents.defaults = {};
+  config.agents.defaults.memorySearch = { enabled: false };
+
+  if (Array.isArray(config.agents.list)) {
+    for (const agent of config.agents.list) {
+      if (!agent || typeof agent !== 'object') continue;
+      agent.memorySearch = { enabled: false };
+    }
+  }
+}
+
 try {
   if (!fs.existsSync(configPath)) {
     console.error('Config file not found:', configPath);
@@ -16,14 +48,8 @@ try {
 
   const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
   
-  // 确保 agents.defaults 存在
-  if (!config.agents) config.agents = {};
-  if (!config.agents.defaults) config.agents.defaults = {};
-  
-  // 关键修复：禁用内置 memory_search 工具
-  // OpenClaw 的 memory_search 工具是通过 agents.defaults.memorySearch 配置控制的
-  // 必须设置 enabled: false 才能真正禁用它
-  config.agents.defaults.memorySearch = { enabled: false };
+  // 统一策略：不管创建多少个 agent，长期记忆都优先走腾讯插件
+  applyTencentLongTermMemoryPolicy(config);
   
   // 更新时间戳
   if (!config.meta) config.meta = {};
@@ -33,7 +59,10 @@ try {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
   
   console.log('✅ Successfully updated config:');
+  console.log('   memory-tencentdb.enabled = true');
+  console.log('   hooks.internal.entries.session-memory.enabled = false');
   console.log('   agents.defaults.memorySearch.enabled = false');
+  console.log('   agents.list[*].memorySearch.enabled = false');
   console.log('');
   console.log('This disables the built-in memory_search tool,');
   console.log('allowing the Tencent memory plugin (tdai_memory_search) to work properly.');
