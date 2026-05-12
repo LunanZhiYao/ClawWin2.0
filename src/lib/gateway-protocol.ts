@@ -1,6 +1,6 @@
 /**
- * Gateway Protocol v3 — 浏览器端 WebSocket 客户端
- * 对齐 OpenClaw Gateway 的 connect.challenge → connect 握手流程
+ * Gateway WebSocket 客户端 — connect.challenge → connect 握手
+ * 协议范围与 bundled OpenClaw 对齐：min 3 / max 4（随网关 PROTOCOL_VERSION 演进）
  */
 
 export type GatewayEventFrame = {
@@ -78,8 +78,10 @@ export class GatewayClient {
   private connectTimer: ReturnType<typeof setTimeout> | null = null
   // 握手完成标志（connect 请求收到 hello-ok 后为 true）
   private _handshakeCompleted = false
-  // 握手完成前缓冲的请求
+  // 握手完成前缓冲的请求（socket 已 OPEN）
   private _pendingQueue: Array<{ method: string; params?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void }> = []
+  /** 重连间隙 / socket 未就绪时缓冲的请求，握手完成后与 _pendingQueue 一并发送 */
+  private _offlineQueue: Array<{ method: string; params?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void }> = []
   // 额外的事件监听器（供 useCron 等外部 hook 订阅）
   private _eventListeners = new Set<(evt: GatewayEventFrame) => void>()
 
@@ -145,10 +147,15 @@ export class GatewayClient {
     this.ws.addEventListener('close', (ev) => {
       this.ws = null
       this._handshakeCompleted = false
-      const err = new Error(`closed (${ev.code}): ${ev.reason}`)
+      const reasonStr = String(ev.reason ?? '')
+      // 网关侧：startup 未完成时关闭码 1013，提示稍后重连 —— 缩短退避避免长时间卡在「未连接」
+      if (ev.code === 1013 || reasonStr.includes('gateway starting')) {
+        this.backoffMs = 600
+      }
+      const err = new Error(`closed (${ev.code}): ${reasonStr}`)
       this.flushPending(err)
       this.flushQueue(err)
-      this.opts.onClose?.({ code: ev.code, reason: ev.reason })
+      this.opts.onClose?.({ code: ev.code, reason: reasonStr })
       this.scheduleReconnect()
     })
 
@@ -192,11 +199,20 @@ export class GatewayClient {
       q.reject(err)
     }
     this._pendingQueue = []
+    for (const q of this._offlineQueue) {
+      q.reject(err)
+    }
+    this._offlineQueue = []
   }
 
-  private drainQueue() {
-    const queued = this._pendingQueue.splice(0)
-    for (const q of queued) {
+  /** 握手成功后：先发送断线期间积压的请求，再发送 OPEN 后、握手前的请求 */
+  private drainAfterHandshake() {
+    const offline = this._offlineQueue.splice(0)
+    const pending = this._pendingQueue.splice(0)
+    for (const q of offline) {
+      this.request(q.method, q.params).then(q.resolve, q.reject)
+    }
+    for (const q of pending) {
       this.request(q.method, q.params).then(q.resolve, q.reject)
     }
   }
@@ -239,7 +255,7 @@ export class GatewayClient {
 
     const params: Record<string, unknown> = {
       minProtocol: 3,
-      maxProtocol: 3,
+      maxProtocol: 4,
       client: {
         id: clientId,
         version: this.opts.clientVersion ?? '1.0.0',
@@ -260,10 +276,18 @@ export class GatewayClient {
         this._handshakeCompleted = true
         this.opts.onHello?.(hello)
         // 握手完成后，发送缓冲队列中的所有请求
-        this.drainQueue()
+        this.drainAfterHandshake()
       })
       .catch((err) => {
-        console.error('[gateway] connect handshake failed:', err)
+        const msg = err instanceof Error ? err.message : String(err)
+        const gatewayStarting =
+          msg.includes('gateway starting') ||
+          msg.includes('retry shortly')
+        if (gatewayStarting) {
+          console.warn('[gateway] connect deferred (gateway starting), reconnecting:', msg)
+        } else {
+          console.error('[gateway] connect handshake failed:', err)
+        }
         this._handshakeCompleted = false
         this.ws?.close(4008, 'connect failed')
       })
@@ -326,12 +350,42 @@ export class GatewayClient {
   }
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
-    // connect 请求不需要等待握手完成
+    // connect 不参与排队（见下方）；其余 RPC 在「未 fully connected」时缓冲，避免竞态 not connected
     if (method !== 'connect') {
-      // WebSocket 已连接但握手未完成时，将请求加入缓冲队列
+      // 已 OPEN 但尚未 hello-ok：缓冲至握手完成
       if (this.ws?.readyState === WebSocket.OPEN && !this._handshakeCompleted) {
         return new Promise<T>((resolve, reject) => {
           this._pendingQueue.push({ method, params, resolve: (v) => resolve(v as T), reject })
+        })
+      }
+      // CONNECTING：等 open 后再走同一套 request（通常会进入上一分支直到握手完成）
+      if (this.ws?.readyState === WebSocket.CONNECTING) {
+        return new Promise<T>((resolve, reject) => {
+          const ws = this.ws!
+          const onOpen = () => {
+            ws.removeEventListener('close', onClose)
+            this.request<T>(method, params).then(
+              (v) => resolve(v),
+              reject,
+            )
+          }
+          const onClose = () => {
+            ws.removeEventListener('open', onOpen)
+            reject(new Error('not connected'))
+          }
+          ws.addEventListener('open', onOpen, { once: true })
+          ws.addEventListener('close', onClose, { once: true })
+        })
+      }
+      // 重连间隙或 socket 正在关闭/已关闭：缓冲至下一次握手成功（否则用户点击发送会立刻 not connected）
+      if (
+        !this.closed &&
+        (!this.ws ||
+          this.ws.readyState === WebSocket.CLOSING ||
+          this.ws.readyState === WebSocket.CLOSED)
+      ) {
+        return new Promise<T>((resolve, reject) => {
+          this._offlineQueue.push({ method, params, resolve: (v) => resolve(v as T), reject })
         })
       }
     }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, shell, Tray, dialog, clipboard, nativeImage, desktopCapturer, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, shell, Tray, dialog, clipboard, nativeImage, desktopCapturer, screen, session } from 'electron'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
@@ -73,6 +73,33 @@ function getIconPath(): string {
     return path.join(process.resourcesPath, 'assets', 'icon.ico')
   }
   return path.join(__dirname, '../assets/icon.ico')
+}
+
+/**
+ * Electron 渲染进程对 ws://127.0.0.1 等本地网关连接会携带 Origin: null / file://，
+ * OpenClaw 将其视为「有 Origin」从而禁用 CLI 的静默本机配对（shouldAllowSilentLocalPairing）。
+ * 对本机环回 WebSocket 去掉此类 Origin，与无 Origin 的终端 CLI 行为一致，避免握手报 pairing required。
+ */
+function installLocalGatewayWebSocketOriginFix() {
+  const filter = {
+    urls: [
+      'ws://127.0.0.1/*',
+      'ws://localhost/*',
+      'ws://[::1]/*',
+      'wss://127.0.0.1/*',
+      'wss://localhost/*',
+      'wss://[::1]/*',
+    ],
+  }
+  session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    const headers = { ...details.requestHeaders }
+    const origin = headers.Origin
+    const o = typeof origin === 'string' ? origin.trim() : ''
+    if (o === 'null' || o === 'file://' || o.toLowerCase().startsWith('file:')) {
+      delete headers.Origin
+    }
+    callback({ requestHeaders: headers })
+  })
 }
 
 function createTray() {
@@ -1512,6 +1539,7 @@ if (!gotTheLock) {
 }
 
 app.whenReady().then(async () => {
+  installLocalGatewayWebSocketOriginFix()
   setupIPC()
   initGatewayManager()
   // Ollama base directory: in packaged mode, use a directory next to the exe
