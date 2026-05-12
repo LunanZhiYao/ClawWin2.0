@@ -160,6 +160,15 @@ const electronAPI = {
       ipcRenderer.invoke('config:getAvailableModels'),
   },
 
+  // Workspace
+  workspace: {
+    listEntries: (
+      workspacePath: string,
+      options?: { deliveryOnly?: boolean },
+    ): Promise<{ ok: boolean; entries: Array<{ name: string; path: string; relativePath: string; kind: 'file' | 'dir'; size?: number; modifiedAt: number }>; error?: string }> =>
+      ipcRenderer.invoke('workspace:listEntries', workspacePath, options ?? {}),
+  },
+
   // Sessions persistence
   sessions: {
     save: (sessions: unknown[]): Promise<{ ok: boolean; error?: string }> =>

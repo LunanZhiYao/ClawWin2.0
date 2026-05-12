@@ -72,6 +72,19 @@ interface ElectronConfig {
   getAvailableModels: () => Promise<AvailableModel[]>
 }
 
+export interface WorkspaceEntry {
+  name: string
+  path: string
+  relativePath: string
+  kind: 'file' | 'dir'
+  size?: number
+  modifiedAt: number
+}
+
+interface ElectronWorkspace {
+  listEntries: (workspacePath: string, options?: { deliveryOnly?: boolean }) => Promise<{ ok: boolean; entries: WorkspaceEntry[]; error?: string }>
+}
+
 interface ElectronSessions {
   save: (sessions: ChatSession[]) => Promise<{ ok: boolean; error?: string }>
   load: () => Promise<ChatSession[]>
@@ -181,6 +194,7 @@ interface ElectronAPI {
   shell: { openExternal: (url: string) => Promise<void>; openPath: (folderPath: string) => Promise<void> }
   app: ElectronApp
   config: ElectronConfig
+  workspace: ElectronWorkspace
   sessions: ElectronSessions
   dialog: ElectronDialog
   file: ElectronFile

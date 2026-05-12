@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { ChatArea } from './components/Chat/ChatArea'
 import { SessionList } from './components/Sidebar/SessionList'
+import { WorkspaceList } from './components/Sidebar/WorkspaceList'
 import { WorkspaceSetup } from './components/Setup/WorkspaceSetup'
 import { GatewaySetup } from './components/Setup/GatewaySetup'
 import { SetupComplete } from './components/Setup/SetupComplete'
@@ -19,7 +20,7 @@ import { fetchMeSession, type MeSessionResult } from './api/auth'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, type SetupStep } from './hooks/useSetup'
-import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, AvailableModel } from './types'
+import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, AvailableModel, WorkspaceEntry } from './types'
 import logoSrc from '../assets/logo.png'
 import './components/Login/Login.css'
 
@@ -168,6 +169,11 @@ function App() {
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [showUserCenter, setShowUserCenter] = useState(false)
   const [leftPanelsCollapsed, setLeftPanelsCollapsed] = useState(false)
+  const [sidebarView, setSidebarView] = useState<'sessions' | 'workspace'>('sessions')
+  const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([])
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  const [agentWorkspaceMap, setAgentWorkspaceMap] = useState<Record<string, string>>({})
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortSessionRef = useRef<(sessionKey: string, agentId?: string) => Promise<void>>(async () => {})
@@ -188,7 +194,6 @@ function App() {
   const pendingAutoCompactSessionRef = useRef<string | null>(null)
   // 递增此值会销毁旧 GatewayClient 并创建新的，模拟完整重启
   const [wsReconnectKey, setWsReconnectKey] = useState(0)
-
   // 使用 ref 追踪最新的 activeSessionId，避免回调闭包中拿到旧值
   const activeSessionIdRef = useRef<string | null>(null)
   activeSessionIdRef.current = activeSessionId
@@ -293,6 +298,22 @@ function App() {
     reconnectKey: wsReconnectKey,
   })
   abortSessionRef.current = ws.abortSession
+  const activeAgentId = useMemo(() => {
+    const current = sessions.find((s) => s.id === activeSessionId)
+    return current?.agentId || ws.defaultAgentId || 'main'
+  }, [sessions, activeSessionId, ws.defaultAgentId])
+  const workspacePath = useMemo(() => {
+    // main 与 agents.defaults.workspace 一致：向导/设置里改的路径在内存中已更新，应优先于
+    // agentWorkspaceMap（可能未重读盘，或 agents.list 里 main.workspace 仍为旧值）。
+    const mainFromUi = (setup.config.workspace || settingsWorkspace || '').trim()
+    if (activeAgentId === 'main' && mainFromUi) return mainFromUi
+
+    const fromAgent = agentWorkspaceMap[activeAgentId]
+    if (fromAgent && fromAgent.trim()) return fromAgent.trim()
+    const fromMain = agentWorkspaceMap.main
+    if (fromMain && fromMain.trim()) return fromMain.trim()
+    return settingsWorkspace || setup.config.workspace || ''
+  }, [activeAgentId, agentWorkspaceMap, settingsWorkspace, setup.config.workspace])
 
   /** 重启 Gateway 并销毁旧 WebSocket 客户端，模拟完整重启 */
   const restartGateway = useCallback(async () => {
@@ -474,6 +495,64 @@ function App() {
   useEffect(() => {
     setSettingsWorkspace(setup.config.workspace ?? '~/qianyi')
   }, [setup.config.workspace])
+
+  const loadWorkspaceEntries = useCallback(async () => {
+    if (!workspacePath) {
+      setWorkspaceEntries([])
+      setWorkspaceError('未配置工作区路径')
+      return
+    }
+    setWorkspaceLoading(true)
+    setWorkspaceError(null)
+    try {
+      const result = await window.electronAPI.workspace.listEntries(workspacePath, { deliveryOnly: true })
+      if (!result.ok) {
+        setWorkspaceEntries([])
+        setWorkspaceError(result.error || '读取工作区失败')
+        return
+      }
+      setWorkspaceEntries(result.entries)
+    } catch (err) {
+      setWorkspaceEntries([])
+      setWorkspaceError(err instanceof Error ? err.message : '读取工作区失败')
+    } finally {
+      setWorkspaceLoading(false)
+    }
+  }, [workspacePath])
+
+  useEffect(() => {
+    if (sidebarView !== 'workspace') return
+    void loadWorkspaceEntries()
+  }, [sidebarView, loadWorkspaceEntries])
+
+  const loadAgentWorkspaceMap = useCallback(async () => {
+    try {
+      const cfg = await window.electronAPI.config.readConfig()
+      const map: Record<string, string> = {}
+      const root = (cfg ?? {}) as Record<string, unknown>
+      const agents = (root.agents ?? {}) as Record<string, unknown>
+      const defaults = (agents.defaults ?? {}) as Record<string, unknown>
+      const defaultWs = typeof defaults.workspace === 'string' ? defaults.workspace.trim() : ''
+      const list = Array.isArray(agents.list) ? (agents.list as Array<Record<string, unknown>>) : []
+
+      list.forEach((item) => {
+        const id = typeof item.id === 'string' ? item.id.trim() : ''
+        const wsPath = typeof item.workspace === 'string' ? item.workspace.trim() : ''
+        if (id && wsPath) map[id] = wsPath
+      })
+      // main 权威路径与 config:saveWorkspace 一致（仅改 defaults），避免 list 里过期的 main.workspace 覆盖
+      if (defaultWs) map.main = defaultWs
+
+      setAgentWorkspaceMap(map)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  // agents 列表或向导/设置中的工作区变更后，重读磁盘上的 agents ↔ workspace 映射
+  useEffect(() => {
+    void loadAgentWorkspaceMap()
+  }, [loadAgentWorkspaceMap, ws.agents.length, setup.config.workspace])
 
   // 监听窗口关闭请求（主进程已 preventDefault，须由渲染进程弹窗后 hideToTray / quitApp）
   useEffect(() => {
@@ -1005,6 +1084,7 @@ function App() {
       const ok = await setup.saveConfig()
       if (ok) {
         setShowSetup(false)
+        void loadAgentWorkspaceMap()
         // 加载新配置的可用模型列表
         window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
         // Refresh gateway token/port from the newly written config before starting
@@ -1014,7 +1094,7 @@ function App() {
       // saveConfig already sets saveError internally, but log for debugging
       console.error('Setup completion failed:', err)
     }
-  }, [setup, gateway])
+  }, [setup, gateway, loadAgentWorkspaceMap])
 
   // 网关启动/重启时激活视频启动屏
   useEffect(() => {
@@ -1280,16 +1360,43 @@ function App() {
               </div>
             </div>
             <div className="sidebar">
-              <SessionList
-                sessions={sessions}
-                activeSessionId={activeSessionId}
-                agents={ws.agents}
-                defaultAgentId={ws.defaultAgentId}
-                onSelectSession={setActiveSessionId}
-                onNewSession={createSession}
-                onDeleteSession={deleteSession}
-                onRestartGateway={() => restartGateway()}
-              />
+              <div className="sidebar-top-switch">
+                <button
+                  className={`sidebar-tab-btn ${sidebarView === 'sessions' ? 'active' : ''}`}
+                  onClick={() => setSidebarView('sessions')}
+                >
+                  会话
+                </button>
+                <button
+                  className={`sidebar-tab-btn ${sidebarView === 'workspace' ? 'active' : ''}`}
+                  onClick={() => setSidebarView('workspace')}
+                >
+                  工作区
+                </button>
+              </div>
+              {sidebarView === 'sessions' ? (
+                <SessionList
+                  sessions={sessions}
+                  activeSessionId={activeSessionId}
+                  agents={ws.agents}
+                  defaultAgentId={ws.defaultAgentId}
+                  onSelectSession={setActiveSessionId}
+                  onNewSession={createSession}
+                  onDeleteSession={deleteSession}
+                  onRestartGateway={() => restartGateway()}
+                />
+              ) : (
+                <WorkspaceList
+                  currentAgentId={activeAgentId}
+                  workspacePath={workspacePath}
+                  entries={workspaceEntries}
+                  loading={workspaceLoading}
+                  error={workspaceError}
+                  onRefresh={() => void loadWorkspaceEntries()}
+                  onOpenEntry={(entry) => { void window.electronAPI.shell.openPath(entry.path) }}
+                  onOpenWorkspace={() => { if (workspacePath) void window.electronAPI.shell.openPath(workspacePath) }}
+                />
+              )}
             </div>
           </div>
           <div className="main-content">
@@ -1416,6 +1523,7 @@ function App() {
                           const res = await window.electronAPI.config.saveWorkspace(selected)
                           if (res.ok) {
                             setup.updateConfig({ workspace: selected })
+                            void loadAgentWorkspaceMap()
                             await restartGateway()
                           }
                         }

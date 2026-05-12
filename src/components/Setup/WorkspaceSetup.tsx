@@ -88,6 +88,9 @@ export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
 
         <div className="workspace-hint">
           <p>如果目录不存在，将自动创建。默认路径通常无需修改。</p>
+          <p className="workspace-hint-note">
+            此处选择的路径在向导完成保存后，会写入配置中的 <code>agents.defaults.workspace</code>，即 <strong>Main</strong> 代理的默认工作区（与设置里「工作区」一致）。
+          </p>
         </div>
       </div>
 

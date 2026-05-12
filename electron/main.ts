@@ -1265,6 +1265,99 @@ function setupIPC() {
     return result.filePaths[0]
   })
 
+  ipcMain.handle('workspace:listEntries', async (_event, workspacePath: string, options?: { deliveryOnly?: boolean }) => {
+    try {
+      const root = (workspacePath || '').trim()
+      if (!root) return { ok: false, entries: [], error: '工作区路径为空' }
+      if (!fs.existsSync(root)) return { ok: false, entries: [], error: '工作区路径不存在' }
+      const stat = fs.statSync(root)
+      if (!stat.isDirectory()) return { ok: false, entries: [], error: '工作区路径不是目录' }
+
+      const maxDepth = 4
+      const maxEntries = 400
+      const entries: Array<{ name: string; path: string; relativePath: string; kind: 'file' | 'dir'; size?: number; modifiedAt: number }> = []
+      // 仅当显式 deliveryOnly: true 时过滤；省略或为 false 时列出目录内条目（供后续扩展）
+      const deliveryOnly = options?.deliveryOnly === true
+      const skipNames = new Set(['.git', 'node_modules', '.openclaw'])
+      const deliveryFolderHints = ['deliverable', 'deliverables', 'delivery', 'artifact', 'artifacts', 'output', 'outputs', 'result', 'results', 'report', 'reports', 'export', 'exports', '产物', '交付', '输出']
+      const deliveryFileHints = ['deliverable', 'delivery', 'artifact', 'output', 'result', 'report', 'summary', 'final', '产物', '交付', '总结', '报告']
+      const deliveryExts = new Set([
+        '.md', '.txt', '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv',
+        '.json', '.html', '.zip', '.rar', '.7z', '.tar', '.gz',
+        '.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg',
+      ])
+
+      const isDeliveryPath = (relativePath: string): boolean => {
+        const normalized = relativePath.replace(/\\/g, '/').toLowerCase()
+        return deliveryFolderHints.some((k) => normalized.includes(`/${k}/`) || normalized.startsWith(`${k}/`))
+      }
+
+      const isDeliveryFile = (name: string, relativePath: string): boolean => {
+        const lowerName = name.toLowerCase()
+        const ext = path.extname(lowerName)
+        const hasHintInName = deliveryFileHints.some((k) => lowerName.includes(k))
+        const hasHintInPath = isDeliveryPath(relativePath)
+        const hasDeliveryExt = deliveryExts.has(ext)
+        return hasHintInName || (hasHintInPath && hasDeliveryExt)
+      }
+
+      const walk = (dir: string, depth: number) => {
+        if (entries.length >= maxEntries) return
+        let dirEntries: fs.Dirent[] = []
+        try {
+          dirEntries = fs.readdirSync(dir, { withFileTypes: true })
+        } catch {
+          return
+        }
+
+        for (const item of dirEntries) {
+          if (entries.length >= maxEntries) break
+          if (skipNames.has(item.name)) continue
+          if (item.name.startsWith('.')) continue
+
+          const absolutePath = path.join(dir, item.name)
+          const relativePath = path.relative(root, absolutePath) || item.name
+          let mtimeMs = Date.now()
+          let size: number | undefined
+          try {
+            const itemStat = fs.statSync(absolutePath)
+            mtimeMs = itemStat.mtimeMs
+            if (itemStat.isFile()) size = itemStat.size
+          } catch {
+            // ignore
+          }
+
+          const kind: 'file' | 'dir' = item.isDirectory() ? 'dir' : 'file'
+          if (!deliveryOnly || (kind === 'file' && isDeliveryFile(item.name, relativePath))) {
+            entries.push({
+              name: item.name,
+              path: absolutePath,
+              relativePath,
+              kind,
+              size,
+              modifiedAt: mtimeMs,
+            })
+          }
+
+          if (item.isDirectory() && depth < maxDepth) {
+            walk(absolutePath, depth + 1)
+          }
+        }
+      }
+
+      walk(root, 0)
+
+      entries.sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
+        return b.modifiedAt - a.modifiedAt
+      })
+
+      return { ok: true, entries }
+    } catch (err) {
+      return { ok: false, entries: [], error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ===== Skills IPC handlers =====
   ipcMain.handle('skills:list', () => {
     try {
