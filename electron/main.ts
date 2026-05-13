@@ -36,6 +36,48 @@ let pendingUpdateInfo: UpdateInfo | null = null
 let downloadedInstallerPath: string | null = null
 let ollamaManager: OllamaManager | null = null
 
+/** 点窗口关闭时：询问 / 最小化到托盘 / 直接退出（落盘，跨启动保持） */
+type CloseWindowBehavior = 'ask' | 'tray' | 'quit'
+const CLOSE_BEHAVIOR_FILE = 'app-close-behavior.json'
+
+function getCloseBehaviorFilePath(): string {
+  return path.join(app.getPath('userData'), CLOSE_BEHAVIOR_FILE)
+}
+
+function readCloseWindowBehavior(): CloseWindowBehavior {
+  try {
+    const p = getCloseBehaviorFilePath()
+    if (fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, 'utf-8')) as { behavior?: string }
+      if (data?.behavior === 'tray') return 'tray'
+      if (data?.behavior === 'quit') return 'quit'
+    }
+  } catch (e) {
+    console.warn('readCloseWindowBehavior failed:', e)
+  }
+  return 'ask'
+}
+
+function writeCloseWindowBehavior(behavior: CloseWindowBehavior): void {
+  try {
+    const p = getCloseBehaviorFilePath()
+    const dir = path.dirname(p)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(p, JSON.stringify({ behavior }, null, 0), 'utf-8')
+  } catch (e) {
+    console.error('writeCloseWindowBehavior failed:', e)
+  }
+}
+
+async function quitApplicationFromMain(): Promise<void> {
+  isQuitting = true
+  try { await gatewayManager?.stop() } catch { /* ignore */ }
+  try { await ollamaManager?.stop() } catch { /* ignore */ }
+  tray?.destroy()
+  tray = null
+  app.quit()
+}
+
 /**
  * 是否允许渲染进程打开 DevTools（F12 / 快捷键等）。
  * - 开发态（未打包）：始终允许。
@@ -118,17 +160,8 @@ function createTray() {
     { type: 'separator' },
     {
       label: '退出',
-      click: async () => {
-        isQuitting = true
-        try {
-          await gatewayManager?.stop()
-        } catch { /* ignore */ }
-        try {
-          await ollamaManager?.stop()
-        } catch { /* ignore */ }
-        tray?.destroy()
-        tray = null
-        app.quit()
+      click: () => {
+        void quitApplicationFromMain()
       },
     },
   ])
@@ -240,8 +273,18 @@ function createWindow() {
 
   mainWindow.on('close', (event) => {
     if (isQuitting) return
+    const behavior = readCloseWindowBehavior()
+    if (behavior === 'tray') {
+      event.preventDefault()
+      mainWindow?.hide()
+      return
+    }
+    if (behavior === 'quit') {
+      event.preventDefault()
+      void quitApplicationFromMain()
+      return
+    }
     event.preventDefault()
-    // 通知前端弹出自定义关闭选择框
     mainWindow?.webContents.send('app:closeRequested')
   })
 
@@ -389,14 +432,19 @@ function setupIPC() {
     mainWindow?.hide()
   })
 
+  /** 记录关闭窗口时的偏好（ask / tray / quit） */
+  ipcMain.handle('app:setCloseWindowBehavior', (_event, behavior: CloseWindowBehavior) => {
+    if (behavior !== 'ask' && behavior !== 'tray' && behavior !== 'quit') return
+    writeCloseWindowBehavior(behavior)
+  })
+
+  ipcMain.handle('app:getCloseWindowBehavior', (): CloseWindowBehavior => {
+    return readCloseWindowBehavior()
+  })
+
   // 关闭窗口选择：彻底退出
   ipcMain.handle('app:quitApp', async () => {
-    isQuitting = true
-    try { await gatewayManager?.stop() } catch { /* ignore */ }
-    try { await ollamaManager?.stop() } catch { /* ignore */ }
-    tray?.destroy()
-    tray = null
-    app.quit()
+    await quitApplicationFromMain()
   })
 
   /** 运行时注入默认模型 API Key（仅主进程内存，不落盘） */
@@ -1094,72 +1142,6 @@ function setupIPC() {
       }
       ui.clawwinweb = state
       writeUiConfig(ui)
-      return { ok: true }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-
-  // ===== Agent creation =====
-  ipcMain.handle('agents:create', (_event, params: { agentId: string; name: string }) => {
-    try {
-      const { agentId, name } = params
-      if (!agentId || !/^[a-z0-9-]+$/.test(agentId)) {
-        return { ok: false, error: 'Agent ID 只能包含小写字母、数字和连字符' }
-      }
-
-      const configPath = getOpenclawConfigPath()
-      const configDir = path.dirname(configPath)
-      if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true })
-      const config = fs.existsSync(configPath)
-        ? JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-        : {}
-
-      if (!config.agents) config.agents = {}
-      if (!config.agents.list) config.agents.list = []
-
-      // 检查重复
-      const existing = (config.agents.list as Array<{ id: string }>).find((a) => a.id === agentId)
-      if (existing) {
-        return { ok: false, error: `Agent "${agentId}" 已存在` }
-      }
-
-      // 如果 list 中还没有 main，先把 main 加进去（继承 defaults 配置）
-      const hasMain = (config.agents.list as Array<{ id: string }>).some((a) => a.id === 'main')
-      if (!hasMain) {
-        const defaultWorkspace = config.agents?.defaults?.workspace || path.join(os.homedir(), 'qianyi')
-        config.agents.list.unshift({
-          id: 'main',
-          name: 'Main',
-          default: true,
-          workspace: defaultWorkspace,
-        })
-      }
-
-      // 添加到 agents.list
-      const workspace = path.join(os.homedir(), `clawd-${agentId}`)
-      config.agents.list.push({ id: agentId, name, workspace })
-
-      applyTencentLongTermMemoryPolicy(config)
-
-      if (!config.meta) config.meta = {}
-      config.meta.lastTouchedAt = new Date().toISOString()
-
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-
-      // 创建 workspace 目录并种子化（AGENTS.md 等：优先腾讯长期记忆）
-      seedWorkspaceFromDefaults(workspace)
-
-      // 创建 agent 目录并复制 auth-profiles
-      const openclawHome = path.join(os.homedir(), '.openclaw')
-      const agentDir = path.join(openclawHome, 'agents', agentId, 'agent')
-      fs.mkdirSync(agentDir, { recursive: true })
-
-      const mainAuth = path.join(openclawHome, 'auth-profiles.json')
-      if (fs.existsSync(mainAuth)) {
-        fs.copyFileSync(mainAuth, path.join(agentDir, 'auth-profiles.json'))
-      }
-
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }

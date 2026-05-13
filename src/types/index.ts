@@ -181,6 +181,8 @@ interface ElectronApp {
   onDownloadProgress: (callback: (progress: DownloadProgress) => void) => () => void
   installUpdate: () => Promise<void>
   hideToTray: () => Promise<void>
+  setCloseWindowBehavior: (behavior: 'ask' | 'tray' | 'quit') => Promise<void>
+  getCloseWindowBehavior: () => Promise<'ask' | 'tray' | 'quit'>
   quitApp: () => Promise<void>
   onCloseRequested: (callback: () => void) => () => void
   captureScreen: () => Promise<boolean>

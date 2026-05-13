@@ -93,6 +93,9 @@ const electronAPI = {
     },
     installUpdate: (): Promise<void> => ipcRenderer.invoke('app:installUpdate'),
     hideToTray: (): Promise<void> => ipcRenderer.invoke('app:hideToTray'),
+    setCloseWindowBehavior: (behavior: 'ask' | 'tray' | 'quit'): Promise<void> =>
+      ipcRenderer.invoke('app:setCloseWindowBehavior', behavior),
+    getCloseWindowBehavior: (): Promise<'ask' | 'tray' | 'quit'> => ipcRenderer.invoke('app:getCloseWindowBehavior'),
     quitApp: (): Promise<void> => ipcRenderer.invoke('app:quitApp'),
     onCloseRequested: (callback: () => void) => {
       const handler = () => callback()
@@ -244,8 +247,6 @@ const electronAPI = {
 
   // Agents
   agents: {
-    create: (params: { agentId: string; name: string }): Promise<{ ok: boolean; error?: string }> =>
-      ipcRenderer.invoke('agents:create', params),
     delete: (params: { agentId: string }): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('agents:delete', params),
   },

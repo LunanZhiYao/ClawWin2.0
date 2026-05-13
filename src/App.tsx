@@ -14,6 +14,7 @@ import { ChannelSettings } from './components/Settings/ChannelSettings'
 import { SkillSettings } from './components/Settings/SkillSettings'
 import { CronManager } from './components/Settings/CronManager'
 import { UserCenter } from './components/Settings/UserCenter'
+import { CustomSelect } from './components/Common/CustomSelect'
 import { QRCodeLogin } from './components/Login/QRCodeLogin'
 import { LoginStatus } from './components/Login/LoginStatus'
 import { fetchMeSession, type MeSessionResult } from './api/auth'
@@ -25,6 +26,13 @@ import logoSrc from '../assets/logo.png'
 import './components/Login/Login.css'
 
 const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
+
+/** 设置页「关闭窗口」下拉选项（与主进程 CloseWindowBehavior 一致） */
+const CLOSE_WINDOW_SELECT_OPTIONS: { value: 'ask' | 'tray' | 'quit'; label: string }[] = [
+  { value: 'ask', label: '每次询问' },
+  { value: 'tray', label: '最小化到托盘' },
+  { value: 'quit', label: '退出程序' },
+]
 
 /** /auth/me 成功分支的结构化类型，供冷启动与扫码登录共用落盘逻辑 */
 type MeSessionOk = Extract<MeSessionResult, { ok: true }>
@@ -178,6 +186,8 @@ function App() {
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortSessionRef = useRef<(sessionKey: string, agentId?: string) => Promise<void>>(async () => {})
   const [autoCompact, setAutoCompact] = useState(true)
+  /** 与主进程 app-close-behavior.json 同步 */
+  const [closeWindowBehavior, setCloseWindowBehavior] = useState<'ask' | 'tray' | 'quit'>('ask')
   const [shellHints, setShellHints] = useState(true)
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([])
   const [sessionUsageTotalMap, setSessionUsageTotalMap] = useState<Record<string, number>>({})
@@ -561,6 +571,20 @@ function App() {
     })
     return unsub
   }, [])
+
+  /** 从主进程同步「关闭窗口」偏好（与关闭弹窗、设置共用） */
+  useEffect(() => {
+    void window.electronAPI.app.getCloseWindowBehavior().then((b) => {
+      setCloseWindowBehavior(b)
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!showSettings) return
+    void window.electronAPI.app.getCloseWindowBehavior().then((b) => {
+      setCloseWindowBehavior(b)
+    }).catch(() => {})
+  }, [showSettings])
 
   // 监听更新通知
   useEffect(() => {
@@ -1146,7 +1170,9 @@ function App() {
             className="btn-secondary"
             onClick={() => {
               setShowCloseDialog(false)
-              window.electronAPI.app.hideToTray()
+              void window.electronAPI.app.setCloseWindowBehavior('tray')
+              setCloseWindowBehavior('tray')
+              void window.electronAPI.app.hideToTray()
             }}
           >
             最小化到托盘
@@ -1556,6 +1582,25 @@ function App() {
                       ? `${Math.floor(responseTimeout / 60000)}分${(responseTimeout % 60000) / 1000 > 0 ? `${(responseTimeout % 60000) / 1000}秒` : ''}`
                       : `${responseTimeout / 1000}秒`}
                   </span>
+                </div>
+              </div>
+
+              {/* 关闭窗口 */}
+              <div className="settings-section">
+                <h3>关闭窗口</h3>
+                <p className="settings-hint">
+                  点击窗口右上角关闭按钮时的默认行为；「每次询问」会先弹出选择框。
+                </p>
+                <div className="settings-close-behavior-wrap">
+                  <CustomSelect
+                    value={closeWindowBehavior}
+                    options={CLOSE_WINDOW_SELECT_OPTIONS}
+                    onChange={(v) => {
+                      const b = v as 'ask' | 'tray' | 'quit'
+                      setCloseWindowBehavior(b)
+                      void window.electronAPI.app.setCloseWindowBehavior(b)
+                    }}
+                  />
                 </div>
               </div>
 

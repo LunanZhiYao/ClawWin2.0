@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import type { ChatSession, AgentInfo } from '../../types'
 
 interface SessionListProps {
@@ -38,11 +38,6 @@ export const SessionList: React.FC<SessionListProps> = ({
   onRestartGateway,
 }) => {
   const [showPicker, setShowPicker] = useState(false)
-  const [showCreate, setShowCreate] = useState(false)
-  const [newId, setNewId] = useState('')
-  const [newName, setNewName] = useState('')
-  const [createError, setCreateError] = useState('')
-  const [creating, setCreating] = useState(false)
   const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
 
@@ -52,7 +47,6 @@ export const SessionList: React.FC<SessionListProps> = ({
     const handler = (e: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
         setShowPicker(false)
-        setShowCreate(false)
       }
     }
     document.addEventListener('mousedown', handler)
@@ -70,38 +64,13 @@ export const SessionList: React.FC<SessionListProps> = ({
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [sessionToDelete])
 
-  const handleCreate = useCallback(async () => {
-    const id = newId.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
-    const name = newName.trim()
-    if (!id) { setCreateError('请输入 Agent ID'); return }
-    if (!name) { setCreateError('请输入名称'); return }
-    setCreating(true)
-    setCreateError('')
-    try {
-      const res = await window.electronAPI.agents.create({ agentId: id, name })
-      if (!res.ok) { setCreateError(res.error || '创建失败'); setCreating(false); return }
-      setShowCreate(false)
-      setShowPicker(false)
-      setNewId('')
-      setNewName('')
-      onRestartGateway()
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : '创建失败')
-    } finally {
-      setCreating(false)
-    }
-  }, [newId, newName, onRestartGateway])
-
   const customAgents = agents.filter(a => a.id !== 'main')
 
   const handleNewClick = () => {
     if (customAgents.length === 0) {
-      // 没有自定义 agent，直接用隐式 main
       onNewSession(undefined)
     } else {
-      // 有自定义 agent 时，显示选择器（包含 Main）
       setShowPicker(true)
-      setShowCreate(false)
     }
   }
 
@@ -127,8 +96,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                 onNewSession('main')
               }}
             >
-              <span className="agent-picker-emoji">M</span>
-              <span className="agent-picker-name">Main</span>
+              <span className="agent-picker-emoji">●</span>
+              <span className="agent-picker-name">默认</span>
             </div>
             {customAgents.map((agent) => (
               <div
@@ -154,40 +123,6 @@ export const SessionList: React.FC<SessionListProps> = ({
                 >×</span>
               </div>
             ))}
-            <div className="agent-picker-divider" />
-            {!showCreate ? (
-              <div
-                className="agent-picker-item agent-create-btn"
-                onClick={() => { setShowCreate(true); setCreateError('') }}
-              >
-                <span className="agent-picker-emoji" style={{fontSize: 16, fontWeight: 700, color: '#00A2E0'}}>+</span>
-                <span className="agent-picker-name">新建 Agent</span>
-              </div>
-            ) : (
-              <div className="agent-create-form">
-                <input
-                  className="agent-create-input agent-create-input-dark"
-                  placeholder="Agent ID (小写字母/数字)"
-                  value={newId}
-                  onChange={(e) => setNewId(e.target.value.replace(/[^a-z0-9-]/g, ''))}
-                  autoFocus
-                />
-                <input
-                  className="agent-create-input agent-create-input-dark"
-                  placeholder="显示名称"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleCreate() }}
-                />
-                {createError && <div className="agent-create-error">{createError}</div>}
-                <div className="agent-create-actions">
-                  <button className="agent-create-cancel" onClick={() => setShowCreate(false)}>取消</button>
-                  <button className="agent-create-confirm" onClick={handleCreate} disabled={creating}>
-                    {creating ? '创建中...' : '创建'}
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -215,7 +150,9 @@ export const SessionList: React.FC<SessionListProps> = ({
                 <div className="session-info">
                   <div className="session-title">{session.title || '新对话'}</div>
                   <div className="session-meta">
-                    {agent && <span className="session-agent-tag">{getAgentDisplayName(agent)}</span>}
+                    {agent && agent.id !== 'main' && (
+                      <span className="session-agent-tag">{getAgentDisplayName(agent)}</span>
+                    )}
                     {session.messages?.length || 0} 条消息
                   </div>
                 </div>
