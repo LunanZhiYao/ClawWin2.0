@@ -1223,14 +1223,19 @@ function setupIPC() {
       if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true })
 
       const baseName = path.basename(srcPath)
+      if (!baseName || baseName === '.' || baseName === '..') {
+        return { ok: false, error: '无效文件名' }
+      }
       const ext = path.extname(baseName)
-      const timestamp = Date.now()
-      // 中文/非ASCII文件名可能导致 gateway 解析失败，统一用安全文件名
-      const hasNonAscii = /[^\x00-\x7F]/.test(baseName)
-      const destName = hasNonAscii
-        ? `upload-${timestamp}${ext}`
-        : `${timestamp}-${baseName}`
-      const destPath = path.join(uploadsDir, destName)
+      const stem = ext.length > 0 ? baseName.slice(0, -ext.length) : baseName
+      let destName = baseName
+      let destPath = path.join(uploadsDir, destName)
+      let dup = 0
+      while (fs.existsSync(destPath)) {
+        dup++
+        destName = `${stem}-${Date.now()}-${dup}${ext}`
+        destPath = path.join(uploadsDir, destName)
+      }
 
       fs.copyFileSync(srcPath, destPath)
       return { ok: true, destPath }
