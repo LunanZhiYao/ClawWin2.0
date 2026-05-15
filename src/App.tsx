@@ -163,7 +163,7 @@ function App() {
   const [showChannelSettings, setShowChannelSettings] = useState(false)
   const [showCronManager, setShowCronManager] = useState(false)
   const [settingsWorkspace, setSettingsWorkspace] = useState(setup.config.workspace ?? '~/qianyi')
-  const [responseTimeout, setResponseTimeout] = useState(300000)
+  const [responseTimeout, setResponseTimeout] = useState(900000)
   const [splashDismissed, setSplashDismissed] = useState(false)
   const [showSplashExit, setShowSplashExit] = useState(false)
   const [splashActive, setSplashActive] = useState(false)
@@ -1570,8 +1570,8 @@ function App() {
                 <div className="settings-timeout-row">
                   <input
                     type="range"
-                    min={15000}
-                    max={600000}
+                    min={300000}
+                    max={1200000}
                     step={5000}
                     value={responseTimeout}
                     onChange={(e) => setResponseTimeout(Number(e.target.value))}

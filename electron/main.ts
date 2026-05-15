@@ -975,9 +975,9 @@ function setupIPC() {
   ipcMain.handle('config:getTimeout', () => {
     try {
       const ui = readUiConfig()
-      return (ui.responseTimeout as number) ?? 300000
+      return (ui.responseTimeout as number) ?? 900000
     } catch {
-      return 300000
+      return 900000
     }
   })
 
