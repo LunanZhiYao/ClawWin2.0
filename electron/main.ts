@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, shell, Tray, dialog, clipboard, nati
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
+import extractZip from 'extract-zip'
 import { GatewayManager } from './gateway-manager'
 import {
   isFirstRun,
@@ -35,6 +36,54 @@ let isQuitting = false
 let pendingUpdateInfo: UpdateInfo | null = null
 let downloadedInstallerPath: string | null = null
 let ollamaManager: OllamaManager | null = null
+
+/** 后端 API 根地址（不含末尾斜杠），技能商城等接口在此拼接路径 */
+const API_BASE = 'http://10.0.23.136:8088'
+const runningSkillDownloads = new Set<string>()
+
+/** 商城技能解压目录名：去除 Windows/macOS/Linux 非法字符，避免解压到 skills 根目录 */
+function sanitizeWebSkillInstallDirName(raw: string, fallbackSlug: string): string {
+  const slugSafe = String(fallbackSlug ?? '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim() || 'skill'
+  let s = String(raw ?? '').trim() || slugSafe
+  s = s.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/\s+/g, ' ').trim()
+  s = s.replace(/[. ]+$/g, '')
+  if (!s) s = slugSafe
+  if (s.length > 200) {
+    s = s.slice(0, 200).replace(/[. ]+$/g, '')
+    if (!s) s = slugSafe
+  }
+  const winReserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i
+  if (winReserved.test(s)) s = `_${s}`
+  return s
+}
+
+/**
+ * 压缩包常为「单根目录 + SKILL.md」。解压到 `skills/<展示名>/` 后会变成双层目录，
+ * 扫描器只认 `<展示名>/SKILL.md`，因此在根下没有 SKILL.md 且仅有一个子目录且其含 SKILL.md 时，将内容上移一层。
+ */
+function hoistSingleRootDirIfNoSkillMd(rootDir: string): void {
+  try {
+    const skillMdAtRoot = path.join(rootDir, 'SKILL.md')
+    if (fs.existsSync(skillMdAtRoot)) return
+    const names = fs.readdirSync(rootDir)
+    const dirs = names.filter((n) => {
+      try {
+        return fs.statSync(path.join(rootDir, n)).isDirectory()
+      } catch {
+        return false
+      }
+    })
+    if (dirs.length !== 1) return
+    const inner = path.join(rootDir, dirs[0])
+    if (!fs.existsSync(path.join(inner, 'SKILL.md'))) return
+    for (const name of fs.readdirSync(inner)) {
+      fs.renameSync(path.join(inner, name), path.join(rootDir, name))
+    }
+    fs.rmdirSync(inner)
+  } catch {
+    // 提升失败则保持原样，由后续技能扫描提示
+  }
+}
 
 /** 点窗口关闭时：询问 / 最小化到托盘 / 直接退出（落盘，跨启动保持） */
 type CloseWindowBehavior = 'ask' | 'tray' | 'quit'
@@ -294,6 +343,52 @@ function createWindow() {
 }
 
 function setupIPC() {
+  function parseSkillNameFromFrontmatter(content: string): string | null {
+    const match = content.match(/^name:\s*(.+)$/m)
+    if (!match) return null
+    return match[1].trim().replace(/^["']|["']$/g, '')
+  }
+
+  function resolveSkillRootDirBySource(source: 'local' | 'workspace'): string | null {
+    if (source === 'local') {
+      return path.join(os.homedir(), '.openclaw', 'skills')
+    }
+    const configPath = getOpenclawConfigPath()
+    if (!fs.existsSync(configPath)) return null
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      const workspace = (config?.agents?.defaults?.workspace as string | undefined)?.trim()
+      if (!workspace) return null
+      return path.join(workspace, 'skills')
+    } catch {
+      return null
+    }
+  }
+
+  function findSkillFolderByName(rootDir: string, skillName: string): string | null {
+    if (!fs.existsSync(rootDir)) return null
+    let entries: string[]
+    try {
+      entries = fs.readdirSync(rootDir)
+    } catch {
+      return null
+    }
+    for (const entry of entries) {
+      const folderPath = path.join(rootDir, entry)
+      const skillMdPath = path.join(folderPath, 'SKILL.md')
+      try {
+        if (!fs.statSync(folderPath).isDirectory()) continue
+        if (!fs.existsSync(skillMdPath)) continue
+        const content = fs.readFileSync(skillMdPath, 'utf-8')
+        const name = parseSkillNameFromFrontmatter(content)
+        if (name === skillName) return folderPath
+      } catch {
+        // ignore single skill read error
+      }
+    }
+    return null
+  }
+
   // Gateway status query
   ipcMain.handle('gateway:status', () => {
     return gatewayManager?.getStatus() ?? { state: 'stopped', port: 0 }
@@ -1295,7 +1390,7 @@ function setupIPC() {
       // 默认种子文件（由 seedWorkspaceFromDefaults 创建）
       const seedFiles = new Set([
         'SOUL.md',
-        'IDENTITY.md', 
+        'IDENTITY.md',
         'USER.md',
         'AGENTS.md',
         'CLAUDE.md',
@@ -1338,7 +1433,7 @@ function setupIPC() {
           // 跳过默认种子文件和文件夹，只显示用户新增的内容
           const isSeedFile = seedFiles.has(item.name)
           const isSeedFolder = seedFolders.has(item.name)
-          
+
           if (isSeedFile || isSeedFolder) {
             // 如果是种子文件夹，仍需要遍历其子目录以查找用户新增的文件
             if (item.isDirectory() && depth < maxDepth) {
@@ -1346,7 +1441,7 @@ function setupIPC() {
             }
             continue
           }
-          
+
           const kind: 'file' | 'dir' = item.isDirectory() ? 'dir' : 'file'
           entries.push({
             name: item.name,
@@ -1398,6 +1493,105 @@ function setupIPC() {
     return saveSkillsConfig(config as Record<string, { enabled?: boolean; apiKey?: string; env?: Record<string, string> }>)
   })
 
+  ipcMain.handle('skills:fetchWebSkills', async (_event, params: { q?: string; page?: number; size?: number }) => {
+    try {
+      const page = Number.isFinite(params?.page) ? Math.max(0, Number(params.page)) : 0
+      const size = Number.isFinite(params?.size) ? Math.max(1, Number(params.size)) : 20
+      const url = new URL(`${API_BASE}/api/web/skills`)
+      if (params?.q && params.q.trim()) url.searchParams.set('q', params.q.trim())
+      url.searchParams.set('page', String(page))
+      url.searchParams.set('size', String(size))
+
+      const res = await fetch(url.toString(), { method: 'GET', signal: AbortSignal.timeout(15000) })
+      const payload = await res.json() as {
+        code?: number
+        msg?: string
+        data?: {
+          items?: unknown[]
+          total?: number
+          page?: number
+          size?: number
+        }
+      }
+
+      if (!res.ok) return { ok: false, error: payload?.msg || `HTTP ${res.status}` }
+      if (payload?.code !== 0 || !payload.data) return { ok: false, error: payload?.msg || '技能商城接口返回异常' }
+
+      return {
+        ok: true,
+        data: {
+          items: Array.isArray(payload.data.items) ? payload.data.items : [],
+          total: Number(payload.data.total ?? 0),
+          page: Number(payload.data.page ?? page),
+          size: Number(payload.data.size ?? size),
+        },
+      }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('skills:downloadWebSkill', async (_event, params: { namespace: string; slug: string; displayName?: string }) => {
+    const namespace = String(params?.namespace ?? '').trim()
+    const slug = String(params?.slug ?? '').trim()
+    if (!namespace || !slug) return { ok: false, error: '参数缺失：namespace 或 slug 为空' }
+
+    const downloadKey = `${namespace}/${slug}`
+    if (runningSkillDownloads.has(downloadKey)) {
+      return { ok: false, error: '该技能正在安装中' }
+    }
+    runningSkillDownloads.add(downloadKey)
+    mainWindow?.webContents.send('skills:webDownloadStatus', { namespace, slug, status: 'running' as const })
+
+    // 后台并发任务：立即返回，完成后用事件回传结果
+    void (async () => {
+      let tempZipPath = ''
+      try {
+        const beforeNames = new Set(scanSkills().map(s => s.name))
+        const downloadUrl = `${API_BASE}/api/web/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(slug)}/download`
+        const res = await fetch(downloadUrl, { method: 'GET', signal: AbortSignal.timeout(120000) })
+        if (!res.ok) throw new Error(`下载失败: HTTP ${res.status}`)
+
+        const archiveBuffer = Buffer.from(await res.arrayBuffer())
+        tempZipPath = path.join(os.tmpdir(), `openclaw-skill-${namespace}-${slug}-${Date.now()}.zip`)
+        fs.writeFileSync(tempZipPath, archiveBuffer)
+
+        const targetDir = path.join(os.homedir(), '.openclaw', 'skills')
+        fs.mkdirSync(targetDir, { recursive: true })
+        const displayLabel = String(params?.displayName ?? '').trim()
+        const installDirName = sanitizeWebSkillInstallDirName(displayLabel || slug, slug)
+        const skillInstallDir = path.join(targetDir, installDirName)
+        fs.mkdirSync(skillInstallDir, { recursive: true })
+        await extractZip(tempZipPath, {
+          dir: skillInstallDir,
+          onEntry: (entry) => {
+            const rawName = String(entry.fileName ?? '').replace(/\\/g, '/')
+            const normalized = path.posix.normalize(rawName)
+            if (normalized.startsWith('/') || normalized.startsWith('..') || normalized.includes('/../')) {
+              throw new Error('压缩包包含非法路径，已拒绝解压')
+            }
+          },
+        })
+        hoistSingleRootDirIfNoSkillMd(skillInstallDir)
+
+        clearBinCache()
+        const afterNames = new Set(scanSkills().map(s => s.name))
+        const installedNames = Array.from(afterNames).filter(name => !beforeNames.has(name))
+        mainWindow?.webContents.send('skills:webDownloadStatus', { namespace, slug, status: 'success' as const, installedNames })
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err)
+        mainWindow?.webContents.send('skills:webDownloadStatus', { namespace, slug, status: 'error' as const, error })
+      } finally {
+        runningSkillDownloads.delete(downloadKey)
+        if (tempZipPath) {
+          try { fs.unlinkSync(tempZipPath) } catch { /* ignore */ }
+        }
+      }
+    })()
+
+    return { ok: true }
+  })
+
   ipcMain.handle('skills:canInstall', (_event, skillName: string) => {
     try {
       const installInfo = getSkillInstallInfo(skillName)
@@ -1415,6 +1609,38 @@ function setupIPC() {
         clearBinCache() // 清除缓存以便重新检测
       }
       return result
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('skills:deleteLocalSkill', async (_event, params: { name: string; source: 'local' | 'workspace' }) => {
+    try {
+      const name = String(params?.name ?? '').trim()
+      const source = params?.source
+      if (!name) return { ok: false, error: '技能名不能为空' }
+      if (source !== 'local' && source !== 'workspace') return { ok: false, error: '仅支持删除本地/工作区技能' }
+
+      const rootDir = resolveSkillRootDirBySource(source)
+      if (!rootDir) return { ok: false, error: source === 'workspace' ? '未配置工作空间路径' : '技能目录不存在' }
+
+      const folderPath = findSkillFolderByName(rootDir, name)
+      if (!folderPath) return { ok: false, error: `未找到技能目录：${name}` }
+
+      fs.rmSync(folderPath, { recursive: true, force: true })
+
+      // 同步删除配置中的条目，避免“配置里还有但目录已删除”的残留状态
+      const cfg = getSkillsConfig()
+      if (cfg[name]) {
+        const next = { ...cfg }
+        delete next[name]
+        const saveResult = saveSkillsConfig(next)
+        if (!saveResult.ok) return saveResult
+      }
+
+      clearBinCache()
+      try { await gatewayManager?.restart() } catch { /* keep deletion successful */ }
+      return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }

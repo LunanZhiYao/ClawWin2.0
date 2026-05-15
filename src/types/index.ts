@@ -104,8 +104,16 @@ interface ElectronSkills {
   list: () => Promise<SkillInfo[]>
   getConfig: () => Promise<SkillsConfig>
   saveConfig: (config: SkillsConfig) => Promise<{ ok: boolean; error?: string }>
+  fetchWebSkills: (params: { q?: string; page?: number; size?: number }) => Promise<{
+    ok: boolean
+    error?: string
+    data?: { items: unknown[]; total: number; page: number; size: number }
+  }>
+  downloadWebSkill: (params: { namespace: string; slug: string; displayName?: string }) => Promise<{ ok: boolean; error?: string }>
+  onWebDownloadStatus: (callback: (status: { namespace: string; slug: string; status: 'running' | 'success' | 'error'; error?: string; installedNames?: string[] }) => void) => () => void
   canInstall: (skillName: string) => Promise<{ canInstall: boolean; reason?: string }>
   installDep: (skillName: string) => Promise<{ ok: boolean; error?: string }>
+  deleteLocalSkill: (params: { name: string; source: 'local' | 'workspace' }) => Promise<{ ok: boolean; error?: string }>
 }
 
 interface ElectronAgents {
