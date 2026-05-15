@@ -63,6 +63,8 @@ interface ElectronConfig {
   saveWorkspace: (workspace: string) => Promise<{ ok: boolean; error?: string }>
   getTimeout: () => Promise<number>
   saveTimeout: (ms: number) => Promise<{ ok: boolean; error?: string }>
+  getTimeoutEnabled: () => Promise<boolean>
+  saveTimeoutEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
   getSkipUpdate: () => Promise<boolean>
   saveSkipUpdate: (skip: boolean) => Promise<{ ok: boolean; error?: string }>
   getAutoCompact: () => Promise<boolean>

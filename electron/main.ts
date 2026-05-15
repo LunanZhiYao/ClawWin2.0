@@ -1088,6 +1088,28 @@ function setupIPC() {
     }
   })
 
+  // Get timeout enabled flag
+  ipcMain.handle('config:getTimeoutEnabled', () => {
+    try {
+      const ui = readUiConfig()
+      return (ui.timeoutEnabled as boolean) ?? false
+    } catch {
+      return false
+    }
+  })
+
+  // Save timeout enabled flag
+  ipcMain.handle('config:saveTimeoutEnabled', (_event, enabled: boolean) => {
+    try {
+      const ui = readUiConfig()
+      ui.timeoutEnabled = !!enabled
+      writeUiConfig(ui)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // Get skip-update-check flag
   ipcMain.handle('config:getSkipUpdate', () => {
     try {

@@ -164,6 +164,7 @@ function App() {
   const [showCronManager, setShowCronManager] = useState(false)
   const [settingsWorkspace, setSettingsWorkspace] = useState(setup.config.workspace ?? '~/qianyi')
   const [responseTimeout, setResponseTimeout] = useState(900000)
+  const [timeoutEnabled, setTimeoutEnabled] = useState(false)
   const [splashDismissed, setSplashDismissed] = useState(false)
   const [showSplashExit, setShowSplashExit] = useState(false)
   const [splashActive, setSplashActive] = useState(false)
@@ -263,32 +264,35 @@ function App() {
   const startWaiting = useCallback(() => {
     setIsWaiting(true)
     if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current)
-    waitingTimerRef.current = setTimeout(() => {
-      setIsWaiting(false)
-      // 超时自动中断任务
-      const sid = activeSessionIdRef.current
-      if (sid) {
-        const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
-        void abortSessionRef.current(sid, session?.agentId)
-      }
-      // 添加一条超时错误消息
-      setSessions((prev) => {
-        if (!sid) return prev
-        return prev.map((s) => {
-          if (s.id !== sid) return s
-          const secs = Math.round(responseTimeout / 1000)
-          const errMsg: ChatMessage = {
-            id: generateId(),
-            role: 'assistant',
-            content: `AI 响应超时（已等待 ${secs} 秒），系统已自动停止本次任务。可能的原因：\n1. 当前超时时间设置较短，可在"设置"中调大响应超时\n2. 网络连接不稳定\n3. API Key 无效或额度已用尽\n4. 所选模型服务暂时不可用`,
-            timestamp: Date.now(),
-            status: 'error',
-          }
-          return { ...s, messages: [...s.messages, errMsg], updatedAt: Date.now() }
+    // 只有当超时开关打开时才设置超时定时器
+    if (timeoutEnabled) {
+      waitingTimerRef.current = setTimeout(() => {
+        setIsWaiting(false)
+        // 超时自动中断任务
+        const sid = activeSessionIdRef.current
+        if (sid) {
+          const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
+          void abortSessionRef.current(sid, session?.agentId)
+        }
+        // 添加一条超时错误消息
+        setSessions((prev) => {
+          if (!sid) return prev
+          return prev.map((s) => {
+            if (s.id !== sid) return s
+            const secs = Math.round(responseTimeout / 1000)
+            const errMsg: ChatMessage = {
+              id: generateId(),
+              role: 'assistant',
+              content: `AI 响应超时（已等待 ${secs} 秒），系统已自动停止本次任务。可能的原因：\n1. 当前超时时间设置较短，可在"设置"中调大响应超时\n2. 网络连接不稳定\n3. API Key 无效或额度已用尽\n4. 所选模型服务暂时不可用`,
+              timestamp: Date.now(),
+              status: 'error',
+            }
+            return { ...s, messages: [...s.messages, errMsg], updatedAt: Date.now() }
+          })
         })
-      })
-    }, responseTimeout)
-  }, [responseTimeout])
+      }, responseTimeout)
+    }
+  }, [responseTimeout, timeoutEnabled])
 
   const stopWaiting = useCallback(() => {
     setIsWaiting(false)
@@ -357,8 +361,10 @@ function App() {
     if (sid) {
       const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
       ws.abortSession(sid, session?.agentId)
+      // 立即停止等待状态，确保按钮状态正确更新
+      stopWaiting()
     }
-  }, [ws])
+  }, [ws, stopWaiting])
 
   /**
    * 扫码仅拿到 access_token；用户与 model_config 一律走 fetchMeSession（/auth/me），与冷启动一致。
@@ -489,6 +495,8 @@ function App() {
     window.electronAPI.config.getTimeout().then((ms) => {
       if (ms > 0) setResponseTimeout(ms)
     }).catch(() => {})
+    // Load timeout enabled flag
+    window.electronAPI.config.getTimeoutEnabled().then(setTimeoutEnabled).catch(() => {})
     // Load skip-update-check preference
     window.electronAPI.config.getSkipUpdate().then(setSkipUpdateCheck).catch(() => {})
     // Load auto-compact preference
@@ -629,6 +637,19 @@ function App() {
     }, 500)
     return () => clearTimeout(timer)
   }, [responseTimeout])
+
+  // Save timeout enabled flag on change (debounced)
+  const timeoutEnabledLoadedRef = useRef(false)
+  useEffect(() => {
+    if (!timeoutEnabledLoadedRef.current) {
+      timeoutEnabledLoadedRef.current = true
+      return
+    }
+    const timer = setTimeout(() => {
+      window.electronAPI.config.saveTimeoutEnabled(timeoutEnabled)
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [timeoutEnabled])
 
   // Show setup on first run
   useEffect(() => {
@@ -1567,7 +1588,19 @@ function App() {
               <div className="settings-section">
                 <h3>响应超时</h3>
                 <p className="settings-hint">发送消息后等待 AI 回复的最长时间，推理模型建议 120 秒以上</p>
-                <div className="settings-timeout-row">
+                <div className="settings-toggle-row" style={{ marginBottom: '16px' }}>
+                  <input
+                    type="checkbox"
+                    checked={timeoutEnabled}
+                    onChange={(e) => {
+                      const val = e.target.checked
+                      setTimeoutEnabled(val)
+                      window.electronAPI.config.saveTimeoutEnabled(val).catch(() => {})
+                    }}
+                  />
+                  <span>启用响应超时限制</span>
+                </div>
+                <div className="settings-timeout-row" style={{ opacity: timeoutEnabled ? 1 : 0.5, pointerEvents: timeoutEnabled ? 'auto' : 'none' }}>
                   <input
                     type="range"
                     min={300000}
@@ -1576,6 +1609,7 @@ function App() {
                     value={responseTimeout}
                     onChange={(e) => setResponseTimeout(Number(e.target.value))}
                     className="settings-timeout-slider"
+                    disabled={!timeoutEnabled}
                   />
                   <span className="settings-timeout-value">
                     {responseTimeout >= 60000
