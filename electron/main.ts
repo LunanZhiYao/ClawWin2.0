@@ -1290,30 +1290,24 @@ function setupIPC() {
       const maxDepth = 4
       const maxEntries = 400
       const entries: Array<{ name: string; path: string; relativePath: string; kind: 'file' | 'dir'; size?: number; modifiedAt: number }> = []
-      // 仅当显式 deliveryOnly: true 时过滤；省略或为 false 时列出目录内条目（供后续扩展）
-      const deliveryOnly = options?.deliveryOnly === true
+      // 过滤掉默认种子文件和文件夹，只显示用户新增的内容
       const skipNames = new Set(['.git', 'node_modules', '.openclaw'])
-      const deliveryFolderHints = ['deliverable', 'deliverables', 'delivery', 'artifact', 'artifacts', 'output', 'outputs', 'result', 'results', 'report', 'reports', 'export', 'exports', '产物', '交付', '输出']
-      const deliveryFileHints = ['deliverable', 'delivery', 'artifact', 'output', 'result', 'report', 'summary', 'final', '产物', '交付', '总结', '报告']
-      const deliveryExts = new Set([
-        '.md', '.txt', '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv',
-        '.json', '.html', '.zip', '.rar', '.7z', '.tar', '.gz',
-        '.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg',
+      // 默认种子文件（由 seedWorkspaceFromDefaults 创建）
+      const seedFiles = new Set([
+        'SOUL.md',
+        'IDENTITY.md', 
+        'USER.md',
+        'AGENTS.md',
+        'CLAUDE.md',
+        'HEARTBEAT.md',
+        'TOOLS.md',
       ])
-
-      const isDeliveryPath = (relativePath: string): boolean => {
-        const normalized = relativePath.replace(/\\/g, '/').toLowerCase()
-        return deliveryFolderHints.some((k) => normalized.includes(`/${k}/`) || normalized.startsWith(`${k}/`))
-      }
-
-      const isDeliveryFile = (name: string, relativePath: string): boolean => {
-        const lowerName = name.toLowerCase()
-        const ext = path.extname(lowerName)
-        const hasHintInName = deliveryFileHints.some((k) => lowerName.includes(k))
-        const hasHintInPath = isDeliveryPath(relativePath)
-        const hasDeliveryExt = deliveryExts.has(ext)
-        return hasHintInName || (hasHintInPath && hasDeliveryExt)
-      }
+      // 默认种子文件夹（隐藏文件夹本身，但显示其中的用户文件）
+      const seedFolders = new Set([
+        'skills',
+        'memory',
+        'uploads',
+      ])
 
       const walk = (dir: string, depth: number) => {
         if (entries.length >= maxEntries) return
@@ -1341,17 +1335,27 @@ function setupIPC() {
             // ignore
           }
 
-          const kind: 'file' | 'dir' = item.isDirectory() ? 'dir' : 'file'
-          if (!deliveryOnly || (kind === 'file' && isDeliveryFile(item.name, relativePath))) {
-            entries.push({
-              name: item.name,
-              path: absolutePath,
-              relativePath,
-              kind,
-              size,
-              modifiedAt: mtimeMs,
-            })
+          // 跳过默认种子文件和文件夹，只显示用户新增的内容
+          const isSeedFile = seedFiles.has(item.name)
+          const isSeedFolder = seedFolders.has(item.name)
+          
+          if (isSeedFile || isSeedFolder) {
+            // 如果是种子文件夹，仍需要遍历其子目录以查找用户新增的文件
+            if (item.isDirectory() && depth < maxDepth) {
+              walk(absolutePath, depth + 1)
+            }
+            continue
           }
+          
+          const kind: 'file' | 'dir' = item.isDirectory() ? 'dir' : 'file'
+          entries.push({
+            name: item.name,
+            path: absolutePath,
+            relativePath,
+            kind,
+            size,
+            modifiedAt: mtimeMs,
+          })
 
           if (item.isDirectory() && depth < maxDepth) {
             walk(absolutePath, depth + 1)
