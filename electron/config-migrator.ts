@@ -163,6 +163,18 @@ export class ConfigMigrator {
       }
     }
 
+    // 禁用 web_search 工具，使用阿里云搜索替代
+    if (!newConfig.tools || typeof newConfig.tools !== 'object') {
+      newConfig.tools = {}
+    }
+    if (!Array.isArray(newConfig.tools.deny)) {
+      newConfig.tools.deny = []
+    }
+    if (!newConfig.tools.deny.includes('web_search')) {
+      newConfig.tools.deny.push('web_search')
+      this.log('info', '已禁用 web_search 工具（使用阿里云搜索替代）')
+    }
+
     // 完整保留所有其他字段：
     // - models（包含 providers 和所有模型配置）
     // - agents（包含 defaults 和所有 agent 配置）
