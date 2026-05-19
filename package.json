@@ -1,6 +1,6 @@
 {
   "name": "lunan-qianyi-desktop",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "鲁南千易-基于OpenClaw的图形化助手",
   "main": "dist-electron/main.js",
   "author": "鲁南千易",
