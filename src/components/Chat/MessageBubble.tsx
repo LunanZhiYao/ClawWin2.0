@@ -382,7 +382,7 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
         )}
 
         {/* Phase 3: 文本内容 / 工具执行中的占位动画 */}
-        {!isUser && isStreaming && !displayContent && toolCalls.length > 0 && (
+        {!isUser && isStreaming && !displayContent && !reasoningText && (
           <div className="message-content message-content-assistant">
             <div className="typing-dots">
               <span className="typing-dot" />

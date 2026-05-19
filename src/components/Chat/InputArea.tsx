@@ -36,7 +36,7 @@ interface InputAreaProps {
   placeholder?: string
   isWaiting?: boolean
   isStreaming?: boolean
-  onStop?: () => void
+  onStop?: () => Promise<void> | void
   externalAttachment?: AttachmentWithPreview | null
   onExternalAttachmentConsumed?: () => void
 }
@@ -55,6 +55,7 @@ export const InputArea: React.FC<InputAreaProps> = ({
   const [attachments, setAttachments] = useState<AttachmentWithPreview[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isStopping, setIsStopping] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragCounterRef = useRef(0)
@@ -644,8 +645,19 @@ export const InputArea: React.FC<InputAreaProps> = ({
       {(isStreaming || isWaiting) && (
         <button
           className="btn-stop"
-          onClick={onStop}
-          title="停止回复"
+          onClick={async () => {
+            if (isStopping || !onStop) return
+            setIsStopping(true)
+            try {
+              await onStop()
+            } catch (err) {
+              console.error('[input] stop error:', err)
+            } finally {
+              setIsStopping(false)
+            }
+          }}
+          disabled={isStopping}
+          title={isStopping ? '正在停止...' : '停止回复'}
         >
           <span style={{ display:'block', width:16, height:16, backgroundColor:'white', borderRadius:2 }} />
         </button>

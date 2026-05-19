@@ -185,7 +185,8 @@ function App() {
   const [agentWorkspaceMap, setAgentWorkspaceMap] = useState<Record<string, string>>({})
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const abortSessionRef = useRef<(sessionKey: string, agentId?: string) => Promise<void>>(async () => {})
+  const timeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const abortSessionRef = useRef<(sessionKey: string, agentId?: string, isAuto?: boolean, isFrontendTimeout?: boolean) => Promise<{ success: boolean; error?: string }>>(async () => ({ success: true }))
   const [autoCompact, setAutoCompact] = useState(true)
   /** 与主进程 app-close-behavior.json 同步 */
   const [closeWindowBehavior, setCloseWindowBehavior] = useState<'ask' | 'tray' | 'quit'>('ask')
@@ -260,39 +261,60 @@ function App() {
     }
   }, [])
 
-  // 根据用户配置的超时时间自动取消等待并提示错误
+  const DEFAULT_TIMEOUT = 10 * 60 * 1000
+  const sendContinueSilentlyRef = useRef<(() => void) | null>(null)
+  const isStreamingRef = useRef(false)
+
+  const startTimeoutTimer = useCallback(() => {
+    if (timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current)
+    const actualTimeout = timeoutEnabled ? responseTimeout : DEFAULT_TIMEOUT
+    console.log('[app] startTimeoutTimer: timeoutEnabled=', timeoutEnabled, 'actualTimeout=', actualTimeout, 'ms')
+    timeoutTimerRef.current = setTimeout(async () => {
+      console.log('[app] timeout triggered after', actualTimeout, 'ms')
+      const sid = activeSessionIdRef.current
+      if (sid && isStreamingRef.current) {
+        const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
+        console.log('[app] timeout: session=', session?.id, 'agentId=', session?.agentId, 'isStreaming=', isStreamingRef.current)
+        try {
+          await abortSessionRef.current(sid, session?.agentId, true, true)
+        } catch (err) {
+          console.warn('[app] timeout abort failed:', err)
+        }
+        setSessions((prev) =>
+          prev.map((s) => {
+            if (s.id !== sid) return s
+            const messages = s.messages.map((m) =>
+              m.status === 'streaming'
+                ? { ...m, status: 'done' as const }
+                : m
+            )
+            return { ...s, messages, updatedAt: Date.now() }
+          })
+        )
+        console.log('[app] timeout: sending 继续 in 500ms')
+        setTimeout(() => {
+          console.log('[app] timeout: executing sendContinueSilently')
+          sendContinueSilentlyRef.current?.()
+        }, 500)
+      } else {
+        console.log('[app] timeout: no active streaming task, skip. sessionId=', sid, 'isStreaming=', isStreamingRef.current)
+      }
+    }, actualTimeout)
+  }, [responseTimeout, timeoutEnabled])
+
+  const stopTimeoutTimer = useCallback(() => {
+    if (timeoutTimerRef.current) {
+      clearTimeout(timeoutTimerRef.current)
+      timeoutTimerRef.current = null
+      console.log('[app] stopTimeoutTimer: timer cleared')
+    }
+  }, [])
+
   const startWaiting = useCallback(() => {
     setIsWaiting(true)
     if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current)
-    // 只有当超时开关打开时才设置超时定时器
-    if (timeoutEnabled) {
-      waitingTimerRef.current = setTimeout(() => {
-        setIsWaiting(false)
-        // 超时自动中断任务
-        const sid = activeSessionIdRef.current
-        if (sid) {
-          const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
-          void abortSessionRef.current(sid, session?.agentId)
-        }
-        // 添加一条超时错误消息
-        setSessions((prev) => {
-          if (!sid) return prev
-          return prev.map((s) => {
-            if (s.id !== sid) return s
-            const secs = Math.round(responseTimeout / 1000)
-            const errMsg: ChatMessage = {
-              id: generateId(),
-              role: 'assistant',
-              content: `AI 响应超时（已等待 ${secs} 秒），系统已自动停止本次任务。可能的原因：\n1. 当前超时时间设置较短，可在"设置"中调大响应超时\n2. 网络连接不稳定\n3. API Key 无效或额度已用尽\n4. 所选模型服务暂时不可用`,
-              timestamp: Date.now(),
-              status: 'error',
-            }
-            return { ...s, messages: [...s.messages, errMsg], updatedAt: Date.now() }
-          })
-        })
-      }, responseTimeout)
-    }
-  }, [responseTimeout, timeoutEnabled])
+    startTimeoutTimer()
+  }, [startTimeoutTimer])
 
   const stopWaiting = useCallback(() => {
     setIsWaiting(false)
@@ -312,6 +334,7 @@ function App() {
     reconnectKey: wsReconnectKey,
   })
   abortSessionRef.current = ws.abortSession
+  isStreamingRef.current = ws.isStreaming
   const activeAgentId = useMemo(() => {
     const current = sessions.find((s) => s.id === activeSessionId)
     return current?.agentId || ws.defaultAgentId || 'main'
@@ -356,13 +379,19 @@ function App() {
     setAvailableModels(models)
   }, [])
 
-  const handleStop = useCallback(() => {
+  const handleStop = useCallback(async () => {
     const sid = activeSessionIdRef.current
     if (sid) {
       const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
-      ws.abortSession(sid, session?.agentId)
-      // 立即停止等待状态，确保按钮状态正确更新
       stopWaiting()
+      try {
+        const result = await ws.abortSession(sid, session?.agentId)
+        if (!result.success) {
+          console.warn('[app] abort failed:', result.error)
+        }
+      } catch (err) {
+        console.error('[app] abort error:', err)
+      }
     }
   }, [ws, stopWaiting])
 
@@ -688,6 +717,7 @@ function App() {
       // 仅在终态消息时停止 waiting，避免工具调用阶段停止按钮/加载态提前消失
       if (msg.status === 'done' || msg.status === 'error') {
         stopWaiting()
+        stopTimeoutTimer()
         void refreshSessionUsageRef.current(sid, msg.status === 'done')
         if (msg.status === 'done') {
           // 先清理该会话上一次遗留的补拉任务，避免快速连续回复时并发覆盖。
@@ -729,8 +759,42 @@ function App() {
         })
       )
     },
-    [markUserMessageComplete, stopWaiting] // 不依赖会变化的业务状态，通过 ref 获取最新值
+    [markUserMessageComplete, stopWaiting, stopTimeoutTimer]
   )
+
+  const handleSendRef = useRef<(content: string, attachments?: ChatAttachment[]) => void>((() => {}) as any)
+
+  ws.onStreamStart.current = useCallback(() => {
+    stopWaiting()
+  }, [stopWaiting])
+
+  ws.onBackendDisconnected.current = useCallback(async (reason: string) => {
+    console.warn('[app] backend disconnected, auto-recovering:', reason)
+    stopWaiting()
+    const sid = activeSessionIdRef.current
+    if (sid && isStreamingRef.current) {
+      const session = sessionsRef.current?.find((s) => s.id === sid)
+      try {
+        await ws.abortSession(sid, session?.agentId, true)
+      } catch (err) {
+        console.warn('[app] auto-abort failed:', err)
+      }
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== sid) return s
+          const messages = s.messages.map((m) =>
+            m.status === 'streaming'
+              ? { ...m, status: 'done' as const }
+              : m
+          )
+          return { ...s, messages, updatedAt: Date.now() }
+        })
+      )
+      setTimeout(() => {
+        sendContinueSilentlyRef.current?.()
+      }, 500)
+    }
+  }, [stopWaiting, ws])
 
   // 自动压缩上下文：usage 超 70% 时自动发 /compact
   const autoCompactRef = useRef(autoCompact)
@@ -1123,6 +1187,26 @@ function App() {
     },
     [activeSessionId, ws, startWaiting, registerRunBinding, markUserMessageComplete]
   )
+  handleSendRef.current = handleSend
+
+  const sendContinueSilently = useCallback(() => {
+    const sid = activeSessionIdRef.current
+    if (!sid) {
+      console.log('[app] sendContinueSilently: no active session, skip')
+      return
+    }
+    if (!ws.connected || gateway.state !== 'ready') {
+      console.log('[app] sendContinueSilently: websocket not ready, skip. connected=', ws.connected, 'gatewayState=', gateway.state)
+      return
+    }
+    const session = sessionsRef.current?.find((s) => s.id === sid)
+    console.log('[app] sendContinueSilently: sessionId=', sid)
+    startWaiting()
+    void ws.sendMessage(sid, '继续', undefined, session?.agentId, session?.modelOverride).then((ack) => {
+      registerRunBinding(ack, sid, undefined)
+    })
+  }, [ws, gateway.state, startWaiting, registerRunBinding])
+  sendContinueSilentlyRef.current = sendContinueSilently
 
   const handleSetupComplete = useCallback(async () => {
     try {
@@ -1587,7 +1671,9 @@ function App() {
               {/* 响应超时 - 独占一行 */}
               <div className="settings-section">
                 <h3>响应超时</h3>
-                <p className="settings-hint">发送消息后等待 AI 回复的最长时间，推理模型建议 120 秒以上</p>
+                <p className="settings-hint">
+                  超时后自动中断并重新继续执行。开启时使用设置的时间，关闭时默认10分钟（防止大模型异常无法中断）。
+                </p>
                 <div className="settings-toggle-row" style={{ marginBottom: '16px' }}>
                   <input
                     type="checkbox"
@@ -1598,7 +1684,7 @@ function App() {
                       window.electronAPI.config.saveTimeoutEnabled(val).catch(() => {})
                     }}
                   />
-                  <span>启用响应超时限制</span>
+                  <span>自定义超时时间</span>
                 </div>
                 <div className="settings-timeout-row" style={{ opacity: timeoutEnabled ? 1 : 0.5, pointerEvents: timeoutEnabled ? 'auto' : 'none' }}>
                   <input
