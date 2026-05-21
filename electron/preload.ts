@@ -173,6 +173,10 @@ const electronAPI = {
       options?: { deliveryOnly?: boolean },
     ): Promise<{ ok: boolean; entries: Array<{ name: string; path: string; relativePath: string; kind: 'file' | 'dir'; size?: number; modifiedAt: number }>; error?: string }> =>
       ipcRenderer.invoke('workspace:listEntries', workspacePath, options ?? {}),
+    deleteEntry: (
+      entryPath: string,
+    ): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('workspace:deleteEntry', entryPath),
   },
 
   // Sessions persistence

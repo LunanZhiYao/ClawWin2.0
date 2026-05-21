@@ -85,6 +85,7 @@ export interface WorkspaceEntry {
 
 interface ElectronWorkspace {
   listEntries: (workspacePath: string, options?: { deliveryOnly?: boolean }) => Promise<{ ok: boolean; entries: WorkspaceEntry[]; error?: string }>
+  deleteEntry: (entryPath: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 interface ElectronSessions {

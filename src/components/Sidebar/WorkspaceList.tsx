@@ -81,7 +81,7 @@ function extBadge(entry: WorkspaceEntry | TreeNode): { label: string; category: 
 /**
  * 将扁平的 WorkspaceEntry 列表转换为树形结构。
  * 根据 relativePath 中的路径分隔符拆分层级。
- * 排序规则：文件夹在前，文件在后；同类按名称排序。
+ * 排序规则：按修改时间倒序（最新在上）。
  */
 function buildTree(flatEntries: WorkspaceEntry[]): TreeNode[] {
   const root: TreeNode[] = []
@@ -152,10 +152,13 @@ function buildTree(flatEntries: WorkspaceEntry[]): TreeNode[] {
     }
   }
 
-  // 递归排序：文件夹在前，文件在后；同类按名称排序
+  // 递归排序：按修改时间倒序（最新在上），时间相同则按名称排序
   function sortNodes(nodes: TreeNode[]): TreeNode[] {
     return nodes.sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
+      // 有修改时间的排前面
+      if (a.modifiedAt > 0 && b.modifiedAt > 0) return b.modifiedAt - a.modifiedAt
+      if (a.modifiedAt > 0) return -1
+      if (b.modifiedAt > 0) return 1
       return a.name.localeCompare(b.name, 'zh-CN')
     }).map(node => {
       if (node.children.length > 0) {
@@ -168,6 +171,32 @@ function buildTree(flatEntries: WorkspaceEntry[]): TreeNode[] {
   return sortNodes(root)
 }
 
+/** 删除确认弹窗组件 */
+const DeleteConfirmModal: React.FC<{
+  entryName: string
+  entryKind: 'file' | 'dir'
+  onConfirm: () => void
+  onCancel: () => void
+}> = ({ entryName, entryKind, onConfirm, onCancel }) => {
+  const isDir = entryKind === 'dir'
+  return (
+    <div className="workspace-delete-overlay" onClick={onCancel}>
+      <div className="workspace-delete-modal" onClick={e => e.stopPropagation()}>
+        <div className="workspace-delete-modal-title">确认删除</div>
+        <div className="workspace-delete-modal-body">
+          确定要删除{isDir ? '文件夹' : '文件'} <strong>{entryName}</strong> 吗？
+          {isDir && <span className="workspace-delete-modal-warn">该文件夹下的所有内容将被一并删除，此操作不可恢复。</span>}
+          {!isDir && <span className="workspace-delete-modal-warn">此操作不可恢复。</span>}
+        </div>
+        <div className="workspace-delete-modal-actions">
+          <button className="workspace-delete-btn-cancel" onClick={onCancel}>取消</button>
+          <button className="workspace-delete-btn-confirm" onClick={onConfirm}>确认删除</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** 树节点渲染组件 */
 const TreeNodeItem: React.FC<{
   node: TreeNode
@@ -175,7 +204,8 @@ const TreeNodeItem: React.FC<{
   expandedPaths: Set<string>
   toggleExpand: (path: string) => void
   onOpenEntry: (entry: WorkspaceEntry) => void
-}> = ({ node, depth, expandedPaths, toggleExpand, onOpenEntry }) => {
+  onDelete: (node: TreeNode) => void
+}> = ({ node, depth, expandedPaths, toggleExpand, onOpenEntry, onDelete }) => {
   const isDir = node.kind === 'dir'
   const isExpanded = expandedPaths.has(node.relativePath)
   const badge = extBadge(node)
@@ -195,6 +225,12 @@ const TreeNodeItem: React.FC<{
       })
     }
   }, [isDir, node, toggleExpand, onOpenEntry])
+
+  /** 阻止事件冒泡，避免触发展开/打开 */
+  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    onDelete(node)
+  }, [node, onDelete])
 
   return (
     <>
@@ -220,6 +256,20 @@ const TreeNodeItem: React.FC<{
             {badge.label}
           </span>
           <span className="workspace-name">{node.name}</span>
+          {/* 删除按钮 */}
+          <button
+            className="workspace-item-delete"
+            onClick={handleDeleteClick}
+            title="删除"
+            aria-label={`删除 ${node.name}`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              <line x1="10" y1="11" x2="10" y2="17" />
+              <line x1="14" y1="11" x2="14" y2="17" />
+            </svg>
+          </button>
         </div>
         <div className="workspace-meta">
           {node.kind === 'file' ? formatSize(node.size) : `${node.children.length} 项`}
@@ -236,6 +286,7 @@ const TreeNodeItem: React.FC<{
           expandedPaths={expandedPaths}
           toggleExpand={toggleExpand}
           onOpenEntry={onOpenEntry}
+          onDelete={onDelete}
         />
       ))}
     </>
@@ -254,6 +305,10 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
 }) => {
   // 记录已展开的文件夹路径
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
+  // 删除确认弹窗状态
+  const [deleteTarget, setDeleteTarget] = useState<TreeNode | null>(null)
+  // 删除中状态
+  const [deleting, setDeleting] = useState(false)
 
   // 将扁平列表转为树形结构
   const tree = useMemo(() => buildTree(entries), [entries])
@@ -268,6 +323,43 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
       }
       return next
     })
+  }, [])
+
+  /** 点击删除按钮：弹出确认弹窗 */
+  const handleDeleteRequest = useCallback((node: TreeNode) => {
+    // 隐含目录（无绝对路径）不允许删除
+    if (!node.path) return
+    setDeleteTarget(node)
+  }, [])
+
+  /** 确认删除 */
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      const result = await window.electronAPI.workspace.deleteEntry(deleteTarget.path)
+      if (!result.ok) {
+        alert(`删除失败：${result.error || '未知错误'}`)
+      } else {
+        // 删除成功后折叠该路径并刷新列表
+        setExpandedPaths(prev => {
+          const next = new Set(prev)
+          next.delete(deleteTarget.relativePath)
+          return next
+        })
+        onRefresh()
+      }
+    } catch (err) {
+      alert(`删除失败：${err instanceof Error ? err.message : '未知错误'}`)
+    } finally {
+      setDeleting(false)
+      setDeleteTarget(null)
+    }
+  }, [deleteTarget, onRefresh])
+
+  /** 取消删除 */
+  const handleDeleteCancel = useCallback(() => {
+    setDeleteTarget(null)
   }, [])
 
   return (
@@ -322,9 +414,28 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
             expandedPaths={expandedPaths}
             toggleExpand={toggleExpand}
             onOpenEntry={onOpenEntry}
+            onDelete={handleDeleteRequest}
           />
         ))}
       </div>
+
+      {/* 删除确认弹窗 */}
+      {deleteTarget && (
+        <DeleteConfirmModal
+          entryName={deleteTarget.name}
+          entryKind={deleteTarget.kind}
+          onConfirm={handleDeleteConfirm}
+          onCancel={handleDeleteCancel}
+        />
+      )}
+      {/* 删除中遮罩 */}
+      {deleting && (
+        <div className="workspace-delete-overlay">
+          <div className="workspace-delete-modal">
+            <div className="workspace-delete-modal-title">正在删除...</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

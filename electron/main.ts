@@ -1493,6 +1493,24 @@ function setupIPC() {
     }
   })
 
+  // 删除工作区中的文件或文件夹
+  ipcMain.handle('workspace:deleteEntry', async (_event, entryPath: string) => {
+    try {
+      const p = (entryPath || '').trim()
+      if (!p) return { ok: false, error: '路径为空' }
+      if (!fs.existsSync(p)) return { ok: false, error: '文件或目录不存在' }
+      const stat = fs.statSync(p)
+      if (stat.isDirectory()) {
+        fs.rmSync(p, { recursive: true, force: true })
+      } else {
+        fs.unlinkSync(p)
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   // ===== Skills IPC handlers =====
   ipcMain.handle('skills:list', () => {
     try {
