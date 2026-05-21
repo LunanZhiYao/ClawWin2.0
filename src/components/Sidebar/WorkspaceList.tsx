@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import type { WorkspaceEntry } from '../../types'
 
 interface WorkspaceListProps {
@@ -10,6 +10,21 @@ interface WorkspaceListProps {
   onRefresh: () => void
   onOpenEntry: (entry: WorkspaceEntry) => void
   onOpenWorkspace: () => void
+}
+
+/** 树节点：文件夹或文件 */
+interface TreeNode {
+  /** 节点名称（仅当前层级名称） */
+  name: string
+  /** 完整相对路径 */
+  relativePath: string
+  /** 绝对路径 */
+  path: string
+  kind: 'file' | 'dir'
+  size?: number
+  modifiedAt: number
+  /** 子节点（仅文件夹有） */
+  children: TreeNode[]
 }
 
 function formatSize(bytes?: number): string {
@@ -35,7 +50,7 @@ function fileExtension(name: string): string {
  * 列表侧标识：按后缀展示，便于区分类型。
  * category 用于样式分组（不必与后缀一一对应）。
  */
-function extBadge(entry: WorkspaceEntry): { label: string; category: string } {
+function extBadge(entry: WorkspaceEntry | TreeNode): { label: string; category: string } {
   if (entry.kind === 'dir') return { label: '目录', category: 'dir' }
   const ext = fileExtension(entry.name)
   if (!ext) return { label: '无后缀', category: 'none' }
@@ -63,6 +78,170 @@ function extBadge(entry: WorkspaceEntry): { label: string; category: string } {
   return { label, category }
 }
 
+/**
+ * 将扁平的 WorkspaceEntry 列表转换为树形结构。
+ * 根据 relativePath 中的路径分隔符拆分层级。
+ * 排序规则：文件夹在前，文件在后；同类按名称排序。
+ */
+function buildTree(flatEntries: WorkspaceEntry[]): TreeNode[] {
+  const root: TreeNode[] = []
+  // 使用 Map 缓存已创建的目录节点，避免重复创建
+  const dirMap = new Map<string, TreeNode>()
+
+  for (const entry of flatEntries) {
+    // 统一使用 / 分隔
+    const parts = entry.relativePath.replace(/\\/g, '/').split('/')
+    let currentLevel = root
+
+    for (let i = 0; i < parts.length; i++) {
+      const partName = parts[i]
+      const partPath = parts.slice(0, i + 1).join('/')
+
+      if (i === parts.length - 1) {
+        // 最后一段：叶子节点（文件或目录本身）
+        if (entry.kind === 'dir') {
+          // 目录节点可能已由子项提前创建
+          const existing = dirMap.get(partPath)
+          if (existing) {
+            // 补充目录自身的信息
+            existing.size = entry.size
+            existing.modifiedAt = entry.modifiedAt
+            existing.path = entry.path
+          } else {
+            const node: TreeNode = {
+              name: partName,
+              relativePath: entry.relativePath,
+              path: entry.path,
+              kind: 'dir',
+              size: entry.size,
+              modifiedAt: entry.modifiedAt,
+              children: [],
+            }
+            dirMap.set(partPath, node)
+            currentLevel.push(node)
+          }
+        } else {
+          // 文件节点
+          currentLevel.push({
+            name: partName,
+            relativePath: entry.relativePath,
+            path: entry.path,
+            kind: 'file',
+            size: entry.size,
+            modifiedAt: entry.modifiedAt,
+            children: [],
+          })
+        }
+      } else {
+        // 中间段：隐含的目录层级（后端可能没有单独返回该目录条目）
+        let dirNode = dirMap.get(partPath)
+        if (!dirNode) {
+          dirNode = {
+            name: partName,
+            relativePath: partPath,
+            path: '', // 隐含目录，无独立绝对路径
+            kind: 'dir',
+            modifiedAt: 0,
+            children: [],
+          }
+          dirMap.set(partPath, dirNode)
+          currentLevel.push(dirNode)
+        }
+        currentLevel = dirNode.children
+      }
+    }
+  }
+
+  // 递归排序：文件夹在前，文件在后；同类按名称排序
+  function sortNodes(nodes: TreeNode[]): TreeNode[] {
+    return nodes.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
+      return a.name.localeCompare(b.name, 'zh-CN')
+    }).map(node => {
+      if (node.children.length > 0) {
+        return { ...node, children: sortNodes(node.children) }
+      }
+      return node
+    })
+  }
+
+  return sortNodes(root)
+}
+
+/** 树节点渲染组件 */
+const TreeNodeItem: React.FC<{
+  node: TreeNode
+  depth: number
+  expandedPaths: Set<string>
+  toggleExpand: (path: string) => void
+  onOpenEntry: (entry: WorkspaceEntry) => void
+}> = ({ node, depth, expandedPaths, toggleExpand, onOpenEntry }) => {
+  const isDir = node.kind === 'dir'
+  const isExpanded = expandedPaths.has(node.relativePath)
+  const badge = extBadge(node)
+
+  const handleClick = useCallback(() => {
+    if (isDir) {
+      toggleExpand(node.relativePath)
+    } else {
+      // 将 TreeNode 转回 WorkspaceEntry 传给父组件
+      onOpenEntry({
+        name: node.name,
+        path: node.path,
+        relativePath: node.relativePath,
+        kind: node.kind,
+        size: node.size,
+        modifiedAt: node.modifiedAt,
+      })
+    }
+  }, [isDir, node, toggleExpand, onOpenEntry])
+
+  return (
+    <>
+      <div
+        className={`workspace-item ${isDir ? 'workspace-item--dir' : ''}`}
+        style={{ paddingLeft: `${12 + depth * 16}px` }}
+        onClick={handleClick}
+        title={node.path || node.relativePath}
+      >
+        <div className="workspace-item-main">
+          {/* 文件夹展开/折叠箭头 */}
+          {isDir && (
+            <span className={`workspace-dir-arrow ${isExpanded ? 'workspace-dir-arrow--expanded' : ''}`}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </span>
+          )}
+          <span
+            className={`workspace-ext workspace-ext--${badge.category}`}
+            title={isDir ? '目录' : `.${fileExtension(node.name) || '无后缀'}`}
+          >
+            {badge.label}
+          </span>
+          <span className="workspace-name">{node.name}</span>
+        </div>
+        <div className="workspace-meta">
+          {node.kind === 'file' ? formatSize(node.size) : `${node.children.length} 项`}
+          {' · '}
+          {node.modifiedAt > 0 ? formatTime(node.modifiedAt) : '--'}
+        </div>
+      </div>
+      {/* 展开子节点 */}
+      {isDir && isExpanded && node.children.map(child => (
+        <TreeNodeItem
+          key={child.relativePath}
+          node={child}
+          depth={depth + 1}
+          expandedPaths={expandedPaths}
+          toggleExpand={toggleExpand}
+          onOpenEntry={onOpenEntry}
+        />
+      ))}
+    </>
+  )
+}
+
 export const WorkspaceList: React.FC<WorkspaceListProps> = ({
   currentAgentId,
   workspacePath,
@@ -73,6 +252,24 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
   onOpenEntry,
   onOpenWorkspace,
 }) => {
+  // 记录已展开的文件夹路径
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
+
+  // 将扁平列表转为树形结构
+  const tree = useMemo(() => buildTree(entries), [entries])
+
+  const toggleExpand = useCallback((path: string) => {
+    setExpandedPaths(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
+      return next
+    })
+  }, [])
+
   return (
     <div className="workspace-list">
       <div className="workspace-list-header">
@@ -117,32 +314,16 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
         {!loading && !error && entries.length === 0 && (
           <div className="session-empty">当前工作区暂无可识别的交付产物文件</div>
         )}
-        {entries.map((entry) => {
-          const badge = extBadge(entry)
-          return (
-          <div
-            key={entry.path}
-            className="workspace-item"
-            onClick={() => onOpenEntry(entry)}
-            title={entry.path}
-          >
-            <div className="workspace-item-main">
-              <span
-                className={`workspace-ext workspace-ext--${badge.category}`}
-                title={entry.kind === 'dir' ? '目录' : `.${fileExtension(entry.name) || '无后缀'}`}
-              >
-                {badge.label}
-              </span>
-              <span className="workspace-name">{entry.relativePath}</span>
-            </div>
-            <div className="workspace-meta">
-              {entry.kind === 'file' ? formatSize(entry.size) : '--'}
-              {' · '}
-              {formatTime(entry.modifiedAt)}
-            </div>
-          </div>
-          )
-        })}
+        {tree.map(node => (
+          <TreeNodeItem
+            key={node.relativePath}
+            node={node}
+            depth={0}
+            expandedPaths={expandedPaths}
+            toggleExpand={toggleExpand}
+            onOpenEntry={onOpenEntry}
+          />
+        ))}
       </div>
     </div>
   )
