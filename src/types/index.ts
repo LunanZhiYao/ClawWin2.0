@@ -261,6 +261,18 @@ export interface ChatToolCall {
   isError?: boolean
 }
 
+export type TaskStatus =
+  | 'starting'
+  | 'calling_tool'
+  | 'executing'
+  | 'using_skill'
+  | 'waiting'
+  | 'completed'
+  | 'retrying'
+  | 'interrupted'
+  | 'failed'
+  | 'user_aborted'
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -271,6 +283,7 @@ export interface ChatMessage {
   attachments?: ChatAttachment[]
   timestamp: number
   status?: 'sending' | 'queued' | 'streaming' | 'done' | 'error'
+  taskStatus?: TaskStatus
 }
 
 export interface ChatSession {

@@ -462,6 +462,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               toolCalls: [...toolCallsBufferRef.current],
               timestamp: Date.now(),
               status: 'streaming',
+              taskStatus: 'calling_tool',
             })
           }
           setBackendStatus(`正在执行: ${name}${summary ? ` (${summary.slice(0, 60)})` : ''}`)
@@ -514,6 +515,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               toolCalls: [...toolCallsBufferRef.current],
               timestamp: Date.now(),
               status: 'streaming',
+              taskStatus: 'waiting',
             })
           }
           setBackendStatus(isError ? `${name} 执行出错，正在处理...` : `${name} 执行完成，正在思考...`)
@@ -542,6 +544,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               toolCalls: [],
               timestamp: Date.now(),
               status: 'streaming',
+              taskStatus: 'starting',
             })
           }
         } else if (phase === 'end' || phase === 'error') {
@@ -905,6 +908,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         sessionKey,
         timestamp: Date.now(),
         status: 'done',
+        taskStatus: 'completed',
       }
       onMessageStream.current?.(msg)
       // 埋点：本轮助手最终文本已确定
@@ -943,6 +947,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'error',
+        taskStatus: 'failed',
       }
       onMessageStream.current?.(msg)
       // 埋点：助手回复以 error 结束
@@ -963,11 +968,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       setBackendStatus('')
       let text: string
       if (isFrontendTimeoutRef.current) {
-        text = '让我来继续完成任务'
+        text = '抱歉让你久等了，我接着完成'
       } else if (isAutoAbortRef.current) {
         text = redactSensitiveText(streamBufferRef.current.get(runId) || '')
       } else {
-        text = `${redactSensitiveText(streamBufferRef.current.get(runId) || '')}(已中断)`
+        text = `${redactSensitiveText(streamBufferRef.current.get(runId) || '')}任务已中断`
       }
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
@@ -983,6 +988,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'done',
+        taskStatus: isFrontendTimeoutRef.current ? 'retrying' : 'user_aborted',
       }
       onMessageStream.current?.(msg)
       // 埋点：用户中止生成
@@ -1018,6 +1024,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'done',
+        taskStatus: 'interrupted',
       }
       onMessageStream.current?.(msg)
       // 终止原因命中上下文溢出时，通知 App 层触发一次自动压缩兜底。

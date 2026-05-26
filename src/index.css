@@ -2304,6 +2304,13 @@ body {
 .typing-dot:nth-child(2) { animation-delay: 0.16s; }
 .typing-dot:nth-child(3) { animation-delay: 0.32s; }
 
+.waiting-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #888;
+  animation: subtleIn 0.3s ease-out;
+}
+
 /* ============================================
    Backend Activity Status
    ============================================ */
@@ -7773,6 +7780,46 @@ body {
 }
 .message-tool-sequence:hover::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.5);
+}
+
+/* 工具执行中等待提示 */
+.message-tool-waiting-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-top: 8px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #666;
+  animation: contentFadeIn 0.3s ease-out;
+}
+
+.message-tool-waiting-hint .typing-dots {
+  transform: scale(0.7);
+}
+
+.message-tool-waiting-hint .typing-dot {
+  width: 7px;
+  height: 7px;
+}
+
+/* 任务状态图标样式 */
+.task-status-icon {
+  flex-shrink: 0;
+}
+
+.task-status-icon-success {
+  color: #22c55e;
+}
+
+.task-status-icon-error {
+  color: #ef4444;
+}
+
+.task-status-icon-warning {
+  color: #f59e0b;
 }
 
 /* 单个工具调用项 (替代 message-tool-card, 无边框无背景) */

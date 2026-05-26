@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import type { ChatMessage, ChatToolCall } from '../../types'
+import type { ChatMessage, ChatToolCall, TaskStatus } from '../../types'
 
 function isImageFile(mimeType?: string, fileName?: string): boolean {
   if (mimeType && mimeType.startsWith('image/')) return true
@@ -310,6 +310,82 @@ function ToolCallBlock({ toolCall, isLastInSequence = true }: { toolCall: ChatTo
   )
 }
 
+// 任务状态图标组件
+const TaskStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
+  if (status === 'completed') {
+    return (
+      <svg className="task-status-icon task-status-icon-success" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+        <polyline points="22 4 12 14.01 9 11.01" />
+      </svg>
+    )
+  }
+  if (status === 'failed') {
+    return (
+      <svg className="task-status-icon task-status-icon-error" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="15" y1="9" x2="9" y2="15" />
+        <line x1="9" y1="9" x2="15" y2="15" />
+      </svg>
+    )
+  }
+  if (status === 'interrupted' || status === 'user_aborted') {
+    return (
+      <svg className="task-status-icon task-status-icon-warning" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+    )
+  }
+  return null
+}
+
+// 任务状态提示组件
+const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: boolean }> = ({ taskStatus, showWithContent }) => {
+  const statusTextMap: Record<TaskStatus, string> = {
+    starting: '让我想想...',
+    calling_tool: '正在准备工具...',
+    executing: '执行指令中...',
+    using_skill: '让我来使用技能...',
+    waiting: '处理中，请稍候...',
+    completed: '任务已完成',
+    retrying: '遇到点小问题，正在重试...',
+    interrupted: '任务已中断',
+    failed: '执行失败了，要不要重试一下？',
+    user_aborted: '任务已手动中断',
+  }
+
+  const finalStatuses: TaskStatus[] = ['completed', 'failed', 'interrupted', 'user_aborted']
+  const isFinalStatus = taskStatus ? finalStatuses.includes(taskStatus) : false
+
+  // 当 showWithContent 为 true 时，始终渲染（用于最终状态）
+  // 否则仅在非最终状态时渲染
+  if (!showWithContent && !isFinalStatus) {
+    return (
+      <div className="message-tool-waiting-hint">
+        <div className="typing-dots">
+          <span className="typing-dot" />
+          <span className="typing-dot" />
+          <span className="typing-dot" />
+        </div>
+        <span>{taskStatus ? statusTextMap[taskStatus] : '等待执行结果...'}</span>
+      </div>
+    )
+  }
+
+  if (isFinalStatus && taskStatus) {
+    return (
+      <div className="message-tool-waiting-hint">
+        <TaskStatusIcon status={taskStatus} />
+        <span>{statusTextMap[taskStatus]}</span>
+      </div>
+    )
+  }
+
+  return null
+}
+
 interface MessageBubbleProps {
   message: ChatMessage
   onCopy?: () => void
@@ -382,7 +458,7 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
         )}
 
         {/* Phase 3: 文本内容 / 工具执行中的占位动画 */}
-        {!isUser && isStreaming && !displayContent && !reasoningText && (
+        {!isUser && isStreaming && !displayContent && !reasoningText && !message.taskStatus && (
           <div className="message-content message-content-assistant">
             <div className="typing-dots">
               <span className="typing-dot" />
@@ -390,6 +466,15 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
               <span className="typing-dot" />
             </div>
           </div>
+        )}
+        {/* 任务状态提示 - 根据 taskStatus 显示不同状态 */}
+        {/* 非最终状态：在流式传输中且无内容时显示（有 taskStatus 就显示，toolCalls 可以为空） */}
+        {!isUser && isStreaming && !displayContent && message.taskStatus && !['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus) && (
+          <TaskStatusHint taskStatus={message.taskStatus} showWithContent={false} />
+        )}
+        {/* 最终状态：无论是否有内容都显示 */}
+        {!isUser && ['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus || '') && (
+          <TaskStatusHint taskStatus={message.taskStatus} showWithContent={true} />
         )}
         {(displayContent || hasAttachments) && (
           <div className={`message-content ${isError ? 'message-error-content' : ''}${hasAttachments ? ' has-attachments' : ''}${!isUser ? ' message-content-assistant' : ''}`}>
