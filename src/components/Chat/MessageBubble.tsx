@@ -390,6 +390,56 @@ const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: bool
   return null
 }
 
+const TaskStatusSummary: React.FC<{ toolCalls: ChatToolCall[]; taskStatus?: TaskStatus; onExpandedChange?: (expanded: boolean) => void; expanded?: boolean }> = ({ toolCalls, taskStatus, onExpandedChange, expanded }) => {
+  const [internalExpanded, setInternalExpanded] = useState(false)
+  const isExpanded = expanded !== undefined ? expanded : internalExpanded
+  const setIsExpanded = onExpandedChange || setInternalExpanded
+
+  if (toolCalls.length === 0 && !taskStatus) return null
+
+  const latestToolCall = toolCalls[toolCalls.length - 1]
+  const statusText = latestToolCall
+    ? `${latestToolCall.name} ${latestToolCall.status === 'done' ? '已完成' : latestToolCall.status === 'running' ? '运行中...' : latestToolCall.status === 'error' ? '执行失败' : '等待中...'}`
+    : taskStatus
+      ? taskStatus === 'completed' ? '任务已完成'
+        : taskStatus === 'running' ? '运行中...'
+        : taskStatus === 'failed' ? '执行失败'
+        : '处理中...'
+      : ''
+
+  const statusClass = latestToolCall
+    ? `status-${latestToolCall.status}`
+    : taskStatus
+      ? `status-${taskStatus}`
+      : ''
+
+  return (
+    <button className={`task-status-summary-header ${statusClass}`} onClick={() => setIsExpanded(!isExpanded)}>
+      <span className={`task-status-dot ${statusClass}`} />
+      <span className="task-status-text">{statusText}</span>
+      <ChevronIcon open={isExpanded} />
+    </button>
+  )
+}
+
+const TaskStatusExpanded: React.FC<{ toolCalls: ChatToolCall[] }> = ({ toolCalls }) => {
+  if (toolCalls.length === 0) return null
+  return (
+    <div className="task-status-expanded">
+      <div className="task-status-expanded-header">过程列表</div>
+      <div className="task-status-expanded-content">
+        {toolCalls.map((toolCall, index) => (
+          <ToolCallBlock
+            key={toolCall.id}
+            toolCall={toolCall}
+            isLastInSequence={index === toolCalls.length - 1}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 interface MessageBubbleProps {
   message: ChatMessage
   onCopy?: () => void
@@ -403,8 +453,8 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
   const isError = message.status === 'error'
 
   const wasStreamingRef = useRef(false)
-  const toolSeqRef = useRef<HTMLDivElement>(null)
   const [justFinished, setJustFinished] = useState(false)
+  const [taskStatusExpanded, setTaskStatusExpanded] = useState(false)
 
   // 流式结束时触发 markdown 淡入动画
   useEffect(() => {
@@ -413,14 +463,6 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
     }
     wasStreamingRef.current = isStreaming
   }, [isStreaming, message.content])
-
-  // 工具调用更新时自动滚动到底部
-  useEffect(() => {
-    const el = toolSeqRef.current
-    if (el) {
-      el.scrollTop = el.scrollHeight
-    }
-  }, [message.toolCalls])
 
   const handleFileClick = useCallback((filePath: string) => {
     window.electronAPI?.shell?.openPath?.(filePath)
@@ -441,40 +483,49 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
     : false
 
   return (
-    <div className={`message-bubble ${isUser ? 'message-user' : 'message-assistant'} ${isStreaming ? 'message-bubble-streaming' : ''} ${isError ? 'message-error-bubble' : ''} ${isQueued ? 'message-queued' : ''}`}>
-      <div className="message-body">
+    <div className={`message-row ${isUser ? 'user' : 'assistant'}`}>
+      {!isUser && (
+        <div className="message-avatar ai">
+          <img src="/assets/logo.png" alt="AI" className="message-avatar-img" />
+        </div>
+      )}
+      <div className={`message-column${isUser ? ' user-message' : ''}`}>
+        <div className="message-header">
+          {!isUser && <span className="message-nickname">千易</span>}
+          {!isUser && (toolCalls.length > 0 || message.taskStatus) && (
+            <TaskStatusSummary
+              toolCalls={toolCalls}
+              taskStatus={message.taskStatus}
+              expanded={taskStatusExpanded}
+              onExpandedChange={setTaskStatusExpanded}
+            />
+          )}
+        </div>
+        {taskStatusExpanded && toolCalls.length > 0 && (
+          <TaskStatusExpanded toolCalls={toolCalls} />
+        )}
+        <div className={`message-bubble ${isUser ? 'message-user' : 'message-assistant'} ${isStreaming ? 'message-bubble-streaming' : ''} ${isError ? 'message-error-bubble' : ''} ${isQueued ? 'message-queued' : ''}`}>
+          <div className="message-body">
         {/* Phase 1: 思考块 — 独立卡片 (LobsterAI 风格) */}
         {!isUser && reasoningText && (
           <ReasoningBlock content={reasoningText} isStreaming={isStreaming} />
         )}
 
-        {/* Phase 2: 工具调用 — 独立列表项 + 连接线 (LobsterAI 风格) */}
-        {!isUser && toolCalls.length > 0 && (
-          <div ref={toolSeqRef} className="message-tool-sequence">
-            {toolCalls.map((toolCall, index) => (
-              <ToolCallBlock
-                key={toolCall.id}
-                toolCall={toolCall}
-                isLastInSequence={index === toolCalls.length - 1}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Phase 3: 文本内容 / 工具执行中的占位动画 */}
-        {!isUser && isStreaming && !displayContent && !reasoningText && !message.taskStatus && (
-          <div className="message-content message-content-assistant">
-            <div className="typing-dots">
-              <span className="typing-dot" />
-              <span className="typing-dot" />
-              <span className="typing-dot" />
+        {/* Phase 3: 文本内容 / 任务状态主内容展示 */}
+        {!isUser && isStreaming && !displayContent && !reasoningText && (
+          message.taskStatus && !['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus) ? (
+            <div className="message-content message-content-assistant">
+              <TaskStatusHint taskStatus={message.taskStatus} showWithContent={false} />
             </div>
-          </div>
-        )}
-        {/* 任务状态提示 - 根据 taskStatus 显示不同状态 */}
-        {/* 非最终状态：在流式传输中且无内容时显示（有 taskStatus 就显示，toolCalls 可以为空） */}
-        {!isUser && isStreaming && !displayContent && message.taskStatus && !['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus) && (
-          <TaskStatusHint taskStatus={message.taskStatus} showWithContent={false} />
+          ) : !message.taskStatus ? (
+            <div className="message-content message-content-assistant">
+              <div className="typing-dots">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+              </div>
+            </div>
+          ) : null
         )}
         {/* 最终状态：无论是否有内容都显示 */}
         {!isUser && ['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus || '') && (
@@ -576,6 +627,8 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
             </button>
           )}
         </div>
+      </div>
+      </div>
       </div>
     </div>
   )

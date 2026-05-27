@@ -593,7 +593,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   return (
     <div className="chat-area">
       <div className="chat-header">
-        <div className="chat-header-left" ref={agentPickerRef}>
+        <div className="chat-header-left">
           {agents.filter(a => a.id !== 'main').length > 0 ? (
             <>
               <button
@@ -647,11 +647,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </>
           ) : null}
         </div>
-        <div className="chat-header-right">
+
+        <div className="chat-header-title">
+          与{getHeaderAgentLabel(selectedAgent) || '千易'}的对话
+        </div>
+
+        <div className="chat-header-actions">
           {availableModels.length > 1 && (
             <div className="model-switcher" ref={modelPickerRef}>
               <button
-                className="chat-header-badge"
+                className="chat-action-btn"
                 onClick={() => setShowModelPicker(v => !v)}
                 title="切换模型"
               >
@@ -687,7 +692,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             aria-label={`当前上下文使用率 ${usagePercent}%，已用 ${usageTotalLabel}，总窗口 ${contextWindowLabel}`}
             style={{ display: messages.length === 0 ? 'none' : 'flex' }}
           >
-            <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true">
               <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />
               <circle
                 className="chat-context-usage-progress"
@@ -698,14 +703,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 strokeDashoffset={ringOffset}
               />
             </svg>
-            <span className="chat-context-usage-label">{usagePercent}%</span>
+            <span className="chat-context-label">{usagePercent}%</span>
           </div>
           <button
-            className="chat-header-badge"
+            className="chat-action-btn"
             onClick={handleCompact}
             title="压缩上下文，释放对话空间"
             disabled={!isReady || isWaiting || messages.length === 0}
-            style={{ display: messages.length === 0 ? 'none' : 'inline-flex' }}
+            style={{ display: messages.length === 0 ? 'none' : 'flex' }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="4 14 10 14 10 20" />
@@ -716,10 +721,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             压缩
           </button>
           <button
-            className="chat-header-badge"
+            className="chat-action-btn"
             onClick={() => void handleScreenshot()}
             title="截屏 (Ctrl+Alt+A)"
-            style={{ display: messages.length === 0 ? 'none' : 'inline-flex' }}
+            style={{ display: messages.length === 0 ? 'none' : 'flex' }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -728,13 +733,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </svg>
             截屏
           </button>
-          {/* <button
-            className="chat-header-badge"
-            onClick={() => void window.electronAPI.shell.openExternal(`http://127.0.0.1:${gatewayPort}`)}
-            title="打开 OpenClaw WebUI"
-          >
-            WebUI
-          </button> */}
         </div>
       </div>
 
