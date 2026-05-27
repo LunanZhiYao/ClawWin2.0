@@ -26,7 +26,7 @@ export function StartupSplash({
 
       <div className="startup-splash-center">
         <div className="startup-splash-spinner" aria-hidden>
-          🤖
+          <img src="/assets/logo.png" alt="ClawWin" className="startup-logo" />
         </div>
         <p className="startup-splash-message">{message}</p>
       </div>

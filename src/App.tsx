@@ -1499,6 +1499,7 @@ function App() {
                 activeSessionId={activeSessionId}
                 agents={ws.agents}
                 defaultAgentId={ws.defaultAgentId}
+                userName={currentUser?.name}
                 onSelectSession={setActiveSessionId}
                 onNewSession={createSession}
                 onDeleteSession={deleteSession}
@@ -1530,6 +1531,7 @@ function App() {
               onSwitchModel={handleSwitchModel}
               contextUsageTotal={currentUsageTotal}
               contextWindow={currentContextWindow}
+              sidebarView={sidebarView}
             />
           </div>
           {sidebarView === 'workspace' && (

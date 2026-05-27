@@ -28,14 +28,6 @@ interface TreeNode {
   children: TreeNode[]
 }
 
-function formatSize(bytes?: number): string {
-  if (!bytes || bytes <= 0) return '--'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
-}
-
 function formatTime(ms: number): string {
   const d = new Date(ms)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
@@ -45,38 +37,6 @@ function formatTime(ms: number): string {
 function fileExtension(name: string): string {
   const m = name.trim().match(/\.([^.\\/]+)$/)
   return m ? m[1].toLowerCase() : ''
-}
-
-/**
- * 列表侧标识：按后缀展示，便于区分类型。
- * category 用于样式分组（不必与后缀一一对应）。
- */
-function extBadge(entry: WorkspaceEntry | TreeNode): { label: string; category: string } {
-  if (entry.kind === 'dir') return { label: '目录', category: 'dir' }
-  const ext = fileExtension(entry.name)
-  if (!ext) return { label: '无后缀', category: 'none' }
-  const label = ext.length <= 6 ? ext.toUpperCase() : `${ext.slice(0, 5).toUpperCase()}…`
-
-  const pdf = new Set(['pdf'])
-  const doc = new Set(['doc', 'docx', 'odt', 'rtf'])
-  const sheet = new Set(['xls', 'xlsx', 'csv', 'ods'])
-  const slide = new Set(['ppt', 'pptx', 'odp'])
-  const image = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'heic'])
-  const archive = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2'])
-  const code = new Set(['json', 'xml', 'html', 'htm', 'yaml', 'yml', 'toml', 'ini', 'ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'cs', 'sql'])
-  const text = new Set(['md', 'txt', 'log', 'markdown'])
-
-  let category = 'other'
-  if (pdf.has(ext)) category = 'pdf'
-  else if (doc.has(ext)) category = 'doc'
-  else if (sheet.has(ext)) category = 'sheet'
-  else if (slide.has(ext)) category = 'slide'
-  else if (image.has(ext)) category = 'image'
-  else if (archive.has(ext)) category = 'archive'
-  else if (code.has(ext)) category = 'code'
-  else if (text.has(ext)) category = 'text'
-
-  return { label, category }
 }
 
 /**
@@ -198,6 +158,83 @@ const DeleteConfirmModal: React.FC<{
   )
 }
 
+/** 文件类型图标 SVG */
+function FileIcon({ ext }: { ext: string }) {
+  const iconMap: Record<string, React.ReactNode> = {
+    txt: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="30" textAnchor="middle" fontSize="11" fontWeight="700" fill="#6B7280" fontFamily="sans-serif">TXT</text>
+      </svg>
+    ),
+    html: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="28" textAnchor="middle" fontSize="9" fontWeight="700" fill="#E44D26" fontFamily="sans-serif">HTML</text>
+      </svg>
+    ),
+    htm: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="28" textAnchor="middle" fontSize="9" fontWeight="700" fill="#E44D26" fontFamily="sans-serif">HTML</text>
+      </svg>
+    ),
+    css: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="29" textAnchor="middle" fontSize="14" fontWeight="700" fill="#264DE4" fontFamily="monospace">&lt;/&gt;</text>
+      </svg>
+    ),
+    js: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="29" textAnchor="middle" fontSize="14" fontWeight="700" fill="#F7DF1E" fontFamily="monospace">JS</text>
+      </svg>
+    ),
+    ts: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="29" textAnchor="middle" fontSize="12" fontWeight="700" fill="#3178C6" fontFamily="monospace">TS</text>
+      </svg>
+    ),
+    json: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="29" textAnchor="middle" fontSize="10" fontWeight="700" fill="#5C6BC0" fontFamily="monospace">{ }</text>
+      </svg>
+    ),
+    md: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="29" textAnchor="middle" fontSize="11" fontWeight="700" fill="#083FA1" fontFamily="sans-serif">MD</text>
+      </svg>
+    ),
+    py: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="29" textAnchor="middle" fontSize="13" fontWeight="700" fill="#3776AB" fontFamily="monospace">PY</text>
+      </svg>
+    ),
+    pdf: (
+      <svg viewBox="0 0 48 48" fill="none">
+        <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+        <text x="24" y="29" textAnchor="middle" fontSize="11" fontWeight="700" fill="#DC2626" fontFamily="sans-serif">PDF</text>
+      </svg>
+    ),
+  }
+
+  return (
+    <span className="ws-file-icon">
+      {iconMap[ext] || (
+        <svg viewBox="0 0 48 48" fill="none">
+          <rect x="8" y="6" width="32" height="36" rx="3" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="1.5"/>
+          <path d="M18 20h12M18 26h12M18 32h8" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round"/>
+        </svg>
+      )}
+    </span>
+  )
+}
+
 /** 树节点渲染组件 */
 const TreeNodeItem: React.FC<{
   node: TreeNode
@@ -209,13 +246,12 @@ const TreeNodeItem: React.FC<{
 }> = ({ node, depth, expandedPaths, toggleExpand, onOpenEntry, onDelete }) => {
   const isDir = node.kind === 'dir'
   const isExpanded = expandedPaths.has(node.relativePath)
-  const badge = extBadge(node)
+  const ext = fileExtension(node.name)
 
   const handleClick = useCallback(() => {
     if (isDir) {
       toggleExpand(node.relativePath)
     } else {
-      // 将 TreeNode 转回 WorkspaceEntry 传给父组件
       onOpenEntry({
         name: node.name,
         path: node.path,
@@ -227,70 +263,75 @@ const TreeNodeItem: React.FC<{
     }
   }, [isDir, node, toggleExpand, onOpenEntry])
 
-  /** 阻止事件冒泡，避免触发展开/打开 */
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     onDelete(node)
   }, [node, onDelete])
 
-  return (
-    <>
-      <div
-        className={`workspace-item ${isDir ? 'workspace-item--dir' : ''}`}
-        style={{ paddingLeft: `${12 + depth * 16}px` }}
-        onClick={handleClick}
-        title={node.path || node.relativePath}
-      >
-        <div className="workspace-item-main">
-          {/* 文件夹展开/折叠箭头 */}
-          {isDir && (
-            <span className={`workspace-dir-arrow ${isExpanded ? 'workspace-dir-arrow--expanded' : ''}`}>
+  if (isDir) {
+    return (
+      <>
+        <div
+          className={`ws-file-card ws-file-card--dir`}
+          style={{ paddingLeft: `${12 + depth * 16}px` }}
+          onClick={handleClick}
+        >
+          <div className="ws-file-card-left">
+            <span className={`ws-dir-arrow ${isExpanded ? 'ws-dir-arrow--expanded' : ''}`}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="9 18 15 12 9 6" />
               </svg>
             </span>
-          )}
-          <span
-            className={`workspace-ext workspace-ext--${badge.category}`}
-            title={isDir ? '目录' : `.${fileExtension(node.name) || '无后缀'}`}
-          >
-            {badge.label}
-          </span>
-          <span className="workspace-name">{node.name}</span>
-          {/* 删除按钮 */}
-          <button
-            className="workspace-item-delete"
-            onClick={handleDeleteClick}
-            title="删除"
-            aria-label={`删除 ${node.name}`}
-          >
+            <FileIcon ext="folder" />
+          </div>
+          <div className="ws-file-card-right">
+            <span className="ws-file-name">{node.name}</span>
+            <span className="ws-file-meta">{node.children.length} 项</span>
+          </div>
+          <button className="ws-file-delete" onClick={handleDeleteClick} title="删除">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="3 6 5 6 21 6" />
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-              <line x1="10" y1="11" x2="10" y2="17" />
-              <line x1="14" y1="11" x2="14" y2="17" />
             </svg>
           </button>
         </div>
-        <div className="workspace-meta">
-          {node.kind === 'file' ? formatSize(node.size) : `${node.children.length} 项`}
-          {' · '}
-          {node.modifiedAt > 0 ? formatTime(node.modifiedAt) : '--'}
-        </div>
+        {isExpanded && node.children.map(child => (
+          <TreeNodeItem
+            key={child.relativePath}
+            node={child}
+            depth={depth + 1}
+            expandedPaths={expandedPaths}
+            toggleExpand={toggleExpand}
+            onOpenEntry={onOpenEntry}
+            onDelete={onDelete}
+          />
+        ))}
+      </>
+    )
+  }
+
+  return (
+    <div
+      className="ws-file-card"
+      style={{ paddingLeft: `${12 + depth * 16}px` }}
+      onClick={handleClick}
+    >
+      <div className="ws-file-card-left">
+        <FileIcon ext={ext} />
       </div>
-      {/* 展开子节点 */}
-      {isDir && isExpanded && node.children.map(child => (
-        <TreeNodeItem
-          key={child.relativePath}
-          node={child}
-          depth={depth + 1}
-          expandedPaths={expandedPaths}
-          toggleExpand={toggleExpand}
-          onOpenEntry={onOpenEntry}
-          onDelete={onDelete}
-        />
-      ))}
-    </>
+      <div className="ws-file-card-right">
+        <span className="ws-file-name">{node.name}</span>
+        <span className="ws-file-meta">
+          最后修改 {node.modifiedAt > 0 ? formatTime(node.modifiedAt) : '--'}
+        </span>
+      </div>
+      <button className="ws-file-delete" onClick={handleDeleteClick} title="删除">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+        </svg>
+      </button>
+    </div>
   )
 }
 
@@ -299,7 +340,7 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
   workspacePath,
   entries,
   loading,
-  error,
+  error: _error,
   onRefresh,
   onOpenEntry,
   onOpenWorkspace: _onOpenWorkspace,
@@ -374,17 +415,7 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
           </svg>
         </div>
         
-        <div className="workspace-toolbar-center">
-          <button className={`workspace-toolbar-btn ${true ? 'active' : ''}`}>
-            工作日志
-          </button>
-          <button className="workspace-toolbar-btn">
-            产出物
-          </button>
-          <button className="workspace-toolbar-btn">
-            预览
-          </button>
-        </div>
+        <div className="workspace-toolbar-title">工作区</div>
         
         <div className="workspace-toolbar-right">
           {onClose && (
@@ -404,57 +435,76 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
       </div>
 
       {/* 第二行：路径 + 刷新 */}
-      <div className="workspace-list-header">
-        <span className="workspace-path-text">
-          [main] {workspacePath || 'C:\\Users\\Ezer\\qianyi'}
-        </span>
-        <button
-          type="button"
-          className="workspace-refresh-btn"
-          onClick={onRefresh}
-          disabled={loading}
-          title="重新扫描当前代理工作区中的交付产物文件"
-          aria-label="重新扫描工作区交付产物"
-        >
-          {loading ? (
-            <span className="workspace-refresh-spin" aria-hidden="true">↻</span>
-          ) : (
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+      <div className="workspace-dir-card">
+        <div className="workspace-dir-header">
+          <span className="workspace-dir-label">目录地址：</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+            <span
+              className="workspace-dir-path"
+              onClick={() => {
+                const path = workspacePath || 'C:\\Users\\Ezer\\qianyi'
+                window.electronAPI?.shell?.openPath?.(path)
+              }}
+              title="点击打开文件夹"
+              style={{ cursor: 'pointer' }}
             >
-              <polyline points="23 4 23 10 17 10" />
-              <polyline points="1 20 1 14 7 14" />
-              <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A4.36A9 9 0 0 0 20.49 15" />
-            </svg>
-          )}
-        </button>
-      </div>
+              {workspacePath || 'C:\\Users\\Ezer\\qianyi'}
+            </span>
+            <button
+              type="button"
+              className={`workspace-refresh-btn ${loading ? 'loading' : ''}`}
+              onClick={onRefresh}
+              disabled={loading}
+              title="刷新"
+              style={{
+                width: '32px',
+                height: '32px',
+                border: 'none',
+                background: 'var(--bg-main)',
+                borderRadius: 'var(--radius)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: 'var(--text-secondary)',
+                transition: 'all 0.2s'
+              }}
+            >
+              {loading ? (
+                <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>↻</span>
+              ) : (
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
 
-      <div className="workspace-list-items">
-        {loading && entries.length === 0 && <div className="session-empty">正在加载工作区产物...</div>}
-        {!loading && error && <div className="session-empty">{error}</div>}
-        {!loading && !error && entries.length === 0 && (
-          <div className="session-empty">当前工作区暂无可识别的交付产物文件</div>
-        )}
-        {tree.map(node => (
-          <TreeNodeItem
-            key={node.relativePath}
-            node={node}
-            depth={0}
-            expandedPaths={expandedPaths}
-            toggleExpand={toggleExpand}
-            onOpenEntry={onOpenEntry}
-            onDelete={handleDeleteRequest}
-          />
-        ))}
+        <div className="workspace-file-tree">
+          {tree.map(node => (
+            <TreeNodeItem
+              key={node.relativePath}
+              node={node}
+              depth={0}
+              expandedPaths={expandedPaths}
+              toggleExpand={toggleExpand}
+              onOpenEntry={onOpenEntry}
+              onDelete={handleDeleteRequest}
+            />
+          ))}
+        </div>
       </div>
 
       {/* 删除确认弹窗 */}

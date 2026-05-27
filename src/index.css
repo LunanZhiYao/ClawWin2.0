@@ -1002,7 +1002,6 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
   background: white;
   -webkit-app-region: drag;
 }
@@ -1103,39 +1102,43 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 40px 24px;
   gap: 32px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.welcome-content {
+  display: flex;
+  align-items: center;
+  gap: 20px;
 }
 
 .welcome-avatar {
   width: 80px;
   height: 80px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 36px;
-  box-shadow: var(--shadow-lg);
+  border-radius: 12px;
+  object-fit: contain;
 }
 
 .welcome-info {
-  text-align: center;
+  text-align: left;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .welcome-name {
-  font-size: 24px;
+  font-size: 27px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .welcome-desc {
-  font-size: 14px;
+  font-size: 17px;
   color: var(--text-secondary);
 }
 
@@ -1930,14 +1933,19 @@ body {
 .startup-splash-spinner {
   width: 80px;
   height: 80px;
-  border-radius: 50%;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.95);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 48px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   animation: logoFloat 3s ease-in-out infinite;
+}
+
+.startup-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
 }
 
 @keyframes logoFloat {
@@ -2438,8 +2446,8 @@ body {
    ============================================ */
 
 .right-sidebar-panel {
-  width: 300px;
-  min-width: 300px;
+  width: 400px;
+  min-width: 400px;
   background: #FAFAFA;
   border-left: 1px solid var(--border);
   display: flex;
@@ -2467,7 +2475,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  padding-top: 20px; /* 为窗口控制按钮留出空间 */
+  padding-top: 32px; /* 为窗口控制按钮留出足够空间 */
   border-bottom: 1px solid var(--border);
   background: white;
   flex-shrink: 0;
@@ -2480,17 +2488,14 @@ body {
   flex-shrink: 0;
 }
 
-.workspace-toolbar-center {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.workspace-toolbar-title {
   flex: 1;
-  justify-content: center;
-  padding: 4px;
-  background: var(--bg-main);
-  border-radius: var(--radius);
-  max-width: 320px;
-  margin: 0 16px;
+  /*text-align: center;*/
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding-left: 13px; /* 留出关闭按钮的空间 */
+  padding-right: 40px; /* 留出关闭按钮的空间 */
 }
 
 .workspace-toolbar-right {
@@ -2561,6 +2566,195 @@ body {
   font-family: var(--font-mono);
 }
 
+/* Workspace Dir Card */
+.workspace-dir-card {
+  background: white;
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  margin: 0;
+}
+
+.workspace-dir-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.workspace-dir-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.workspace-dir-path {
+  font-size: 13px;
+  color: var(--primary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(59, 130, 246, 0.06);
+  transition: all 0.2s;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.workspace-dir-path:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.workspace-refresh-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.workspace-refresh-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.workspace-refresh-btn.loading svg {
+  animation: spin 1s linear infinite;
+}
+
+/* 文件树容器 */
+.workspace-file-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 文件卡片 - 主样式 */
+.ws-file-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #FAFBFC;
+  border: 1px solid #F0F1F3;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.ws-file-card:hover {
+  background: #F5F7FA;
+  border-color: #E2E5EA;
+}
+
+.ws-file-card--dir {
+  background: #F8F9FA;
+}
+
+/* 左侧图标区域 */
+.ws-file-card-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ws-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.ws-file-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* 目录箭头 */
+.ws-dir-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.ws-dir-arrow--expanded {
+  transform: rotate(90deg);
+}
+
+/* 右侧文字区域 */
+.ws-file-card-right {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ws-file-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #2563EB;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-file-card:hover .ws-file-name {
+  color: #1D4ED8;
+}
+
+.ws-file-meta {
+  font-size: 12px;
+  color: #9CA3AF;
+  line-height: 1.4;
+}
+
+/* 删除按钮 */
+.ws-file-delete {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  opacity: 0;
+}
+
+.ws-file-card:hover .ws-file-delete {
+  opacity: 1;
+  color: var(--text-muted);
+}
+
+.ws-file-delete:hover {
+  background: #FEE2E2;
+  color: #EF4444;
+}
+
 /* ============================================
    Window Controls (Marvis Style) — Windows-like
    ============================================ */
@@ -2623,4 +2817,190 @@ body {
 .window-control-close:hover {
   background-color: #E81123;
   color: #FFFFFF;
+}
+
+/* Bottom Input Container - 固定在窗口下方 */
+.bottom-input-container {
+  position: fixed;
+  bottom: 0;
+  left: 280px; /* 左侧边栏宽度 */
+  right: 0;
+  padding: 16px 24px;
+  background: var(--bg-main);
+  border-top: 1px solid var(--border-light);
+  z-index: 40;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.bottom-input-container.dragging {
+  pointer-events: none;
+}
+
+.bottom-input-container.dragging::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(59, 130, 246, 0.1);
+  border: 2px dashed var(--primary);
+  pointer-events: auto;
+}
+
+/* 工作区展开时，调整底部输入框宽度 */
+.bottom-input-container.workspace-open {
+  right: 400px; /* 工作区面板宽度 */
+}
+
+/* 动态调整输入框最大宽度 */
+.bottom-input-container.workspace-open .welcome-input-container {
+  max-width: calc(100% - 40px); /* 减去左右padding */
+}
+
+/* 停止按钮 */
+.btn-stop {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  border: none;
+  background: var(--error);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: #DC2626;
+}
+
+.btn-stop:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 附件预览条 - 横向排列 */
+.input-preview-strip {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.input-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  font-size: 12px;
+  max-width: 160px;
+}
+
+.input-preview-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.input-preview-file-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.input-preview-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+
+.input-preview-name {
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.input-preview-size {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.input-preview-remove {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.input-preview-remove:hover {
+  background: var(--error);
+  color: white;
+}
+
+/* 技能标签条 */
+.skill-tags-strip {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-tag-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--primary-light);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--primary);
+}
+
+.skill-tag-remove {
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.skill-tag-remove:hover {
+  opacity: 1;
 }

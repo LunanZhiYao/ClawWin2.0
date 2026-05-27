@@ -6,6 +6,7 @@ interface SessionListProps {
   activeSessionId: string | null
   agents: AgentInfo[]
   defaultAgentId: string
+  userName?: string
   onSelectSession: (id: string) => void
   onNewSession: (agentId?: string) => void
   onDeleteSession: (id: string) => void
@@ -29,6 +30,7 @@ export const SessionList: React.FC<SessionListProps> = ({
   activeSessionId,
   agents,
   defaultAgentId: _defaultAgentId,
+  userName,
   onSelectSession,
   onNewSession,
   onDeleteSession,
@@ -86,7 +88,7 @@ export const SessionList: React.FC<SessionListProps> = ({
     <>
       {/* Sidebar Header */}
       <div className="sidebar-header">
-        <div className="app-title">ClawWin</div>
+        <div className="app-title">鲁南千易</div>
       </div>
 
       {/* Search */}
@@ -296,9 +298,9 @@ export const SessionList: React.FC<SessionListProps> = ({
 
       {/* Sidebar Footer */}
       <div className="sidebar-footer">
-        <div className="user-avatar">U</div>
+        <div className="user-avatar">{userName ? userName.charAt(0).toUpperCase() : 'U'}</div>
         <div className="user-info">
-          <div className="user-name">用户</div>
+          <div className="user-name">{userName || '用户'}</div>
           <div className="user-status">在线</div>
         </div>
         <button 

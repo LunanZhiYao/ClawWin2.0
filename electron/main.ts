@@ -233,7 +233,7 @@ function createWindow() {
     height: 980,
     minWidth: 1100,
     minHeight: 780,
-    title: 'ClawWin',
+    title: '鲁南千易',
     icon: getIconPath(),
     frame: false,
     titleBarStyle: 'hidden',

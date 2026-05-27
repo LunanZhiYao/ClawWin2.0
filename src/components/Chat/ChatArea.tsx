@@ -1,7 +1,388 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
-import { InputArea } from './InputArea'
 import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel } from '../../types'
+
+// 完整版底部输入框组件 - 整合所有功能
+interface BottomInputProps {
+  onSend: (content: string, attachments?: ChatAttachment[]) => void
+  disabled?: boolean
+  placeholder?: string
+  isWaiting?: boolean
+  isStreaming?: boolean
+  onStop?: () => void
+  workspaceOpen?: boolean  // 工作区是否展开
+}
+
+const MAX_ATTACHMENTS = 5
+
+interface AttachmentWithPreview {
+  type: 'image' | 'file' | 'folder'
+  fileName: string
+  filePath: string
+  mimeType?: string
+  content?: string
+  previewUrl?: string
+  size: number
+}
+
+const BottomInput: React.FC<BottomInputProps> = ({
+  onSend,
+  disabled = false,
+  placeholder = '请输入任务，交给我来帮你完成',
+  isWaiting = false,
+  isStreaming = false,
+  onStop,
+  workspaceOpen = false,  // 工作区是否展开
+}) => {
+  const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<AttachmentWithPreview[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [isStopping, setIsStopping] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const dragCounterRef = useRef(0)
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Skill quote state
+  const [quotedSkills, setQuotedSkills] = useState<string[]>([])
+
+  // 错误提示
+  const showError = useCallback((msg: string) => {
+    setError(msg)
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+    errorTimerRef.current = setTimeout(() => setError(null), 3000)
+  }, [])
+
+  const handleRemoveQuotedSkill = useCallback((name: string) => {
+    setQuotedSkills(prev => prev.filter(s => s !== name))
+  }, [])
+
+  // 文件处理
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes}B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  }
+
+  const processFiles = useCallback((files: FileList | File[]) => {
+    const filesToProcess = Array.from(files).slice(0, MAX_ATTACHMENTS - attachments.length)
+    if (filesToProcess.length === 0) return
+
+    const processOne = async (file: File) => {
+      const isImage = file.type.startsWith('image/')
+      let previewUrl: string | undefined
+      let content: string | undefined
+
+      if (isImage) {
+        previewUrl = URL.createObjectURL(file)
+        content = await new Promise<string>((resolve) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.readAsDataURL(file)
+        })
+      }
+
+      return {
+        type: isImage ? 'image' as const : 'file' as const,
+        fileName: file.name,
+        filePath: '',
+        mimeType: file.type || undefined,
+        content,
+        previewUrl,
+        size: file.size,
+      }
+    }
+
+    Promise.all(filesToProcess.map(processOne)).then((results) => {
+      const validAttachments = results.filter((a) => a !== null) as AttachmentWithPreview[]
+      if (validAttachments.length > 0) {
+        setAttachments(prev => [...prev, ...validAttachments])
+      }
+    })
+  }, [attachments.length, showError])
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments(prev => {
+      const removed = prev[index]
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl)
+      }
+      return prev.filter((_, i) => i !== index)
+    })
+  }, [])
+
+  // 发送消息
+  const handleSend = useCallback(async () => {
+    const trimmed = input.trim()
+    const hasText = trimmed.length > 0
+    const hasAtt = attachments.length > 0
+
+    if ((!hasText && !hasAtt) || disabled) return
+
+    // Copy files to workspace
+    const resolvedAttachments = hasAtt
+      ? await Promise.all(
+          attachments.map(async (a) => {
+            if (a.type === 'folder') return a
+            const result = await window.electronAPI.file.copyToWorkspace(a.filePath || a.previewUrl || '')
+            return { ...a, filePath: result.ok && result.destPath ? result.destPath : a.filePath }
+          })
+        )
+      : []
+
+    // Build content with workspace paths appended
+    let content = trimmed
+    if (resolvedAttachments.length > 0) {
+      const paths = resolvedAttachments.map((a) => a.filePath).join('\n')
+      content = content ? `${content}\n${paths}` : paths
+    }
+
+    // Prepend quoted skill names
+    if (quotedSkills.length > 0) {
+      const prefix = quotedSkills.map(s => `@${s}`).join(' ')
+      content = content ? `${prefix} ${content}` : prefix
+    }
+
+    // Build ChatAttachment[]
+    const chatAttachments: ChatAttachment[] | undefined = resolvedAttachments.length > 0
+      ? resolvedAttachments.map(({ type, fileName, filePath, mimeType, content: base64 }) => ({
+          type,
+          fileName,
+          filePath,
+          mimeType,
+          content: base64,
+        }))
+      : undefined
+
+    onSend(content, chatAttachments)
+    setInput('')
+    setQuotedSkills([])
+    for (const att of attachments) {
+      if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
+    }
+    setAttachments([])
+    if (textareaRef.current) {
+      textareaRef.current.style.height = '64px'
+    }
+  }, [input, attachments, disabled, onSend, quotedSkills])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      if (isStreaming && onStop && !isStopping) {
+        setIsStopping(true)
+        Promise.resolve(onStop()).finally(() => setIsStopping(false))
+      } else {
+        handleSend()
+      }
+    }
+  }, [handleSend, isStreaming, onStop, isStopping])
+
+  const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value)
+    const textarea = e.target
+    textarea.style.height = 'auto'
+    textarea.style.height = Math.max(64, Math.min(textarea.scrollHeight + 8, 200)) + 'px'
+  }, [])
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processFiles(e.target.files)
+    }
+    e.target.value = ''
+  }, [processFiles])
+
+  const handleAttachClick = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
+
+  const handleFolderClick = useCallback(async () => {
+    if (disabled || attachments.length >= MAX_ATTACHMENTS) return
+    const folderPath = await window.electronAPI.dialog.selectFolder()
+    if (!folderPath) return
+    const folderName = folderPath.split(/[\\/]/).pop() || folderPath
+    setAttachments(prev => [
+      ...prev,
+      { type: 'folder', fileName: folderName, filePath: folderPath, size: 0 },
+    ])
+  }, [disabled, attachments.length])
+
+  // Drag and drop
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current += 1
+    if (dragCounterRef.current === 1) {
+      setIsDragging(true)
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current === 0) {
+      setIsDragging(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current = 0
+    setIsDragging(false)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processFiles(e.dataTransfer.files)
+    }
+  }, [processFiles])
+
+  const canSend = !disabled && (input.trim().length > 0 || attachments.length > 0 || quotedSkills.length > 0)
+
+  return (
+    <div
+      className={`bottom-input-container${isDragging ? ' dragging' : ''}${workspaceOpen ? ' workspace-open' : ''}`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDragging && (
+        <div className="input-drag-overlay">
+          拖放文件到此处
+        </div>
+      )}
+
+      {/* Error toast */}
+      {error && (
+        <div className="input-error-toast" onClick={() => setError(null)}>
+          {error}
+        </div>
+      )}
+
+      {/* Quoted skills strip */}
+      {quotedSkills.length > 0 && (
+        <div className="skill-tags-strip">
+          {quotedSkills.map(name => (
+            <span key={name} className="skill-tag-chip">
+              @{name}
+              <span className="skill-tag-remove" onClick={() => handleRemoveQuotedSkill(name)}>&times;</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Preview strip */}
+      {attachments.length > 0 && (
+        <div className="input-preview-strip">
+          {attachments.map((att, index) => (
+            <div key={index} className="input-preview-item">
+              {att.previewUrl ? (
+                <img src={att.previewUrl} alt={att.fileName} className="input-preview-thumb" />
+              ) : att.type === 'folder' ? (
+                <div className="input-preview-file-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                  </svg>
+                </div>
+              ) : (
+                <div className="input-preview-file-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                </div>
+              )}
+              <div className="input-preview-info">
+                <span className="input-preview-name" title={att.type === 'folder' ? att.filePath : att.fileName}>
+                  {att.fileName.length > 12 ? att.fileName.slice(0, 9) + '...' : att.fileName}
+                </span>
+                <span className="input-preview-size">{att.type === 'folder' ? '文件夹' : formatFileSize(att.size)}</span>
+              </div>
+              <button className="input-preview-remove" onClick={() => removeAttachment(index)} title="移除文件">&times;</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Input container - 与欢迎页一致 */}
+      <div className="welcome-input-container" style={{ width: '100%', maxWidth: '1000px', margin: '0 auto' }}>
+        {/* Hidden file input */}
+        <input ref={fileInputRef} type="file" accept="*/*" multiple style={{ display: 'none' }} onChange={handleFileChange} />
+        
+        <div className="welcome-input-wrapper">
+          <textarea
+            ref={textareaRef}
+            className="welcome-input"
+            value={input}
+            onChange={handleInput}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            disabled={disabled}
+            rows={3}
+          />
+          <div className="welcome-input-actions">
+            <div className="welcome-input-left">
+              <button
+                className="attach-btn"
+                title="选择文件"
+                onClick={handleAttachClick}
+                disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"></path>
+                </svg>
+              </button>
+              <button
+                className="attach-btn"
+                title="挂载文件夹"
+                onClick={handleFolderClick}
+                disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
+                </svg>
+              </button>
+              <button
+                className="attach-btn"
+                title="引用技能"
+                onClick={() => {
+                  const newInput = input ? `${input}\n@` : '@'
+                  setInput(newInput)
+                  setTimeout(() => textareaRef.current?.focus(), 0)
+                }}
+                disabled={disabled}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
+                </svg>
+              </button>
+            </div>
+            {(isStreaming || isWaiting) ? (
+              <button className="btn-stop" onClick={async () => { if (isStopping || !onStop) return; setIsStopping(true); try { await onStop() } catch (err) { console.error('stop error:', err) } finally { setIsStopping(false) } }} disabled={isStopping} title={isStopping ? '正在停止...' : '停止回复'}>
+                <span style={{ display: 'block', width: 16, height: 16, backgroundColor: 'white', borderRadius: 2 }} />
+              </button>
+            ) : (
+              <button className="welcome-send-btn" onClick={handleSend} disabled={!canSend} title="发送消息">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -23,6 +404,7 @@ interface ChatAreaProps {
   onSwitchModel: (modelKey: string) => void
   contextUsageTotal: number
   contextWindow: number
+  sidebarView: string  // 工作区展开状态
 }
 
 function getAgentDisplayName(agent: AgentInfo): string {
@@ -68,6 +450,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSwitchModel,
   contextUsageTotal,
   contextWindow,
+  sidebarView,  // 工作区展开状态
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
@@ -302,6 +685,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             className="chat-context-usage"
             title={`当前上下文使用率 ${usagePercent}%（${usageTotalLabel}/${contextWindowLabel}）`}
             aria-label={`当前上下文使用率 ${usagePercent}%，已用 ${usageTotalLabel}，总窗口 ${contextWindowLabel}`}
+            style={{ display: messages.length === 0 ? 'none' : 'flex' }}
           >
             <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
               <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />
@@ -321,6 +705,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             onClick={handleCompact}
             title="压缩上下文，释放对话空间"
             disabled={!isReady || isWaiting || messages.length === 0}
+            style={{ display: messages.length === 0 ? 'none' : 'inline-flex' }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="4 14 10 14 10 20" />
@@ -334,6 +719,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             className="chat-header-badge"
             onClick={() => void handleScreenshot()}
             title="截屏 (Ctrl+Alt+A)"
+            style={{ display: messages.length === 0 ? 'none' : 'inline-flex' }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -356,12 +742,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
           {messages.length === 0 ? (
             <div className="welcome-screen">
-              <div className="welcome-avatar">🤖</div>
-              <div className="welcome-info">
-                <div className="welcome-name">ClawWin</div>
-                <div className="welcome-desc">👋 千易 为你24小时随时在线</div>
+              <div className="welcome-content">
+                <img src="/assets/logo.png" alt="鲁南千易" className="welcome-avatar" />
+                <div className="welcome-info">
+                  <div className="welcome-name">鲁南千易</div>
+                  <div className="welcome-desc">👋 千易 为你24小时随时在线</div>
+                </div>
               </div>
               <div className="welcome-input-container">
+                <input
+                  type="file"
+                  ref={undefined}
+                  id="welcome-file-input"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      const file = e.target.files[0]
+                      const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
+                      if (input) {
+                        const fileName = file.name
+                        input.value = input.value ? `${input.value}\n${fileName}` : fileName
+                      }
+                    }
+                    e.target.value = ''
+                  }}
+                />
                 <div className="welcome-input-wrapper">
                   <textarea
                     className="welcome-input"
@@ -371,20 +776,60 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   />
                   <div className="welcome-input-actions">
                     <div className="welcome-input-left">
-                      <button className="attach-btn" title="选择文件">
+                      <button
+                        className="attach-btn"
+                        title="选择文件"
+                        onClick={() => {
+                          const fileInput = document.getElementById('welcome-file-input') as HTMLInputElement
+                          fileInput?.click()
+                        }}
+                      >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
                         </svg>
-                        选择文件
+                      </button>
+                      <button
+                        className="attach-btn"
+                        title="挂载文件夹"
+                        onClick={async () => {
+                          const folderPath = await window.electronAPI.dialog.selectFolder()
+                          if (folderPath) {
+                            const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
+                            if (input) {
+                              const folderName = folderPath.split(/[\\/]/).pop() || folderPath
+                              input.value = input.value ? `${input.value}\n${folderName}` : folderName
+                            }
+                          }
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
+                        </svg>
+                      </button>
+                      <button
+                        className="attach-btn"
+                        title="引用技能"
+                        onClick={() => {
+                          const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
+                          if (input) {
+                            input.value = input.value ? `${input.value}\n@` : '@'
+                            input.focus()
+                          }
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="4"></circle>
+                          <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
+                        </svg>
                       </button>
                     </div>
-                    <button 
+                    <button
                       className="welcome-send-btn"
                       disabled={disabled || !isReady}
                       onClick={() => {
-                        const input = document.querySelector('.welcome-input') as HTMLTextAreaElement
-                        if (input?.value) {
-                          onSend(input.value)
+                        const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
+                        if (input?.value.trim()) {
+                          onSend(input.value.trim())
                           input.value = ''
                         }
                       }}
@@ -426,8 +871,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
         </div>
 
-        {/* 滚动导航按钮 */}
-        <div className="chat-scroll-buttons">
+        {/* 滚动导航按钮 - 只在有消息时显示 */}
+        <div className="chat-scroll-buttons" style={{ display: messages.length === 0 ? 'none' : 'flex' }}>
           <button
             className={`chat-scroll-btn ${showScrollTop ? 'visible' : 'hidden'}`}
             onClick={scrollToTop}
@@ -466,14 +911,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <span>{backendStatus}</span>
       </div>
 
-      <InputArea
-        onSend={onSend}
-        disabled={disabled || !isReady}
-        placeholder={!isReady ? '等待网关服务就绪...' : isWaiting ? 'AI 正在思考，可继续输入...' : isStreaming ? 'AI 正在回复，可继续输入...' : '输入消息...'}
-        isWaiting={isWaiting}
-        isStreaming={isStreaming}
-        onStop={onStop}
-      />
+      {/* 只在有消息时显示底部输入框，无消息时不显示（欢迎页已有输入框） */}
+      {messages.length > 0 && (
+        <BottomInput
+          onSend={onSend}
+          disabled={disabled || !isReady}
+          placeholder={!isReady ? '等待网关服务就绪...' : isWaiting ? 'AI 正在思考，可继续输入...' : isStreaming ? 'AI 正在回复，可继续输入...' : '输入消息...'}
+          isWaiting={isWaiting}
+          isStreaming={isStreaming}
+          onStop={onStop}
+          workspaceOpen={sidebarView === 'workspace'}
+        />
+      )}
     </div>
   )
 }
