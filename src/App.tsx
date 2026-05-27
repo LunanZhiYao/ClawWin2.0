@@ -8,6 +8,7 @@ import { SetupComplete } from './components/Setup/SetupComplete'
 import { ErrorBoundary } from './components/Common/ErrorBoundary'
 import { StartupSplash } from './components/Common/StartupSplash'
 import { VideoSplash } from './components/Common/VideoSplash'
+import { WindowControls } from './components/Common/WindowControls'
 import { UpdateNotification } from './components/Common/UpdateNotification'
 import { ModelSettings } from './components/Settings/ModelSettings'
 import { ChannelSettings } from './components/Settings/ChannelSettings'
@@ -1419,6 +1420,8 @@ function App() {
   return (
     <ErrorBoundary>
       <div className="app-container">
+        <div className="app-drag-region" />
+        <WindowControls />
         <div className="navbar">
           <div className="navbar-logo">
             <div className="navbar-brand">
@@ -1491,43 +1494,20 @@ function App() {
               </div>
             </div>
             <div className="sidebar">
-              <div className="sidebar-top-switch">
-                <button
-                  className={`sidebar-tab-btn ${sidebarView === 'sessions' ? 'active' : ''}`}
-                  onClick={() => setSidebarView('sessions')}
-                >
-                  会话
-                </button>
-                <button
-                  className={`sidebar-tab-btn ${sidebarView === 'workspace' ? 'active' : ''}`}
-                  onClick={() => setSidebarView('workspace')}
-                >
-                  工作区
-                </button>
-              </div>
-              {sidebarView === 'sessions' ? (
-                <SessionList
-                  sessions={sessions}
-                  activeSessionId={activeSessionId}
-                  agents={ws.agents}
-                  defaultAgentId={ws.defaultAgentId}
-                  onSelectSession={setActiveSessionId}
-                  onNewSession={createSession}
-                  onDeleteSession={deleteSession}
-                  onRestartGateway={() => restartGateway()}
-                />
-              ) : (
-                <WorkspaceList
-                  currentAgentId={activeAgentId}
-                  workspacePath={workspacePath}
-                  entries={workspaceEntries}
-                  loading={workspaceLoading}
-                  error={workspaceError}
-                  onRefresh={() => void loadWorkspaceEntries()}
-                  onOpenEntry={(entry) => { void window.electronAPI.shell.openPath(entry.path) }}
-                  onOpenWorkspace={() => { if (workspacePath) void window.electronAPI.shell.openPath(workspacePath) }}
-                />
-              )}
+              <SessionList
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                agents={ws.agents}
+                defaultAgentId={ws.defaultAgentId}
+                onSelectSession={setActiveSessionId}
+                onNewSession={createSession}
+                onDeleteSession={deleteSession}
+                onRestartGateway={() => restartGateway()}
+                onOpenCronManager={() => setShowCronManager(true)}
+                onOpenSkills={() => setShowSkills(true)}
+                onOpenSettings={() => setShowSettings(true)}
+                onOpenWorkspace={() => setSidebarView('workspace')}
+              />
             </div>
           </div>
           <div className="main-content">
@@ -1552,6 +1532,21 @@ function App() {
               contextWindow={currentContextWindow}
             />
           </div>
+          {sidebarView === 'workspace' && (
+            <div className="right-sidebar-panel">
+              <WorkspaceList
+                currentAgentId={activeSession?.agentId || ''}
+                workspacePath={workspacePath}
+                entries={workspaceEntries}
+                loading={workspaceLoading}
+                error={workspaceError}
+                onRefresh={() => void loadWorkspaceEntries()}
+                onOpenEntry={(entry) => { void window.electronAPI.shell.openPath(entry.path) }}
+                onOpenWorkspace={() => { if (workspacePath) void window.electronAPI.shell.openPath(workspacePath) }}
+                onClose={() => setSidebarView('sessions')}
+              />
+            </div>
+          )}
         </div>
       </div>
 

@@ -10,6 +10,7 @@ interface WorkspaceListProps {
   onRefresh: () => void
   onOpenEntry: (entry: WorkspaceEntry) => void
   onOpenWorkspace: () => void
+  onClose?: () => void
 }
 
 /** 树节点：文件夹或文件 */
@@ -294,14 +295,15 @@ const TreeNodeItem: React.FC<{
 }
 
 export const WorkspaceList: React.FC<WorkspaceListProps> = ({
-  currentAgentId,
+  currentAgentId: _currentAgentId,
   workspacePath,
   entries,
   loading,
   error,
   onRefresh,
   onOpenEntry,
-  onOpenWorkspace,
+  onOpenWorkspace: _onOpenWorkspace,
+  onClose,
 }) => {
   // 记录已展开的文件夹路径
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
@@ -364,12 +366,48 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
 
   return (
     <div className="workspace-list">
+      {/* 第一行：图标 + 标签 + 窗口控制 */}
+      <div className="workspace-toolbar">
+        <div className="workspace-toolbar-left">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary)' }}>
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </div>
+        
+        <div className="workspace-toolbar-center">
+          <button className={`workspace-toolbar-btn ${true ? 'active' : ''}`}>
+            工作日志
+          </button>
+          <button className="workspace-toolbar-btn">
+            产出物
+          </button>
+          <button className="workspace-toolbar-btn">
+            预览
+          </button>
+        </div>
+        
+        <div className="workspace-toolbar-right">
+          {onClose && (
+            <button
+              type="button"
+              className="workspace-toggle-btn"
+              onClick={onClose}
+              title="关闭工作区面板"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 第二行：路径 + 刷新 */}
       <div className="workspace-list-header">
-        <button className="btn-new-session" onClick={onOpenWorkspace} title={workspacePath}>
-          <span className="workspace-path-text">
-            [{currentAgentId}] {workspacePath || '未设置工作区'}
-          </span>
-        </button>
+        <span className="workspace-path-text">
+          [main] {workspacePath || 'C:\\Users\\Ezer\\qianyi'}
+        </span>
         <button
           type="button"
           className="workspace-refresh-btn"
@@ -382,8 +420,8 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
             <span className="workspace-refresh-spin" aria-hidden="true">↻</span>
           ) : (
             <svg
-              width="18"
-              height="18"
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -394,7 +432,7 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
             >
               <polyline points="23 4 23 10 17 10" />
               <polyline points="1 20 1 14 7 14" />
-              <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15" />
+              <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A4.36A9 9 0 0 0 20.49 15" />
             </svg>
           )}
         </button>

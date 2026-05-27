@@ -233,14 +233,11 @@ function createWindow() {
     height: 980,
     minWidth: 1100,
     minHeight: 780,
-    title: '鲁南千易',
+    title: 'ClawWin',
     icon: getIconPath(),
+    frame: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#2D2D2D',
-      symbolColor: '#FFFFFF',
-      height: 48,
-    },
+    trafficLightPosition: { x: 12, y: 12 },
     webPreferences: {
       preload: PRELOAD,
       contextIsolation: true,
@@ -1301,6 +1298,28 @@ function setupIPC() {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
+  })
+
+  // ===== Window Controls (Marvis Style) =====
+
+  ipcMain.handle('window:minimize', () => {
+    mainWindow?.minimize()
+  })
+
+  ipcMain.handle('window:maximize', () => {
+    if (mainWindow?.isMaximized()) {
+      mainWindow.unmaximize()
+    } else {
+      mainWindow?.maximize()
+    }
+  })
+
+  ipcMain.handle('window:close', () => {
+    mainWindow?.close()
+  })
+
+  ipcMain.handle('window:isMaximized', () => {
+    return mainWindow?.isMaximized() ?? false
   })
 
   // ===== Sessions persistence =====

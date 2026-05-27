@@ -217,6 +217,12 @@ interface ElectronAPI {
   ollama: ElectronOllama
   cww: ElectronCww
   auth: ElectronAuth
+  windowControls: {
+    minimize: () => Promise<void>
+    maximize: () => Promise<void>
+    close: () => Promise<void>
+    isMaximized: () => Promise<boolean>
+  }
 }
 
 declare global {
@@ -261,17 +267,21 @@ export interface ChatToolCall {
   isError?: boolean
 }
 
-export type TaskStatus =
-  | 'starting'
-  | 'calling_tool'
+export type TaskStatus = 
+  | 'pending'
+  | 'queued'
+  | 'running'
   | 'executing'
   | 'using_skill'
   | 'waiting'
+  | 'waiting_input'
+  | 'calling_tool'
+  | 'starting'
   | 'completed'
-  | 'retrying'
-  | 'interrupted'
   | 'failed'
+  | 'interrupted'
   | 'user_aborted'
+  | 'retrying'
 
 export interface ChatMessage {
   id: string

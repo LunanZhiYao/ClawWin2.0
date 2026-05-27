@@ -293,6 +293,14 @@ const electronAPI = {
     saveState: (state: { email: string; nickname: string; balance: number; serverUrl: string; encPassword?: string }) =>
       ipcRenderer.invoke('cww:saveState', state),
   },
+
+  // Window Controls (Marvis Style)
+  windowControls: {
+    minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
+    maximize: (): Promise<void> => ipcRenderer.invoke('window:maximize'),
+    close: (): Promise<void> => ipcRenderer.invoke('window:close'),
+    isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

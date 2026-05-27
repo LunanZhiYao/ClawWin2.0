@@ -25,7 +25,9 @@ export function StartupSplash({
       <div className="video-splash-overlay" />
 
       <div className="startup-splash-center">
-        <div className="startup-splash-spinner" aria-hidden />
+        <div className="startup-splash-spinner" aria-hidden>
+          🤖
+        </div>
         <p className="startup-splash-message">{message}</p>
       </div>
 
