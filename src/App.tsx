@@ -1058,8 +1058,11 @@ function App() {
 
   // Session management
   const createSession = useCallback((agentId?: string) => {
-    // 继承当前会话的模型选择
+    // 如果当前已在空会话页面，不再重复创建
     const currentSession = sessionsRef.current.find((s) => s.id === activeSessionIdRef.current)
+    if (currentSession && currentSession.messages.length === 0) return
+
+    // 继承当前会话的模型选择
     const inheritedModel = currentSession?.modelOverride
     const session: ChatSession = {
       id: generateId(),

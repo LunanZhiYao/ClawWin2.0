@@ -622,11 +622,11 @@ body {
 
 /* 会话项样式 */
 .session-item {
-  padding: 12px;
+  padding: 10px 12px;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: all 0.15s ease;
-  margin-bottom: 4px;
+  transition: all 0.2s ease;
+  margin-bottom: 2px;
   border: 1px solid transparent;
 }
 
@@ -638,16 +638,61 @@ body {
 .session-item.active {
   background: #EFF6FF;
   border-color: #BFDBFE;
+  padding: 12px;
+}
+
+.session-item-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-item-avatar {
+  width: 0;
+  height: 0;
+  opacity: 0;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width 0.25s ease, height 0.25s ease, opacity 0.2s ease, margin 0.25s ease;
+  margin: 0;
+}
+
+.session-item-avatar.avatar-visible {
+  width: 34px;
+  height: 34px;
+  opacity: 1;
+  margin: 0;
+}
+
+.session-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
+.session-item-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .session-item-title {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: font-weight 0.15s ease;
+}
+
+.session-item.active .session-item-title {
+  font-weight: 600;
 }
 
 .session-item-preview {
@@ -656,6 +701,19 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-top: 3px;
+  animation: previewFadeIn 0.25s ease;
+}
+
+@keyframes previewFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .session-item-time {
@@ -1051,6 +1109,24 @@ body {
   -webkit-app-region: drag;
 }
 
+.chat-header-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  -webkit-app-region: no-drag;
+}
+
+.chat-header-activity .chat-activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: streaming-dot-pulse 1.5s infinite;
+}
+
 .chat-header-actions {
   display: flex;
   align-items: center;
@@ -1395,12 +1471,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 80%;
+  flex: 1;
+  min-width: 0;
 }
 
 .message-column.user-message {
-  max-width: 80%;
-  margin-left: auto;
 }
 
 .message-header {
@@ -1565,7 +1640,8 @@ body {
   line-height: 1.65;
   word-break: break-word;
   position: relative;
-  max-width: 80%;
+  max-width: 60%;
+  width: fit-content;
   min-width: 100px;
   min-height: 40px;
   box-sizing: border-box;
@@ -1577,7 +1653,6 @@ body {
   color: var(--text-primary);
   border-radius: 18px 4px 18px 18px;
   margin-left: auto;
-  width: 100%;
 }
 
 .message-bubble.message-user .message-user-text {
@@ -1595,7 +1670,6 @@ body {
   color: var(--text-primary);
   border: 1px solid var(--border-light);
   border-radius: 4px 18px 18px 18px;
-  width: 100%;
 }
 
 .message-bubble-streaming {
@@ -1613,16 +1687,40 @@ body {
 /* 消息内容区 */
 .message-body {
   width: 100%;
-  min-height: 40px;
   display: block;
 }
 
 .message-content {
   width: 100%;
+  overflow: hidden;
 }
 
 .message-content-assistant {
   color: var(--text-dark);
+}
+
+.message-content-assistant ul,
+.message-content-assistant ol {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.message-content-assistant hr {
+  border: none;
+  border-top: 1px solid var(--border-light);
+  margin: 12px 0;
+}
+
+.message-content-assistant p {
+  margin: 6px 0;
+}
+
+.message-content-assistant p:first-child {
+  margin-top: 0;
+}
+
+.message-content-assistant p:last-child {
+  margin-bottom: 0;
 }
 
 .message-user-text {
@@ -1651,11 +1749,65 @@ body {
 .typing-dot:nth-child(2) { animation-delay: -0.16s; }
 
 /* 消息操作按钮 */
-.message-actions {
+/* 消息 hover 操作区：时间 + 按钮，统一在气泡底部右侧 */
+.message-hover-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  margin-top: 6px;
-  gap: 4px;
+  gap: 6px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.message-body:hover .message-hover-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.message-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.message-tool-waiting-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* 处理中/等待中 - 像正文一样说话 */
+.message-tool-waiting-hint.hint-active {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* 最终状态 - 小字提示 */
+.message-tool-waiting-hint.hint-final {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.message-tool-waiting-hint .hint-text::after {
+  content: '';
+  display: inline-block;
+  width: 1.5em;
+  text-align: left;
+  animation: loading-ellipsis 1.5s infinite;
+}
+
+@keyframes loading-ellipsis {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+  100% { content: ''; }
 }
 
 .btn-action {
@@ -2007,6 +2159,530 @@ body {
 
 .btn-danger:hover {
   background: #DC2626;
+}
+
+/* ─── Cron Manager 定时任务 ─── */
+.settings-panel-wide {
+  background: white;
+  border-radius: var(--radius-xl);
+  width: 94%;
+  max-width: 800px;
+  max-height: 85vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+  animation: dialogSlideIn 0.3s ease;
+}
+
+.cron-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.cron-toolbar-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.cron-toolbar-running {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.cron-error {
+  padding: 10px 14px;
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  border-radius: var(--radius);
+  color: var(--error);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.cron-success {
+  padding: 10px 14px;
+  background: #F0FDF4;
+  border: 1px solid #BBF7D0;
+  border-radius: var(--radius);
+  color: #16A34A;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.cron-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.cron-empty-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+
+.cron-empty-text {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.cron-empty-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.cron-disconnected {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+}
+
+.cron-disconnected-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+
+.cron-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cron-job-card {
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  transition: all 0.2s ease;
+}
+
+.cron-job-card:hover {
+  border-color: var(--border-hover);
+}
+
+.cron-job-card.cron-job-running {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+}
+
+.cron-job-card.cron-job-disabled {
+  opacity: 0.55;
+}
+
+.cron-job-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.cron-job-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-job-schedule-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.cron-badge-cron {
+  background: #EFF6FF;
+  color: #2563EB;
+}
+
+.cron-badge-at {
+  background: #FFF7ED;
+  color: #EA580C;
+}
+
+.cron-badge-every {
+  background: #F0FDF4;
+  color: #16A34A;
+}
+
+.cron-running-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #EFF6FF;
+  color: var(--primary);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.cron-job-schedule {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.cron-job-schedule code {
+  background: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+
+.cron-job-monitor {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 12px;
+}
+
+.cron-monitor-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cron-monitor-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.cron-monitor-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cron-status-error {
+  color: var(--error);
+}
+
+.cron-status-ok {
+  color: #16A34A;
+}
+
+.cron-job-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.cron-btn-danger {
+  color: var(--error) !important;
+  border-color: #FECACA !important;
+}
+
+.cron-btn-danger:hover {
+  background: #FEF2F2 !important;
+}
+
+.cron-btn-run.cron-btn-success {
+  color: #16A34A !important;
+  border-color: #BBF7D0 !important;
+}
+
+.cron-result-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: white;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cron-result-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.cron-result-arrow {
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+
+.cron-result-arrow-up {
+  transform: rotate(180deg);
+}
+
+.cron-result-panel {
+  margin-top: 12px;
+  padding: 12px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  animation: previewFadeIn 0.2s ease;
+}
+
+.cron-result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.cron-result-status {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cron-result-duration {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cron-result-time {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.cron-result-summary {
+  margin-top: 8px;
+}
+
+.cron-result-summary-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 4px;
+}
+
+.cron-result-summary-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.cron-result-error {
+  margin-top: 8px;
+}
+
+.cron-result-error-text {
+  font-size: 13px;
+  color: var(--error);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.cron-result-no-summary {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+/* ─── Cron Form (Dialog) ─── */
+.channel-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  animation: fadeIn 0.15s ease;
+}
+
+.channel-dialog {
+  background: white;
+  border-radius: var(--radius-xl);
+  width: 90%;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+  animation: dialogSlideIn 0.25s ease;
+}
+
+.channel-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.channel-dialog-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.channel-dialog-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.channel-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+}
+
+.cron-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.cron-form-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.input-field {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: white;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.input-field:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.cron-form-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: white;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.cron-form-select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.cron-form-textarea {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: white;
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.cron-form-textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.cron-time-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cron-time-select {
+  min-width: 80px;
+}
+
+.cron-time-sep {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.cron-date-input,
+.cron-time-input {
+  flex: 1;
+}
+
+.cron-number-input {
+  width: 80px;
+}
+
+.cron-unit-select {
+  flex: 1;
+}
+
+/* Toggle switch */
+.channel-toggle {
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: #D1D5DB;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s ease;
+  flex-shrink: 0;
+}
+
+.channel-toggle-on {
+  background: var(--primary);
+}
+
+.channel-toggle-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.channel-toggle-on .channel-toggle-thumb {
+  transform: translateX(18px);
 }
 
 /* Scroll buttons */
@@ -3164,7 +3840,7 @@ body {
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 24px;
+  padding: 16px 24px 240px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -3255,13 +3931,13 @@ body {
   border-top: 1px solid #FEF3C7;
 }
 
-/* 活动指示条 */
+/* 活动指示条 - 在输入框容器内部 */
 .chat-activity-bar {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 6px 24px;
+  padding: 4px 24px;
   font-size: 12px;
   color: var(--text-secondary);
   overflow: hidden;
@@ -3269,8 +3945,9 @@ body {
 }
 
 .chat-activity-bar-visible {
-  max-height: 40px;
+  max-height: 30px;
   opacity: 1;
+  padding: 4px 24px;
 }
 
 .chat-activity-bar-hidden {
@@ -3291,7 +3968,7 @@ body {
 .bottom-input-container {
   position: fixed;
   bottom: 0;
-  left: 280px; /* 左侧边栏宽度 */
+  left: 280px;
   right: 0;
   padding: 16px 24px;
   background: var(--bg-main);
@@ -3326,12 +4003,7 @@ body {
 
 /* 工作区展开时，调整底部输入框宽度 */
 .bottom-input-container.workspace-open {
-  right: 400px; /* 工作区面板宽度 */
-}
-
-/* 动态调整输入框最大宽度 */
-.bottom-input-container.workspace-open .welcome-input-container {
-  max-width: calc(100% - 40px); /* 减去左右padding */
+  right: 400px;
 }
 
 /* 停止按钮 */

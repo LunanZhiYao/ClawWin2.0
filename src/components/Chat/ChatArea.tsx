@@ -11,6 +11,10 @@ interface BottomInputProps {
   isStreaming?: boolean
   onStop?: () => void
   workspaceOpen?: boolean  // 工作区是否展开
+  externalInput?: string  // 外部注入的输入内容（如重发）
+  onExternalInputConsumed?: () => void  // 外部输入被消费后的回调
+  containerRef?: React.RefObject<HTMLDivElement>  // 容器 ref，用于 ResizeObserver
+  activityStatus?: string  // 活动状态文字，为空则不显示
 }
 
 const MAX_ATTACHMENTS = 5
@@ -33,6 +37,10 @@ const BottomInput: React.FC<BottomInputProps> = ({
   isStreaming = false,
   onStop,
   workspaceOpen = false,  // 工作区是否展开
+  externalInput,
+  onExternalInputConsumed,
+  containerRef,
+  activityStatus = '',
 }) => {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<AttachmentWithPreview[]>([])
@@ -46,6 +54,15 @@ const BottomInput: React.FC<BottomInputProps> = ({
 
   // Skill quote state
   const [quotedSkills, setQuotedSkills] = useState<string[]>([])
+
+  // 接收外部注入的输入内容（如重发）
+  useEffect(() => {
+    if (externalInput) {
+      setInput(externalInput)
+      onExternalInputConsumed?.()
+      setTimeout(() => textareaRef.current?.focus(), 0)
+    }
+  }, [externalInput, onExternalInputConsumed])
 
   // 错误提示
   const showError = useCallback((msg: string) => {
@@ -246,12 +263,19 @@ const BottomInput: React.FC<BottomInputProps> = ({
 
   return (
     <div
+      ref={containerRef}
       className={`bottom-input-container${isDragging ? ' dragging' : ''}${workspaceOpen ? ' workspace-open' : ''}`}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      {/* 活动状态指示条 */}
+      <div className={`chat-activity-bar ${activityStatus ? 'chat-activity-bar-visible' : 'chat-activity-bar-hidden'}`}>
+        <span className="chat-activity-dot" />
+        <span>{activityStatus}</span>
+      </div>
+
       {/* Drag overlay */}
       {isDragging && (
         <div className="input-drag-overlay">
@@ -457,6 +481,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const agentPickerRef = useRef<HTMLDivElement>(null)
   const modelPickerRef = useRef<HTMLDivElement>(null)
+  const inputContainerRef = useRef<HTMLDivElement>(null)
 
   const [autoScroll, setAutoScroll] = useState(true)
   const [showScrollTop, setShowScrollTop] = useState(false)
@@ -464,6 +489,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [screenshotToast, setScreenshotToast] = useState<string | null>(null)
   const [showAgentPicker, setShowAgentPicker] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
+  const [retryInput, setRetryInput] = useState<string | null>(null)
 
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
@@ -502,13 +528,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }, [showModelPicker])
 
   // Auto-scroll to bottom when new messages arrive
+  const prevMsgCountRef = useRef(0)
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
-      // 延迟一帧确保 DOM 布局完成（等待动画元素高度计算完毕）
+      const currentCount = messages.length
+      const isSessionSwitch = Math.abs(currentCount - prevMsgCountRef.current) > 2
+      prevMsgCountRef.current = currentCount
+
       requestAnimationFrame(() => {
         scrollRef.current?.scrollTo({
           top: scrollRef.current.scrollHeight,
-          behavior: isStreaming ? 'instant' : 'smooth',
+          behavior: isSessionSwitch || isStreaming ? 'instant' : 'smooth',
         })
       })
     }
@@ -519,6 +549,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     cancelAnimationFrame(scrollRafRef.current)
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
   }, [])
+
+  // 监听底部输入框高度变化，动态调整消息区域 padding-bottom
+  useEffect(() => {
+    const inputEl = inputContainerRef.current
+    if (!inputEl || !scrollRef.current) return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const height = entry.contentRect.height + 32 // 16px padding * 2
+        if (scrollRef.current) {
+          scrollRef.current.style.paddingBottom = `${height + 8}px`
+        }
+      }
+    })
+    observer.observe(inputEl)
+    return () => observer.disconnect()
+  }, [messages.length > 0])
 
   // 监听截屏完成事件
   useEffect(() => {
@@ -850,6 +896,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     key={msg.id}
                     message={msg}
                     onCopy={() => handleCopy(msg.content)}
+                    onRetry={msg.role === 'user' ? () => setRetryInput(msg.content) : undefined}
                   />
                 ))}
               {isWaiting && !isStreaming && !hasStreamingMessage && (
@@ -904,11 +951,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      <div className={`chat-activity-bar ${isReady && backendStatus && (isStreaming || isWaiting) ? 'chat-activity-bar-visible' : 'chat-activity-bar-hidden'}`}>
-        <span className="chat-activity-dot" />
-        <span>{backendStatus}</span>
-      </div>
-
       {/* 只在有消息时显示底部输入框，无消息时不显示（欢迎页已有输入框） */}
       {messages.length > 0 && (
         <BottomInput
@@ -919,6 +961,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           isStreaming={isStreaming}
           onStop={onStop}
           workspaceOpen={sidebarView === 'workspace'}
+          externalInput={retryInput ?? undefined}
+          onExternalInputConsumed={() => setRetryInput(null)}
+          containerRef={inputContainerRef}
+          activityStatus={isReady && backendStatus && (isStreaming || isWaiting) ? backendStatus : ''}
         />
       )}
     </div>

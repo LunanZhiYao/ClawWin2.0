@@ -4,6 +4,16 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { ChatMessage, ChatToolCall, TaskStatus } from '../../types'
 
+function formatMessageTime(timestamp: number): string {
+  const date = new Date(timestamp)
+  const y = date.getFullYear()
+  const m = (date.getMonth() + 1).toString().padStart(2, '0')
+  const d = date.getDate().toString().padStart(2, '0')
+  const h = date.getHours().toString().padStart(2, '0')
+  const min = date.getMinutes().toString().padStart(2, '0')
+  return `${y}-${m}-${d} ${h}:${min}`
+}
+
 function isImageFile(mimeType?: string, fileName?: string): boolean {
   if (mimeType && mimeType.startsWith('image/')) return true
   if (fileName) {
@@ -344,17 +354,17 @@ const TaskStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
 // 任务状态提示组件
 const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: boolean }> = ({ taskStatus, showWithContent }) => {
   const statusTextMap: Record<TaskStatus, string> = {
-    starting: '让我想想...',
-    calling_tool: '正在准备工具...',
-    executing: '执行指令中...',
-    using_skill: '让我来使用技能...',
-    waiting: '处理中，请稍候...',
-    waiting_input: '等待输入...',
-    running: '运行中...',
-    pending: '等待中...',
-    queued: '排队中...',
+    starting: '让我想想',
+    calling_tool: '正在调用工具',
+    executing: '执行指令中',
+    using_skill: '让我来使用技能',
+    waiting: '处理中，请稍候',
+    waiting_input: '等待输入',
+    running: '运行中',
+    pending: '等待中',
+    queued: '排队中',
     completed: '任务已完成',
-    retrying: '遇到点小问题，正在重试...',
+    retrying: '遇到点小问题，正在重试',
     interrupted: '任务已中断',
     failed: '执行失败了，要不要重试一下？',
     user_aborted: '任务已手动中断',
@@ -367,20 +377,15 @@ const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: bool
   // 否则仅在非最终状态时渲染
   if (!showWithContent && !isFinalStatus) {
     return (
-      <div className="message-tool-waiting-hint">
-        <div className="typing-dots">
-          <span className="typing-dot" />
-          <span className="typing-dot" />
-          <span className="typing-dot" />
-        </div>
-        <span>{taskStatus ? statusTextMap[taskStatus] : '等待执行结果...'}</span>
+      <div className="message-tool-waiting-hint hint-active">
+        <span className="hint-text">{taskStatus ? statusTextMap[taskStatus] : '等待执行结果'}</span>
       </div>
     )
   }
 
   if (isFinalStatus && taskStatus) {
     return (
-      <div className="message-tool-waiting-hint">
+      <div className="message-tool-waiting-hint hint-final">
         <TaskStatusIcon status={taskStatus} />
         <span>{statusTextMap[taskStatus]}</span>
       </div>
@@ -399,12 +404,12 @@ const TaskStatusSummary: React.FC<{ toolCalls: ChatToolCall[]; taskStatus?: Task
 
   const latestToolCall = toolCalls[toolCalls.length - 1]
   const statusText = latestToolCall
-    ? `${latestToolCall.name} ${latestToolCall.status === 'done' ? '已完成' : latestToolCall.status === 'running' ? '运行中...' : latestToolCall.status === 'error' ? '执行失败' : '等待中...'}`
+    ? `${latestToolCall.name} ${latestToolCall.status === 'done' ? '已完成' : latestToolCall.status === 'running' ? '运行中' : latestToolCall.status === 'error' ? '执行失败' : '等待中'}`
     : taskStatus
       ? taskStatus === 'completed' ? '任务已完成'
-        : taskStatus === 'running' ? '运行中...'
+        : taskStatus === 'running' ? '运行中'
         : taskStatus === 'failed' ? '执行失败'
-        : '处理中...'
+        : '处理中'
       : ''
 
   const statusClass = latestToolCall
@@ -620,10 +625,16 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
             {onRetry && <button className="btn-retry" onClick={onRetry}>重试</button>}
           </div>
         )}
-        <div className="message-actions">
+        <div className="message-hover-actions">
+          <span className="message-time">{formatMessageTime(message.timestamp)}</span>
           {!isUser && message.status === 'done' && onCopy && (
             <button className="btn-action" onClick={onCopy} title="复制">
               复制
+            </button>
+          )}
+          {isUser && onRetry && (
+            <button className="btn-action" onClick={onRetry} title="重发">
+              重发
             </button>
           )}
         </div>
@@ -656,5 +667,7 @@ export const MessageBubble = React.memo(MessageBubbleInner, (prev, next) =>
   && prev.message.content === next.message.content
   && prev.message.status === next.message.status
   && prev.message.thinking === next.message.thinking
+  && prev.onCopy === next.onCopy
+  && prev.onRetry === next.onRetry
   && toolCallsEqual(prev.message.toolCalls, next.message.toolCalls)
 )

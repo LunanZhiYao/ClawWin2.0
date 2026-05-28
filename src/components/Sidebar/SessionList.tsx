@@ -238,11 +238,15 @@ export const SessionList: React.FC<SessionListProps> = ({
           ) : (
             filteredSessions.map((session) => {
               const lastMessage = session.messages?.[session.messages.length - 1]
+              const isActive = session.id === activeSessionId
+              const agent = agents.find(a => a.id === (session.agentId || _defaultAgentId))
+              const agentEmoji = agent ? getAgentEmoji(agent) : null
+              const agentName = agent ? getAgentDisplayName(agent) : '千易'
               
               return (
                 <div
                   key={session.id}
-                  className={`session-item ${session.id === activeSessionId ? 'active' : ''}`}
+                  className={`session-item ${isActive ? 'active' : ''}`}
                   onClick={() => onSelectSession(session.id)}
                   onMouseEnter={(e) => {
                     const deleteBtn = e.currentTarget.querySelector('.btn-delete-session')
@@ -253,24 +257,20 @@ export const SessionList: React.FC<SessionListProps> = ({
                     if (deleteBtn) (deleteBtn as HTMLElement).style.opacity = '0'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '4px' }}>
-                    <div style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
-                      background: session.id === activeSessionId ? 'var(--primary)' : 'var(--bg-hover)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '14px',
-                      fontWeight: 600,
-                      color: session.id === activeSessionId ? 'white' : 'var(--text-primary)',
-                      flexShrink: 0
-                    }}>
-                      💬
+                  <div className="session-item-row">
+                    <div className={`session-item-avatar ${isActive ? 'avatar-visible' : ''}`}>
+                      <img src="../../assets/logo.png" alt="" className="session-avatar-img" />
                     </div>
-                    <div className="session-item-title" style={{ flex: 1, overflow: 'hidden' }}>
-                      {session.title || '新对话'}
+                    <div className="session-item-content">
+                      <div className="session-item-title">
+                        {session.title || '新对话'}
+                      </div>
+                      {isActive && lastMessage && (
+                        <div className="session-item-preview">
+                          {lastMessage.content?.slice(0, 80) || ''}
+                          {lastMessage.content && lastMessage.content.length > 80 ? '...' : ''}
+                        </div>
+                      )}
                     </div>
                     <button
                       className="btn-delete-session"
@@ -283,12 +283,6 @@ export const SessionList: React.FC<SessionListProps> = ({
                       ×
                     </button>
                   </div>
-                  {lastMessage && (
-                    <div className="session-item-preview" style={{ paddingLeft: '44px' }}>
-                      {lastMessage.content?.slice(0, 60) || ''}
-                      {lastMessage.content && lastMessage.content.length > 60 ? '...' : ''}
-                    </div>
-                  )}
                 </div>
               )
             })
