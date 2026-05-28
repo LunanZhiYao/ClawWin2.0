@@ -1057,6 +1057,7 @@ body {
   gap: 6px;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
+  margin-right: 200px;
 }
 
 /* 统一操作按钮样式 */
@@ -1376,18 +1377,18 @@ body {
 .message-row {
   display: flex;
   gap: 12px;
-  max-width: 800px;
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
   animation: subtleIn 0.3s ease-out;
 }
 
 .message-row.user {
   flex-direction: row-reverse;
-  margin-left: auto;
 }
 
 .message-row.assistant {
   flex-direction: row;
-  margin-right: auto;
 }
 
 .message-column {
