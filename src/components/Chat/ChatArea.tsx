@@ -711,7 +711,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
 
         <div className="chat-header-title">
-          {sessionTitle || '新对话'}
+          {(sessionTitle && sessionTitle !== '新对话') ? sessionTitle : '\u00A0'}
         </div>
 
         <div className="chat-header-actions">

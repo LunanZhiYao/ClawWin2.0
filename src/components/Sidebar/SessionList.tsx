@@ -155,19 +155,24 @@ export const SessionList: React.FC<SessionListProps> = ({
 
       {/* Workspace Section */}
       <div className="sidebar-section">工作区</div>
-      
       <div className="sidebar-group">
         <div 
           className="group-header"
           onClick={() => {
-            onSetSidebarView('workspace')
+            onSetSidebarView(sidebarView === 'workspace' ? 'sessions' : 'workspace')
           }}
         >
           <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              {sidebarView === 'workspace' && (
+                <>
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </>
+              )}
             </svg>
-            工作区
+            {sidebarView === 'workspace' ? '隐藏工作区' : '工作区'}
           </span>
         </div>
       </div>
@@ -328,7 +333,7 @@ export const SessionList: React.FC<SessionListProps> = ({
         <div className="user-avatar">{userName ? userName.charAt(0).toUpperCase() : 'U'}</div>
         <div className="user-info">
           <div className="user-name">{userName || '用户'}</div>
-          <div className="user-status">在线</div>
+          {/*<div className="user-status">在线</div>*/}
         </div>
         <button 
           className="footer-action-btn"
