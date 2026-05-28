@@ -36,14 +36,6 @@ function stripLegacyTag(line: string): string {
   return line.replace(/^\[(THINK|TOOL|CTX|OK|ERROR)\]\s*/i, '').trim()
 }
 
-function inferToolKind(toolCall: ChatToolCall): ChatToolCall['kind'] {
-  if (toolCall.kind) return toolCall.kind
-  const normalized = toolCall.name.trim().toLowerCase()
-  if (/(bash|shell|powershell|terminal|cmd)/.test(normalized)) return 'terminal'
-  if (normalized.includes('todo')) return 'todo'
-  return 'default'
-}
-
 function normalizeThinkingText(thinking?: string, keepLegacyToolLines = false): string {
   if (!thinking) return ''
   return thinking
@@ -242,76 +234,87 @@ function ReasoningBlock({ content, isStreaming }: { content: string; isStreaming
   )
 }
 
-function ToolCallBlock({ toolCall, isLastInSequence = true }: { toolCall: ChatToolCall; isLastInSequence?: boolean }) {
+function truncateText(text: string, maxLen = 80): string {
+  if (!text) return ''
+  const oneLine = text.replace(/\n/g, ' ').trim()
+  return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '...' : oneLine
+}
+
+function ToolCallBlock({ toolCall }: { toolCall: ChatToolCall }) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const kind = inferToolKind(toolCall)
   const hasOutput = Boolean(toolCall.output?.trim())
   const hasInput = Boolean(toolCall.input?.trim())
+  const hasLongContent = (toolCall.input && toolCall.input.length > 80) || (toolCall.output && toolCall.output.length > 80)
+
+  const statusText = toolCall.status === 'running' ? '运行中' : toolCall.status === 'error' ? '失败' : '完成'
 
   return (
     <div className={`message-tool-item status-${toolCall.status}`}>
-      {/* 工具间连接线 (LobsterAI 风格) */}
-      {!isLastInSequence && <div className="message-tool-connect-line" />}
-
-      <button className="message-tool-header" onClick={() => setIsExpanded((value) => !value)}>
+      <div className="message-tool-header">
         <span className={`message-tool-dot status-${toolCall.status}`} />
-        <div className="message-tool-head-main">
-          <div className="message-tool-head-row">
-            <span className="message-tool-name">{toolCall.name}</span>
-            {toolCall.summary && <code className="message-tool-summary">{toolCall.summary}</code>}
+        <span className="message-tool-name">{toolCall.name}</span>
+        {toolCall.summary && <code className="message-tool-summary">{toolCall.summary}</code>}
+        <span className="message-tool-status">{statusText}</span>
+      </div>
+
+      <div className="message-tool-subtree">
+        <div className="message-tool-tree-line" />
+        {hasInput && (
+          <div className="message-tool-sub-item">
+            <span className="message-tool-sub-label">·</span>
+            <span className="message-tool-sub-value">输入: {truncateText(toolCall.input!)}</span>
+            {toolCall.input!.length > 80 && (
+              <span className="message-tool-detail-toggle" onClick={() => setIsExpanded(!isExpanded)}>
+                {' >'}
+              </span>
+            )}
           </div>
-          <div className="message-tool-subtitle">
-            {toolCall.status === 'running' ? '运行中…' : toolCall.isError ? '执行失败' : '执行完成'}
+        )}
+        {hasOutput && (
+          <div className="message-tool-sub-item">
+            <span className="message-tool-sub-label">·</span>
+            <span className="message-tool-sub-value">输出: {truncateText(toolCall.output!)}</span>
+            {toolCall.output!.length > 80 && (
+              <span className="message-tool-detail-toggle" onClick={() => setIsExpanded(!isExpanded)}>
+                {' >'}
+              </span>
+            )}
           </div>
-        </div>
-        <ChevronIcon open={isExpanded} />
-      </button>
+        )}
+        {!hasOutput && toolCall.status === 'running' && (
+          <div className="message-tool-sub-item">
+            <span className="message-tool-sub-label">·</span>
+            <span className="message-tool-sub-value">输出: 等待结果…</span>
+          </div>
+        )}
+        {hasLongContent && !isExpanded && (
+          <div className="message-tool-sub-item">
+            <span className="message-tool-sub-label">·</span>
+            <span className="message-tool-detail-toggle" onClick={() => setIsExpanded(true)}>
+              详情 ▸
+            </span>
+          </div>
+        )}
+      </div>
 
       {isExpanded && (
         <div className="message-tool-body">
-          {kind === 'terminal' ? (
-            <div className="message-tool-terminal">
-              <div className="message-tool-terminal-topbar">
-                <span className="message-tool-terminal-light red" />
-                <span className="message-tool-terminal-light yellow" />
-                <span className="message-tool-terminal-light green" />
-                <span className="message-tool-terminal-title">Terminal</span>
-              </div>
-              <div className="message-tool-terminal-content">
-                {hasInput && (
-                  <div className="message-tool-terminal-command">
-                    <span className="message-tool-terminal-prompt">$</span>
-                    <span>{toolCall.input}</span>
-                  </div>
-                )}
-                {hasOutput && (
-                  <pre className={`message-tool-terminal-output${toolCall.isError ? ' is-error' : ''}`}>{toolCall.output}</pre>
-                )}
-                {!hasOutput && toolCall.status === 'running' && (
-                  <div className="message-tool-running-hint">等待结果…</div>
-                )}
-              </div>
+          {hasInput && (
+            <div className="message-tool-section">
+              <div className="message-tool-label">输入</div>
+              <pre className="message-tool-pre">{toolCall.input}</pre>
             </div>
-          ) : (
-            <div className="message-tool-sections">
-              {hasInput && (
-                <div className="message-tool-section">
-                  <div className="message-tool-label">输入</div>
-                  <pre className="message-tool-pre">{toolCall.input}</pre>
-                </div>
-              )}
-              {hasOutput && (
-                <div className="message-tool-section">
-                  <div className="message-tool-label">输出</div>
-                  <pre className={`message-tool-pre${toolCall.isError ? ' is-error' : ''}`}>{toolCall.output}</pre>
-                </div>
-              )}
-              {!hasOutput && toolCall.status === 'running' && (
-                <div className="message-tool-section">
-                  <div className="message-tool-label">输出</div>
-                  <pre className="message-tool-pre">等待结果…</pre>
-                </div>
-              )}
+          )}
+          {hasOutput && (
+            <div className="message-tool-section">
+              <div className="message-tool-label">输出</div>
+              <pre className={`message-tool-pre${toolCall.isError ? ' is-error' : ''}`}>{toolCall.output}</pre>
+            </div>
+          )}
+          {!hasOutput && toolCall.status === 'running' && (
+            <div className="message-tool-section">
+              <div className="message-tool-label">输出</div>
+              <pre className="message-tool-pre">等待结果…</pre>
             </div>
           )}
         </div>
@@ -431,13 +434,11 @@ const TaskStatusExpanded: React.FC<{ toolCalls: ChatToolCall[] }> = ({ toolCalls
   if (toolCalls.length === 0) return null
   return (
     <div className="task-status-expanded">
-      <div className="task-status-expanded-header">过程列表</div>
       <div className="task-status-expanded-content">
-        {toolCalls.map((toolCall, index) => (
+        {toolCalls.map((toolCall) => (
           <ToolCallBlock
             key={toolCall.id}
             toolCall={toolCall}
-            isLastInSequence={index === toolCalls.length - 1}
           />
         ))}
       </div>

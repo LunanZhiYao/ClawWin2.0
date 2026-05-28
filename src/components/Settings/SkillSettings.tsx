@@ -3,7 +3,7 @@ import type { SkillInfo, SkillEntryConfig } from '../../types'
 import { SKILL_CN } from '../../constants/skillCn'
 
 interface SkillSettingsProps {
-  onClose: () => void
+  onBack?: () => void
 }
 
 type TabKey = 'enabled' | 'all' | 'recommended' | 'local' | 'store'
@@ -84,7 +84,7 @@ function getSkillTags(skill: SkillInfo): string[] {
   return tags
 }
 
-export function SkillSettings({ onClose }: SkillSettingsProps) {
+export function SkillSettings({ onBack }: SkillSettingsProps) {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -99,7 +99,7 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
   const [storeSkills, setStoreSkills] = useState<WebSkillItem[]>([])
   const [storeLoading, setStoreLoading] = useState(false)
   const [storePage, setStorePage] = useState(0)
-  const [storeSize] = useState(20)
+  const [storeSize] = useState(24)
   const [storeTotal, setStoreTotal] = useState(0)
   const [storeDownloading, setStoreDownloading] = useState<Record<string, boolean>>({})
   const [storeInstalledMap, setStoreInstalledMap] = useState<Record<string, string>>({})
@@ -277,7 +277,7 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
       if (result.ok) {
         setStatus({ type: 'success', message: '技能配置已保存，正在重启服务...' })
         await window.electronAPI.gateway.restart()
-        onClose()
+        onBack?.()
       } else {
         setStatus({ type: 'error', message: result.error ?? '保存失败' })
       }
@@ -286,7 +286,7 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
     } finally {
       setSaving(false)
     }
-  }, [skills, onClose])
+  }, [skills, onBack])
 
   const handleOpenFolder = useCallback(async () => {
     try {
@@ -479,8 +479,17 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
 
   const panelContent = (
     <>
-      <div className="settings-header" style={{ position: 'relative' }}>
+      <div className="settings-header">
         <h2>技能管理</h2>
+        <button className="settings-close" onClick={() => onBack?.()}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="settings-body">
         <div className="skill-tabs">
           {TABS.map(t => (
             <button
@@ -498,17 +507,13 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
             </button>
           ))}
         </div>
-        <button className="settings-close" onClick={onClose}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
-      <div className="settings-body">
-        {/* search */}
         <div className="skill-search">
+          <span className="skill-search-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </span>
           <input
             type="text"
             className="input-field"
@@ -733,7 +738,6 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
           )}
         </div>
 
-        {/* status */}
         {status && (
           <div style={{ padding: '0 28px' }}>
             <div className={`channel-settings-status ${status.type}`}>
@@ -741,22 +745,22 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
             </div>
           </div>
         )}
+      </div>
 
-        {/* footer */}
-        <div className="skill-settings-footer">
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-secondary" onClick={handleOpenFolder}>
-              📂 打开技能文件夹
-            </button>
-          </div>
-          <button
-            className="btn-primary"
-            onClick={handleSave}
-            disabled={saving}
-          >
-            {saving ? '应用中...' : '应用新技能'}
-          </button>
-        </div>
+      <div className="skill-settings-footer">
+        <button className="btn-secondary" onClick={handleOpenFolder}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          打开技能文件夹
+        </button>
+        <button
+          className="btn-primary"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? '应用中...' : '✨ 应用新技能'}
+        </button>
       </div>
       {skillToDelete && (
         <div className="session-delete-confirm-overlay">
@@ -793,28 +797,26 @@ export function SkillSettings({ onClose }: SkillSettingsProps) {
   )
 
   return (
-    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
-      <div className="settings-panel-skills" onClick={e => e.stopPropagation()}>
-        {loading ? (
-          <>
-            <div className="settings-header">
-              <h2>技能管理</h2>
-              <button className="settings-close" onClick={onClose}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
+    <div className="page-panel">
+      {loading ? (
+        <>
+          <div className="settings-header">
+            <h2>技能管理</h2>
+            <button className="settings-close" onClick={() => onBack?.()}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+          <div className="settings-body">
+            <div className="skill-loading-container">
+              <div className="skill-loading-bar" />
+              <span className="skill-loading-text">正在扫描技能目录...</span>
             </div>
-            <div className="settings-body">
-              <div className="skill-loading-container">
-                <div className="skill-loading-bar" />
-                <span className="skill-loading-text">正在扫描技能目录...</span>
-              </div>
-            </div>
-          </>
-        ) : panelContent}
-      </div>
+          </div>
+        </>
+      ) : panelContent}
     </div>
   )
 }

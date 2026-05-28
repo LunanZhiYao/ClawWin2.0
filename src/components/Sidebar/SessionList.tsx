@@ -7,14 +7,15 @@ interface SessionListProps {
   agents: AgentInfo[]
   defaultAgentId: string
   userName?: string
+  sidebarView: 'sessions' | 'workspace' | 'skills' | 'cron'
+  unreadSessionIds: Set<string>
   onSelectSession: (id: string) => void
   onNewSession: (agentId?: string) => void
   onDeleteSession: (id: string) => void
   onRestartGateway: () => void
-  onOpenCronManager?: () => void
-  onOpenSkills?: () => void
+  onSetSidebarView: (view: 'sessions' | 'workspace' | 'skills' | 'cron') => void
   onOpenSettings?: () => void
-  onOpenWorkspace?: () => void
+  onRenameSession: (id: string, title: string) => void
 }
 
 function getAgentDisplayName(agent: AgentInfo): string {
@@ -35,15 +36,17 @@ export const SessionList: React.FC<SessionListProps> = ({
   onNewSession,
   onDeleteSession,
   onRestartGateway,
-  onOpenCronManager,
-  onOpenSkills,
+  sidebarView,
+  unreadSessionIds,
+  onSetSidebarView,
   onOpenSettings,
-  onOpenWorkspace,
+  onRenameSession,
 }) => {
   const [showPicker, setShowPicker] = useState(false)
   const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [activeNav, setActiveNav] = useState('chat')
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
   const pickerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -109,9 +112,9 @@ export const SessionList: React.FC<SessionListProps> = ({
       {/* Navigation */}
       <nav className="sidebar-nav">
         <div
-          className={`nav-item ${activeNav === 'chat' ? 'active' : ''}`}
+          className={`nav-item ${sidebarView === 'sessions' ? 'active' : ''}`}
           onClick={() => {
-            setActiveNav('chat')
+            onSetSidebarView('sessions')
             handleNewClick()
           }}
         >
@@ -123,10 +126,9 @@ export const SessionList: React.FC<SessionListProps> = ({
           新建对话
         </div>
         <div
-          className={`nav-item ${activeNav === 'tasks' ? 'active' : ''}`}
+          className={`nav-item ${sidebarView === 'cron' ? 'active' : ''}`}
           onClick={() => {
-            setActiveNav('tasks')
-            onOpenCronManager?.()
+            onSetSidebarView('cron')
           }}
         >
           <span className="nav-item-icon">
@@ -137,10 +139,9 @@ export const SessionList: React.FC<SessionListProps> = ({
           自动任务
         </div>
         <div
-          className={`nav-item ${activeNav === 'skills' ? 'active' : ''}`}
+          className={`nav-item ${sidebarView === 'skills' ? 'active' : ''}`}
           onClick={() => {
-            setActiveNav('skills')
-            onOpenSkills?.()
+            onSetSidebarView('skills')
           }}
         >
           <span className="nav-item-icon">
@@ -159,7 +160,7 @@ export const SessionList: React.FC<SessionListProps> = ({
         <div 
           className="group-header"
           onClick={() => {
-            onOpenWorkspace?.()
+            onSetSidebarView('workspace')
           }}
         >
           <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -239,15 +240,16 @@ export const SessionList: React.FC<SessionListProps> = ({
             filteredSessions.map((session) => {
               const lastMessage = session.messages?.[session.messages.length - 1]
               const isActive = session.id === activeSessionId
-              const agent = agents.find(a => a.id === (session.agentId || _defaultAgentId))
-              const agentEmoji = agent ? getAgentEmoji(agent) : null
-              const agentName = agent ? getAgentDisplayName(agent) : '千易'
+              const isUnread = unreadSessionIds.has(session.id)
               
               return (
                 <div
                   key={session.id}
-                  className={`session-item ${isActive ? 'active' : ''}`}
-                  onClick={() => onSelectSession(session.id)}
+                  className={`session-item ${isActive ? 'active' : ''} ${isUnread ? 'session-unread' : ''}`}
+                  onClick={() => {
+                    onSetSidebarView('sessions')
+                    onSelectSession(session.id)
+                  }}
                   onMouseEnter={(e) => {
                     const deleteBtn = e.currentTarget.querySelector('.btn-delete-session')
                     if (deleteBtn) (deleteBtn as HTMLElement).style.opacity = '1'
@@ -262,8 +264,39 @@ export const SessionList: React.FC<SessionListProps> = ({
                       <img src="../../assets/logo.png" alt="" className="session-avatar-img" />
                     </div>
                     <div className="session-item-content">
-                      <div className="session-item-title">
-                        {session.title || '新对话'}
+                      <div className="session-item-title" onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        setRenamingSessionId(session.id)
+                        setRenameValue(session.title || '')
+                      }}>
+                        {renamingSessionId === session.id ? (
+                          <input
+                            className="session-rename-input"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const trimmed = renameValue.trim()
+                                if (trimmed) onRenameSession(session.id, trimmed)
+                                setRenamingSessionId(null)
+                              } else if (e.key === 'Escape') {
+                                setRenamingSessionId(null)
+                              }
+                            }}
+                            onBlur={() => {
+                              const trimmed = renameValue.trim()
+                              if (trimmed) onRenameSession(session.id, trimmed)
+                              setRenamingSessionId(null)
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            autoFocus
+                          />
+                        ) : (
+                          <>
+                            {session.title || '新对话'}
+                            {isUnread && <span className="session-unread-dot" />}
+                          </>
+                        )}
                       </div>
                       {isActive && lastMessage && (
                         <div className="session-item-preview">

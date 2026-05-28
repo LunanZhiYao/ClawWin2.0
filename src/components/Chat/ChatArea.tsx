@@ -428,7 +428,8 @@ interface ChatAreaProps {
   onSwitchModel: (modelKey: string) => void
   contextUsageTotal: number
   contextWindow: number
-  sidebarView: string  // 工作区展开状态
+  sidebarView: string
+  sessionTitle?: string
 }
 
 function getAgentDisplayName(agent: AgentInfo): string {
@@ -474,7 +475,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSwitchModel,
   contextUsageTotal,
   contextWindow,
-  sidebarView,  // 工作区展开状态
+  sidebarView,
+  sessionTitle,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
@@ -695,7 +697,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
 
         <div className="chat-header-title">
-          与{getHeaderAgentLabel(selectedAgent) || '千易'}的对话
+          {sessionTitle || '新对话'}
         </div>
 
         <div className="chat-header-actions">

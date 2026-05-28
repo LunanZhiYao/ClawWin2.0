@@ -7,7 +7,7 @@ import type { GatewayClient } from '../../lib/gateway-protocol'
 interface CronManagerProps {
   client: GatewayClient | null
   connected: boolean
-  onClose: () => void
+  onBack?: () => void
 }
 
 type ScheduleKind = 'cron' | 'at' | 'every'
@@ -685,7 +685,7 @@ function CronJobCard({ job, onToggle, onEdit, onDelete, onRun }: CronJobCardProp
 
 /* ─── CronManager (main export) ─── */
 
-export function CronManager({ client, connected, onClose }: CronManagerProps) {
+export function CronManager({ client, connected, onBack }: CronManagerProps) {
   const cron = useCron({ client, connected })
   const [showForm, setShowForm] = useState(false)
   const [editingJob, setEditingJob] = useState<CronJob | null>(null)
@@ -751,98 +751,96 @@ export function CronManager({ client, connected, onClose }: CronManagerProps) {
   }, [cron])
 
   return (
-    <div className="settings-overlay" onClick={(e) => e.stopPropagation()}>
-      <div className="settings-panel-wide" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-header">
-          <h2>定时任务</h2>
-          <button className="settings-close" onClick={onClose}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
+    <div className="page-panel">
+      <div className="settings-header">
+        <h2>定时任务</h2>
+        <button className="settings-close" onClick={() => onBack?.()}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
 
-        <div className="settings-body">
-          {/* Not connected state */}
-          {!connected && (
-            <div className="cron-disconnected">
-              <div className="cron-disconnected-icon">&#x1F50C;</div>
-              <div className="cron-empty-text">网关未连接</div>
-              <div className="cron-empty-hint">请先启动网关服务后再管理定时任务</div>
-            </div>
-          )}
+      <div className="settings-body">
+        {/* Not connected state */}
+        {!connected && (
+          <div className="cron-disconnected">
+            <div className="cron-disconnected-icon">&#x1F50C;</div>
+            <div className="cron-empty-text">网关未连接</div>
+            <div className="cron-empty-hint">请先启动网关服务后再管理定时任务</div>
+          </div>
+        )}
 
-          {/* Connected: show toolbar + content */}
-          {connected && (
-            <>
-              {/* Toolbar */}
-              <div className="cron-toolbar">
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <button className="btn-primary" onClick={handleAdd}>
-                    新建任务
-                  </button>
-                  <button className="btn-secondary" onClick={() => cron.fetchJobs()}>
-                    刷新
-                  </button>
-                </div>
-                <div className="cron-toolbar-stats">
-                  <span>{cron.jobs.length} 个任务</span>
-                  {cron.runningCount > 0 && (
-                    <span className="cron-toolbar-running">{cron.runningCount} 运行中</span>
-                  )}
-                </div>
+        {/* Connected: show toolbar + content */}
+        {connected && (
+          <>
+            {/* Toolbar */}
+            <div className="cron-toolbar">
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn-primary" onClick={handleAdd}>
+                  新建任务
+                </button>
+                <button className="btn-secondary" onClick={() => cron.fetchJobs()}>
+                  刷新
+                </button>
               </div>
+              <div className="cron-toolbar-stats">
+                <span>{cron.jobs.length} 个任务</span>
+                {cron.runningCount > 0 && (
+                  <span className="cron-toolbar-running">{cron.runningCount} 运行中</span>
+                )}
+              </div>
+            </div>
 
-              {/* Error display */}
-              {cron.error && (
-                <div className="cron-error">
-                  {cron.error}
-                </div>
-              )}
+            {/* Error display */}
+            {cron.error && (
+              <div className="cron-error">
+                {cron.error}
+              </div>
+            )}
 
-              {/* Success display */}
-              {successMsg && (
-                <div className="cron-success">
-                  {successMsg}
-                </div>
-              )}
+            {/* Success display */}
+            {successMsg && (
+              <div className="cron-success">
+                {successMsg}
+              </div>
+            )}
 
-              {/* Loading spinner */}
-              {cron.loading && (
-                <div className="cron-empty">
-                  <div className="loading-spinner" style={{ width: 32, height: 32 }} />
-                  <div style={{ marginTop: 12 }}>加载中...</div>
-                </div>
-              )}
+            {/* Loading spinner */}
+            {cron.loading && (
+              <div className="cron-empty">
+                <div className="loading-spinner" style={{ width: 32, height: 32 }} />
+                <div style={{ marginTop: 12 }}>加载中...</div>
+              </div>
+            )}
 
-              {/* Job list */}
-              {!cron.loading && cron.jobs.length > 0 && (
-                <div className="cron-job-list">
-                  {cron.jobs.map((job) => (
-                    <CronJobCard
-                      key={job.id}
-                      job={job}
-                      onToggle={handleToggle}
-                      onEdit={handleEdit}
-                      onDelete={handleDelete}
-                      onRun={handleRun}
-                    />
-                  ))}
-                </div>
-              )}
+            {/* Job list */}
+            {!cron.loading && cron.jobs.length > 0 && (
+              <div className="cron-job-list">
+                {cron.jobs.map((job) => (
+                  <CronJobCard
+                    key={job.id}
+                    job={job}
+                    onToggle={handleToggle}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                    onRun={handleRun}
+                  />
+                ))}
+              </div>
+            )}
 
-              {/* Empty state */}
-              {!cron.loading && cron.jobs.length === 0 && !cron.error && (
-                <div className="cron-empty">
-                  <div className="cron-empty-icon">&#x23F0;</div>
-                  <div className="cron-empty-text">暂无定时任务</div>
-                  <div className="cron-empty-hint">点击"新建任务"创建你的第一个定时任务</div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+            {/* Empty state */}
+            {!cron.loading && cron.jobs.length === 0 && !cron.error && (
+              <div className="cron-empty">
+                <div className="cron-empty-icon">&#x23F0;</div>
+                <div className="cron-empty-text">暂无定时任务</div>
+                <div className="cron-empty-hint">点击"新建任务"创建你的第一个定时任务</div>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Modal form for add/edit */}

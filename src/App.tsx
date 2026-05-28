@@ -159,10 +159,8 @@ function App() {
   const [showSetup, setShowSetup] = useState(false)
   const [isWaiting, setIsWaiting] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [showSkills, setShowSkills] = useState(false)
   const [showModelSettings, setShowModelSettings] = useState(false)
   const [showChannelSettings, setShowChannelSettings] = useState(false)
-  const [showCronManager, setShowCronManager] = useState(false)
   const [settingsWorkspace, setSettingsWorkspace] = useState(setup.config.workspace ?? '~/qianyi')
   const [responseTimeout, setResponseTimeout] = useState(900000)
   const [timeoutEnabled, setTimeoutEnabled] = useState(false)
@@ -179,7 +177,10 @@ function App() {
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [showUserCenter, setShowUserCenter] = useState(false)
   const [leftPanelsCollapsed, setLeftPanelsCollapsed] = useState(false)
-  const [sidebarView, setSidebarView] = useState<'sessions' | 'workspace'>('sessions')
+  const [sidebarView, setSidebarView] = useState<'sessions' | 'workspace' | 'skills' | 'cron'>('sessions')
+  const sidebarViewRef = useRef(sidebarView)
+  sidebarViewRef.current = sidebarView
+  const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(new Set())
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([])
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
@@ -738,6 +739,14 @@ function App() {
       }
       markUserMessageComplete(sid, userMessageId)
 
+      // 任务完成或中断时标记未读
+      if (msg.role === 'assistant' && (msg.status === 'done' || msg.status === 'error')) {
+        setUnreadSessionIds((prev) => {
+          if (prev.has(sid)) return prev
+          return new Set(prev).add(sid)
+        })
+      }
+
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sid) return s
@@ -1055,6 +1064,17 @@ function App() {
       prev.map((s) => s.id === activeSessionId ? { ...s, agentId, updatedAt: Date.now() } : s)
     )
   }, [activeSessionId])
+
+  // 选中会话时清除未读标记
+  const handleSelectSession = useCallback((id: string) => {
+    setActiveSessionId(id)
+    setUnreadSessionIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
 
   // Session management
   const createSession = useCallback((agentId?: string) => {
@@ -1467,7 +1487,7 @@ function App() {
                 <span className="system-icon-label">大模型</span>
               </div> */}
 
-              <div className="system-icon-item" style={{animationDelay: '0.10s'}} onClick={() => setShowCronManager(true)}>
+              <div className="system-icon-item" style={{animationDelay: '0.10s'}} onClick={() => setSidebarView(sidebarView === 'cron' ? 'sessions' : 'cron')}>
                 <div className="system-icon-circle">
                   <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="9" />
@@ -1476,7 +1496,7 @@ function App() {
                 </div>
                 <span className="system-icon-label">定时任务</span>
               </div>
-              <div className="system-icon-item" style={{animationDelay: '0.15s'}} onClick={() => setShowSkills(true)}>
+              <div className="system-icon-item" style={{animationDelay: '0.15s'}} onClick={() => setSidebarView(sidebarView === 'skills' ? 'sessions' : 'skills')}>
                 <div className="system-icon-circle">
                   <svg className="system-icon-svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14.5 6.5a2.5 2.5 0 0 0-5 0v3h-3a2.5 2.5 0 0 0 0 5h3v3a2.5 2.5 0 0 0 5 0v-3h3a2.5 2.5 0 0 0 0-5h-3z" />
@@ -1503,39 +1523,60 @@ function App() {
                 agents={ws.agents}
                 defaultAgentId={ws.defaultAgentId}
                 userName={currentUser?.name}
-                onSelectSession={setActiveSessionId}
+                sidebarView={sidebarView}
+                unreadSessionIds={unreadSessionIds}
+                onSelectSession={handleSelectSession}
                 onNewSession={createSession}
                 onDeleteSession={deleteSession}
                 onRestartGateway={() => restartGateway()}
-                onOpenCronManager={() => setShowCronManager(true)}
-                onOpenSkills={() => setShowSkills(true)}
+                onSetSidebarView={setSidebarView}
                 onOpenSettings={() => setShowSettings(true)}
-                onOpenWorkspace={() => setSidebarView('workspace')}
+                onRenameSession={(id, title) => { setSessions(prev => prev.map(s => s.id === id ? { ...s, title } : s)) }}
               />
             </div>
           </div>
-          <div className="main-content">
-            <ChatArea
-              messages={activeSession?.messages ?? []}
-              onSend={handleSend}
-              gatewayState={gateway.state}
-              backendStatus={ws.backendStatus}
-              isWaiting={isWaiting}
-              gatewayPort={gateway.port}
-              onStop={handleStop}
-              isStreaming={ws.isStreaming}
-              agents={ws.agents}
-              currentAgentId={activeSession?.agentId}
-              defaultAgentId={ws.defaultAgentId}
-              onChangeAgent={handleChangeAgent}
-              onRestartGateway={() => restartGateway()}
-              availableModels={availableModels}
-              currentModelKey={currentModelKey}
-              onSwitchModel={handleSwitchModel}
-              contextUsageTotal={currentUsageTotal}
-              contextWindow={currentContextWindow}
-              sidebarView={sidebarView}
-            />
+          <div className="main-content" onClick={() => {
+            if (activeSessionId) {
+              setUnreadSessionIds((prev) => {
+                if (!prev.has(activeSessionId)) return prev
+                const next = new Set(prev)
+                next.delete(activeSessionId)
+                return next
+              })
+            }
+          }}>
+            {sidebarView === 'skills' ? (
+              <SkillSettings onBack={() => setSidebarView('sessions')} />
+            ) : sidebarView === 'cron' ? (
+              <CronManager
+                client={ws.client}
+                connected={ws.connected}
+                onBack={() => setSidebarView('sessions')}
+              />
+            ) : (
+              <ChatArea
+                messages={activeSession?.messages ?? []}
+                onSend={handleSend}
+                gatewayState={gateway.state}
+                backendStatus={ws.backendStatus}
+                isWaiting={isWaiting}
+                gatewayPort={gateway.port}
+                onStop={handleStop}
+                isStreaming={ws.isStreaming}
+                agents={ws.agents}
+                currentAgentId={activeSession?.agentId}
+                defaultAgentId={ws.defaultAgentId}
+                onChangeAgent={handleChangeAgent}
+                onRestartGateway={() => restartGateway()}
+                availableModels={availableModels}
+                currentModelKey={currentModelKey}
+                onSwitchModel={handleSwitchModel}
+                contextUsageTotal={currentUsageTotal}
+                contextWindow={currentContextWindow}
+                sidebarView={sidebarView}
+                sessionTitle={activeSession?.title}
+              />
+            )}
           </div>
           {sidebarView === 'workspace' && (
             <div className="right-sidebar-panel">
@@ -1788,12 +1829,6 @@ function App() {
         </div>
       )}
 
-      {showSkills && (
-        <SkillSettings
-          onClose={() => setShowSkills(false)}
-        />
-      )}
-
       {showModelSettings && (
         <ModelSettings
           currentProvider={setup.config.provider}
@@ -1840,14 +1875,6 @@ function App() {
             restartGateway().catch((err) => console.error('gateway restart failed:', err))
           }}
           gatewayClient={ws.client}
-        />
-      )}
-
-      {showCronManager && (
-        <CronManager
-          client={ws.client}
-          connected={ws.connected}
-          onClose={() => setShowCronManager(false)}
         />
       )}
 
