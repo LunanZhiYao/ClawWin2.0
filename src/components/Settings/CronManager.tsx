@@ -685,7 +685,7 @@ function CronJobCard({ job, onToggle, onEdit, onDelete, onRun }: CronJobCardProp
 
 /* ─── CronManager (main export) ─── */
 
-export function CronManager({ client, connected, onBack }: CronManagerProps) {
+export function CronManager({ client, connected }: CronManagerProps) {
   const cron = useCron({ client, connected })
   const [showForm, setShowForm] = useState(false)
   const [editingJob, setEditingJob] = useState<CronJob | null>(null)
@@ -754,12 +754,7 @@ export function CronManager({ client, connected, onBack }: CronManagerProps) {
     <div className="page-panel">
       <div className="settings-header">
         <h2>定时任务</h2>
-        <button className="settings-close" onClick={() => onBack?.()}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
+        <div style={{ width: '32px' }}></div>
       </div>
 
       <div className="settings-body">

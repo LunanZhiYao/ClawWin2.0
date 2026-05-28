@@ -19,6 +19,7 @@ import { CustomSelect } from './components/Common/CustomSelect'
 import { QRCodeLogin } from './components/Login/QRCodeLogin'
 import { LoginStatus } from './components/Login/LoginStatus'
 import { fetchMeSession, type MeSessionResult } from './api/auth'
+import { fetchWelcomePage, type WelcomeTab } from './api/welcome'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, type SetupStep } from './hooks/useSetup'
@@ -185,6 +186,7 @@ function App() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [agentWorkspaceMap, setAgentWorkspaceMap] = useState<Record<string, string>>({})
+  const [welcomeTabs, setWelcomeTabs] = useState<WelcomeTab[]>([])
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const timeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1277,6 +1279,27 @@ function App() {
     }
   }, [gateway.state, splashActive, splashDismissed])
 
+  // 应用启动时获取欢迎页配置（仅调用一次）
+  useEffect(() => {
+    const loadWelcomeConfig = async () => {
+      try {
+        const serverUrl = import.meta.env.VITE_EXPORT_API_BASE_URL || 'http://localhost:8000/api/v1'
+        console.log('[欢迎页] 开始加载配置，服务器地址:', serverUrl)
+        const tabs = await fetchWelcomePage(serverUrl)
+        console.log('[欢迎页] 获取到的配置:', tabs)
+        if (tabs && tabs.length > 0) {
+          console.log('[欢迎页] 设置欢迎页选项卡，数量:', tabs.length)
+          setWelcomeTabs(tabs)
+        } else {
+          console.log('[欢迎页] 未获取到配置或配置为空')
+        }
+      } catch (error) {
+        console.error('[欢迎页] 加载配置失败:', error)
+      }
+    }
+    loadWelcomeConfig()
+  }, [])
+
   // 视频启动屏：激活后直到dismiss前一直显示
   const showVideoSplash = splashActive && !splashDismissed
 
@@ -1575,6 +1598,7 @@ function App() {
                 contextWindow={currentContextWindow}
                 sidebarView={sidebarView}
                 sessionTitle={activeSession?.title}
+                welcomeTabs={welcomeTabs}
               />
             )}
           </div>

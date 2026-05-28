@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
 import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel } from '../../types'
+import { type WelcomeTab } from '../../api/welcome'
 
 // 完整版底部输入框组件 - 整合所有功能
 interface BottomInputProps {
@@ -430,6 +431,7 @@ interface ChatAreaProps {
   contextWindow: number
   sidebarView: string
   sessionTitle?: string
+  welcomeTabs?: WelcomeTab[]
 }
 
 function getAgentDisplayName(agent: AgentInfo): string {
@@ -477,6 +479,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   contextWindow,
   sidebarView,
   sessionTitle,
+  welcomeTabs: propWelcomeTabs,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
@@ -492,19 +495,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showAgentPicker, setShowAgentPicker] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [retryInput, setRetryInput] = useState<string | null>(null)
+  const [activeTabIndex, setActiveTabIndex] = useState(0)
+  const [showCards, setShowCards] = useState(false)
+  const [welcomeInput, setWelcomeInput] = useState('')
+  const welcomeTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
   const hasStreamingMessage = messages.some((msg) => msg.status === 'streaming')
   const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
   // 显示口径与自动压缩阈值体验保持一致：不提前四舍五入进位。
-  // 例如 49.6% 不应显示成 50%，否则用户会误以为“到 50% 还没触发自动压缩”。
+  // 例如 49.6% 不应显示成 50%，否则用户会误以为"到 50% 还没触发自动压缩"。
   const usagePercent = Math.floor(usageRate * 100)
   const usageTotalLabel = formatTokensShort(contextUsageTotal)
   const contextWindowLabel = formatTokensShort(contextWindow)
   const ringRadius = 10
   const ringCircumference = 2 * Math.PI * ringRadius
   const ringOffset = ringCircumference * (1 - usageRate)
+
+  // 根据props初始化欢迎页配置
+  useEffect(() => {
+    if (propWelcomeTabs && propWelcomeTabs.length > 0) {
+      setShowCards(true)
+    }
+  }, [propWelcomeTabs])
 
   useEffect(() => {
     if (!showAgentPicker) return
@@ -784,162 +798,190 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       </div>
 
-      <div className="chat-messages-wrapper">
-        <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
-          {messages.length === 0 ? (
-            <div className="welcome-screen">
-              <div className="welcome-content">
-                <img src="/assets/logo.png" alt="鲁南千易" className="welcome-avatar" />
-                <div className="welcome-info">
-                  <div className="welcome-name">鲁南千易</div>
-                  <div className="welcome-desc">👋 千易 为你24小时随时在线</div>
-                </div>
-              </div>
-              <div className="welcome-input-container">
-                <input
-                  type="file"
-                  ref={undefined}
-                  id="welcome-file-input"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files.length > 0) {
-                      const file = e.target.files[0]
-                      const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
-                      if (input) {
-                        const fileName = file.name
-                        input.value = input.value ? `${input.value}\n${fileName}` : fileName
+      {messages.length === 0 ? (
+        <div className="welcome-screen">
+          <div className="welcome-content">
+            <img src="/assets/logo.png" alt="鲁南千易" className="welcome-avatar" />
+            <div className="welcome-info">
+              <div className="welcome-name">鲁南千易</div>
+              <div className="welcome-desc">👋 千易 为你24小时随时在线</div>
+            </div>
+          </div>
+          <div className="welcome-input-container">
+            <input
+              type="file"
+              ref={undefined}
+              id="welcome-file-input"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  const file = e.target.files[0]
+                  if (file) {
+                    const fileName = file.name
+                    setWelcomeInput(prev => prev ? `${prev}\n${fileName}` : fileName)
+                  }
+                }
+                e.target.value = ''
+              }}
+            />
+            <div className="welcome-input-wrapper">
+              <textarea
+                ref={welcomeTextareaRef}
+                className="welcome-input"
+                value={welcomeInput}
+                onChange={(e) => setWelcomeInput(e.target.value)}
+                placeholder="请输入任务，交给我来帮你完成"
+                disabled={disabled || !isReady}
+              />
+              <div className="welcome-input-actions">
+                <div className="welcome-input-left">
+                  <button
+                    className="attach-btn"
+                    title="选择文件"
+                    onClick={() => {
+                      const fileInput = document.getElementById('welcome-file-input') as HTMLInputElement
+                      fileInput?.click()
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                    </svg>
+                  </button>
+                  <button
+                    className="attach-btn"
+                    title="挂载文件夹"
+                    onClick={async () => {
+                      const folderPath = await window.electronAPI.dialog.selectFolder()
+                      if (folderPath) {
+                        const folderName = folderPath.split(/[\\/]/).pop() || folderPath
+                        setWelcomeInput(prev => prev ? `${prev}\n${folderName}` : folderName)
                       }
-                    }
-                    e.target.value = ''
-                  }}
-                />
-                <div className="welcome-input-wrapper">
-                  <textarea
-                    className="welcome-input"
-                    placeholder="请输入任务，交给我来帮你完成"
-                    disabled={disabled || !isReady}
-                    rows={3}
-                  />
-                  <div className="welcome-input-actions">
-                    <div className="welcome-input-left">
-                      <button
-                        className="attach-btn"
-                        title="选择文件"
-                        onClick={() => {
-                          const fileInput = document.getElementById('welcome-file-input') as HTMLInputElement
-                          fileInput?.click()
-                        }}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
-                        </svg>
-                      </button>
-                      <button
-                        className="attach-btn"
-                        title="挂载文件夹"
-                        onClick={async () => {
-                          const folderPath = await window.electronAPI.dialog.selectFolder()
-                          if (folderPath) {
-                            const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
-                            if (input) {
-                              const folderName = folderPath.split(/[\\/]/).pop() || folderPath
-                              input.value = input.value ? `${input.value}\n${folderName}` : folderName
-                            }
-                          }
-                        }}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
-                        </svg>
-                      </button>
-                      <button
-                        className="attach-btn"
-                        title="引用技能"
-                        onClick={() => {
-                          const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
-                          if (input) {
-                            input.value = input.value ? `${input.value}\n@` : '@'
-                            input.focus()
-                          }
-                        }}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="12" cy="12" r="4"></circle>
-                          <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
-                        </svg>
-                      </button>
-                    </div>
-                    <button
-                      className="welcome-send-btn"
-                      disabled={disabled || !isReady}
-                      onClick={() => {
-                        const input = document.querySelector('.welcome-screen .welcome-input') as HTMLTextAreaElement
-                        if (input?.value.trim()) {
-                          onSend(input.value.trim())
-                          input.value = ''
-                        }
-                      }}
-                    >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="22" y1="2" x2="11" y2="13"></line>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                      </svg>
-                    </button>
-                  </div>
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
+                    </svg>
+                  </button>
+                  <button
+                    className="attach-btn"
+                    title="引用技能"
+                    onClick={() => {
+                      setWelcomeInput(prev => prev ? `${prev}\n@` : '@')
+                      setTimeout(() => welcomeTextareaRef.current?.focus(), 0)
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="4"></circle>
+                      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
+                    </svg>
+                  </button>
                 </div>
+                <button
+                  className="welcome-send-btn"
+                  disabled={disabled || !isReady}
+                  onClick={() => {
+                    if (welcomeInput.trim()) {
+                      onSend(welcomeInput.trim())
+                      setWelcomeInput('')
+                    }
+                  }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                  </svg>
+                </button>
               </div>
             </div>
-          ) : (
-            <>
-              {messages
-                .filter((msg) => msg.content || msg.thinking || msg.toolCalls?.length || msg.status === 'streaming' || msg.status === 'queued' || msg.status === 'error' || msg.attachments?.length)
-                .map((msg) => (
-                  <MessageBubble
-                    key={msg.id}
-                    message={msg}
-                    onCopy={() => handleCopy(msg.content)}
-                    onRetry={msg.role === 'user' ? () => setRetryInput(msg.content) : undefined}
-                  />
+          </div>
+          {showCards && propWelcomeTabs && propWelcomeTabs.length > 0 && (
+            <div className="welcome-cards-section">
+              <div className="recommend-tabs">
+                {propWelcomeTabs.map((tab, index) => (
+                  <button
+                    key={tab.id}
+                    className={`recommend-tab ${index === activeTabIndex ? 'active' : ''}`}
+                    onClick={() => setActiveTabIndex(index)}
+                  >
+                    {tab.tab_name}
+                  </button>
                 ))}
-              {isWaiting && !isStreaming && !hasStreamingMessage && (
-                <div className="message-bubble message-assistant message-bubble-waiting">
-                  <div className="message-body">
-                    <div className="message-content message-content-assistant">
-                      <div className="typing-dots">
-                        <span className="typing-dot" />
-                        <span className="typing-dot" />
-                        <span className="typing-dot" />
-                      </div>
+              </div>
+              <div className="recommend-grid">
+                {propWelcomeTabs[activeTabIndex]?.cards.slice(0, 6).map((card) => (
+                  <div
+                    key={card.id}
+                    className="recommend-card"
+                    onClick={() => {
+                      if (card.prompt) {
+                        setWelcomeInput(card.prompt)
+                        setTimeout(() => welcomeTextareaRef.current?.focus(), 0)
+                      }
+                    }}
+                  >
+                    <div className="recommend-card-header">
+                      <div className="recommend-card-icon">💡</div>
+                      <div className="recommend-card-title">{card.title}</div>
+                    </div>
+                    {card.content && (
+                      <div className="recommend-card-desc">{card.content}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="chat-messages-wrapper">
+          <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
+            {messages
+              .filter((msg) => msg.content || msg.thinking || msg.toolCalls?.length || msg.status === 'streaming' || msg.status === 'queued' || msg.status === 'error' || msg.attachments?.length)
+              .map((msg) => (
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                  onCopy={() => handleCopy(msg.content)}
+                  onRetry={msg.role === 'user' ? () => setRetryInput(msg.content) : undefined}
+                />
+              ))}
+            {isWaiting && !isStreaming && !hasStreamingMessage && (
+              <div className="message-bubble message-assistant message-bubble-waiting">
+                <div className="message-body">
+                  <div className="message-content message-content-assistant">
+                    <div className="typing-dots">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
                     </div>
                   </div>
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              </div>
+            )}
+          </div>
 
-        {/* 滚动导航按钮 - 只在有消息时显示 */}
-        <div className="chat-scroll-buttons" style={{ display: messages.length === 0 ? 'none' : 'flex' }}>
-          <button
-            className={`chat-scroll-btn ${showScrollTop ? 'visible' : 'hidden'}`}
-            onClick={scrollToTop}
-            title="回到顶部"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="18 15 12 9 6 15" />
-            </svg>
-          </button>
-          <button
-            className={`chat-scroll-btn ${showScrollBottom ? 'visible' : 'hidden'}`}
-            onClick={scrollToBottom}
-            title="回到底部"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
+          <div className="chat-scroll-buttons">
+            <button
+              className={`chat-scroll-btn ${showScrollTop ? 'visible' : 'hidden'}`}
+              onClick={scrollToTop}
+              title="回到顶部"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="18 15 12 9 6 15" />
+              </svg>
+            </button>
+            <button
+              className={`chat-scroll-btn ${showScrollBottom ? 'visible' : 'hidden'}`}
+              onClick={scrollToBottom}
+              title="回到底部"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 截屏提示 toast */}
       {screenshotToast && <div className="screenshot-toast">{screenshotToast}</div>}

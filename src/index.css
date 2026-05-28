@@ -266,10 +266,10 @@ body {
   position: fixed;
   top: 0;
   left: 0;
-  right: 160px; /* 给窗口控制按钮留出空间 */
-  height: 36px;
+  right: 220px; /* 给窗口控制按钮留出足够的空间 */
+  height: 44px; /* 增大高度以匹配按钮区域 */
   -webkit-app-region: drag;
-  z-index: 1; /* 低于window-controls */
+  z-index: 999990; /* 低于 chat-header 和 window-controls */
 }
 
 .app-main {
@@ -1122,7 +1122,8 @@ body {
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-main);
   flex-shrink: 0;
-  -webkit-app-region: drag;
+  position: relative;
+  z-index: 999990;
 }
 
 .page-panel .settings-header h2 {
@@ -1167,8 +1168,9 @@ body {
   padding: 12px 24px;
   background: var(--bg-main);
   border-bottom: 1px solid var(--border-light);
-  -webkit-app-region: drag;
   gap: 16px;
+  position: relative;
+  z-index: 999995;
 }
 
 .chat-header-left {
@@ -1210,7 +1212,6 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  -webkit-app-region: drag;
 }
 
 .chat-header-activity {
@@ -1237,7 +1238,10 @@ body {
   gap: 6px;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
-  margin-right: 200px;
+  margin-right: 240px;
+  pointer-events: auto;
+  position: relative;
+  z-index: 999996;
 }
 
 /* 统一操作按钮样式 */
@@ -1326,18 +1330,27 @@ body {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
-  padding: 40px 24px;
-  gap: 32px;
+  justify-content: flex-start;
+  padding: 80px 24px 20px 24px;
+  gap: 24px;
   width: 100%;
-  max-width: 720px;
+  max-width: 1040px;
   margin: 0 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.welcome-screen::-webkit-scrollbar {
+  display: none;
 }
 
 .welcome-content {
   display: flex;
   align-items: center;
   gap: 20px;
+  padding-bottom: 0 !important;
 }
 
 .welcome-avatar {
@@ -1345,6 +1358,12 @@ body {
   height: 80px;
   border-radius: 12px;
   object-fit: contain;
+  animation: welcomeLogoShake 4s ease-in-out infinite;
+}
+
+@keyframes welcomeLogoShake {
+  0%, 100% { transform: rotateY(-15deg); }
+  50% { transform: rotateY(15deg); }
 }
 
 .welcome-info {
@@ -1367,7 +1386,7 @@ body {
 
 .welcome-input-container {
   width: 100%;
-  max-width: 720px;
+  max-width: 1040px;
   position: relative;
 }
 
@@ -1375,7 +1394,7 @@ body {
   background: white;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  padding: 12px 16px;
+  padding: 16px;
   box-shadow: var(--shadow-md);
   transition: all 0.2s ease;
 }
@@ -1394,8 +1413,9 @@ body {
   resize: none;
   outline: none;
   min-height: 44px;
-  max-height: 120px;
+  height: 120px;
   font-family: inherit;
+  line-height: 1.5;
 }
 
 .welcome-input::placeholder {
@@ -1464,52 +1484,51 @@ body {
 /* 推荐标签页 */
 .recommend-tabs {
   display: flex;
-  gap: 16px;
-  margin-top: 8px;
+  gap: 24px;
+  margin-top: 16px;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
+  width: 100%;
 }
 
 .recommend-tab {
-  padding: 6px 16px;
-  border-radius: 20px;
+  padding: 8px 0;
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  font-size: 13px;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .recommend-tab:hover {
-  background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--text-muted);
 }
 
 .recommend-tab.active {
-  background: var(--primary);
-  color: white;
-  border-color: var(--primary);
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 /* 推荐卡片网格 */
 .recommend-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   width: 100%;
-  max-width: 900px;
+  max-width: 1040px;
   margin-top: 16px;
 }
 
 .recommend-card {
   background: white;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 16px;
+  border-radius: 25px;
+  padding: 20px;
   cursor: pointer;
   transition: all 0.2s ease;
+  min-height: 140px;
 }
 
 .recommend-card:hover {
@@ -1522,35 +1541,49 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  min-height: 24px;
 }
 
 .recommend-card-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: #EEF2FF;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  flex-shrink: 0;
+  display: none;
 }
 
 .recommend-card-title {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
+  line-height: 1.3;
 }
 
 .recommend-card-desc {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: 1.6;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* 欢迎页卡片区域动画 */
+.welcome-cards-section {
+  width: 100%;
+  max-width: 1040px;
+  animation: slideUp 0.4s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Message Bubbles */
@@ -2817,6 +2850,17 @@ body {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
+.input-workspace {
+  background: var(--bg-hover);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.input-workspace:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
 .cron-form-select {
   padding: 8px 12px;
   border: 1px solid var(--border);
@@ -3182,11 +3226,17 @@ body {
   width: 64px;
   height: 64px;
   object-fit: contain;
+  animation: logoSpin 4s linear infinite;
 }
 
 @keyframes logoFloat {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-10px); }
+}
+
+@keyframes logoSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .startup-splash-message {
@@ -4077,11 +4127,12 @@ body {
 
 .workspace-dir-path {
   font-size: 13px;
-  color: var(--primary);
+  color: var(--text-primary);
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: rgba(59, 130, 246, 0.06);
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
   transition: all 0.2s;
   text-overflow: ellipsis;
   overflow: hidden;
@@ -4089,7 +4140,8 @@ body {
 }
 
 .workspace-dir-path:hover {
-  background: rgba(59, 130, 246, 0.12);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
 .workspace-refresh-btn {
@@ -4248,62 +4300,85 @@ body {
 
 .window-controls {
   position: fixed;
-  top: 4px;
-  right: 8px;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
-  height: 36px;
-  padding: 0 8px;
-  gap: 16px;
+  height: 44px; /* 增大容器高度以匹配按钮 */
+  padding: 2px 12px 2px 4px; /* 调整内边距 */
+  gap: 0; /* 移除间距，按钮紧贴 */
   z-index: 999999 !important; /* 绝对最高层级 */
   -webkit-app-region: no-drag;
 }
 
 .window-control-btn {
-  width: 46px; /* Windows标准宽度 */
-  height: 32px;
+  position: relative;
+  z-index: 999999;
+  width: 52px; /* 增大按钮宽度，更容易点击 */
+  height: 40px; /* 增大按钮高度 */
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.1s ease;
+  transition: all 0.1s ease;
   padding: 0;
+  margin: 0;
   background: transparent;
   color: #000000;
-  font-size: 10px;
-  line-height: 32px;
+  font-size: 14px;
+  line-height: 1;
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.window-control-btn:focus {
+  outline: none;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.window-control-btn:focus-visible {
+  outline: 2px solid #0078D4;
+  outline-offset: -2px;
 }
 
 .wc-icon {
-  display: block;
-  width: 100%;
-  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: normal;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  width: 100%;
+  height: 100%;
+  font-size: 16px;
+  font-weight: 400;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
   user-select: none;
   -webkit-user-select: none;
+  line-height: 1;
 }
 
 /* 最小化按钮 */
 .window-control-minimize:hover {
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: rgba(0, 0, 0, 0.1);
 }
 
 /* 最大化/还原按钮 */
 .window-control-maximize:hover,
 .window-control-restore:hover {
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: rgba(0, 0, 0, 0.1);
 }
 
 /* 关闭按钮 */
 .window-control-close:hover {
   background-color: #E81123;
   color: #FFFFFF;
+  border-radius: 0 0 0 6px; /* 左下圆角 */
+}
+
+/* 悬停时的过渡效果 */
+.window-control-btn:active {
+  transform: scale(0.95);
 }
 
 /* ============================================
