@@ -1963,6 +1963,17 @@ body.widget-page #root {
   border-radius: 50%;
 }
 
+.message-avatar.sub-agent {
+  background: var(--bg-secondary, #f0f0f0);
+  border: 1px solid var(--border);
+}
+
+.message-avatar-emoji {
+  font-size: 20px;
+  line-height: 1;
+  user-select: none;
+}
+
 .message-content {
   flex: 1;
   min-width: 0;

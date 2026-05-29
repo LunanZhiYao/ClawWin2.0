@@ -294,6 +294,7 @@ export interface ChatMessage {
   timestamp: number
   status?: 'sending' | 'queued' | 'streaming' | 'done' | 'error'
   taskStatus?: TaskStatus
+  agentId?: string
 }
 
 export interface ChatSession {

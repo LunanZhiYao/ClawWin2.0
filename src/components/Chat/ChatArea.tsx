@@ -943,6 +943,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   message={msg}
                   onCopy={() => handleCopy(msg.content)}
                   onRetry={msg.role === 'user' ? () => setRetryInput(msg.content) : undefined}
+                  currentAgentId={currentAgentId}
                 />
               ))}
             {isWaiting && !isStreaming && !hasStreamingMessage && (

@@ -97,6 +97,13 @@ function normalizeSessionKey(sessionKey?: string): string | undefined {
   return match?.[1] || sessionKey
 }
 
+/** 从 sessionKey 中提取 sub-agent 标识，如 agent:main:subagent:xxx → subagent:xxx */
+function extractSubAgentId(sessionKey?: string): string | undefined {
+  if (!sessionKey) return undefined
+  const match = /^agent:[^:]+:(subagent:.+)$/.exec(sessionKey)
+  return match?.[1] || undefined
+}
+
 /**
  * 从 Gateway chat event payload 中提取文本内容
  * content 可能是 string、{content: string}、{content: [{type:"text", text:"..."}]} 等格式
@@ -218,6 +225,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   // agent lifecycle.start 分配的 runId（工具调用流式消息用此 ID）
   // 与 chat 事件的 runId 可能不同，需要在 final 时用此 ID 确保消息正确替换
   const agentLifecycleRunIdRef = useRef<string | null>(null)
+  const runIdAgentIdMapRef = useRef<Map<string, string>>(new Map())
   // 阶段追踪：idle → thinking → tool → text → idle
   // thinking/tool 阶段不推送流式文本，只推送工具调用和思考内容
   const phaseRef = useRef<'idle' | 'thinking' | 'tool' | 'text'>('idle')
@@ -426,7 +434,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const phase = data.phase as string | undefined
       // agent 事件的 payload 携带 runId，用于关联工具调用和消息
       const agentRunId = p.runId as string | undefined
-      console.log('[ws] agent event:', { stream, phase, agentRunId, activeRunId: activeRunIdRef.current, toolCallsCount: toolCallsBufferRef.current.length, dataKeys: Object.keys(data) })
+      const agentIdFromEvent = (p.agentId as string | undefined) || extractSubAgentId(p.sessionKey as string | undefined)
+      if (agentRunId && agentIdFromEvent) {
+        runIdAgentIdMapRef.current.set(agentRunId, agentIdFromEvent)
+      }
+      console.log('[ws] agent event:', { stream, phase, agentRunId, agentIdFromEvent, sessionKey: p.sessionKey, activeRunId: activeRunIdRef.current, toolCallsCount: toolCallsBufferRef.current.length, dataKeys: Object.keys(data) })
 
       if (stream === 'assistant') {
         // AI 正在生成文本，显示预览
@@ -477,6 +489,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               timestamp: Date.now(),
               status: 'streaming',
               taskStatus: 'calling_tool',
+              agentId: agentIdFromEvent || runIdAgentIdMapRef.current.get(runId),
             })
           }
           setBackendStatus(`正在执行: ${name}${summary ? ` (${summary.slice(0, 60)})` : ''}`)
@@ -530,6 +543,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               timestamp: Date.now(),
               status: 'streaming',
               taskStatus: 'waiting',
+              agentId: agentIdFromEvent || runIdAgentIdMapRef.current.get(runId),
             })
           }
           setBackendStatus(isError ? `${name} 执行出错，正在处理...` : `${name} 执行完成，正在思考...`)
@@ -559,6 +573,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               timestamp: Date.now(),
               status: 'streaming',
               taskStatus: 'starting',
+              agentId: agentIdFromEvent,
             })
           }
         } else if (phase === 'end' || phase === 'error') {
@@ -591,7 +606,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     const runId = (toolCallsBufferRef.current.length > 0 && agentLifecycleRunIdRef.current)
       ? agentLifecycleRunIdRef.current
       : chatRunId
-    const sessionKey = normalizeSessionKey(payload.sessionKey as string | undefined)
+    const rawSessionKey = payload.sessionKey as string | undefined
+    const sessionKey = normalizeSessionKey(rawSessionKey)
+    const chatAgentId = (payload.agentId as string | undefined)
+      || (runId ? runIdAgentIdMapRef.current.get(runId) : undefined)
+      || extractSubAgentId(rawSessionKey)
     if (sessionKey && runId) {
       lastRunIdBySessionRef.current.set(sessionKey, runId)
     }
@@ -672,6 +691,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             toolCalls: currentToolCalls,
             timestamp: Date.now(),
             status: 'streaming',
+            agentId: chatAgentId,
           }
           onMessageStream.current?.(overflowMsg)
           return
@@ -696,6 +716,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               toolCalls: currentToolCalls,
               timestamp: Date.now(),
               status: 'streaming',
+              agentId: chatAgentId,
             }
             onMessageStream.current?.(msg)
 
@@ -713,6 +734,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                   toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                   timestamp: Date.now(),
                   status: 'streaming',
+                  agentId: chatAgentId,
                 }
                 onMessageStream.current?.(m)
               } else {
@@ -748,6 +770,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             toolCalls: currentToolCalls,
             timestamp: Date.now(),
             status: 'streaming',
+            agentId: chatAgentId,
           }
           onMessageStream.current?.(msg)
 
@@ -774,6 +797,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                   toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                   timestamp: Date.now(),
                   status: 'streaming',
+                  agentId: chatAgentId,
                 }
                 onMessageStream.current?.(m)
               } else {
@@ -809,6 +833,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                     toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                     timestamp: Date.now(),
                     status: 'done',
+                    agentId: chatAgentId,
                   }
                   onMessageStream.current?.(m)
                   activeRunIdRef.current = null
@@ -846,6 +871,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             toolCalls: currentToolCalls,
             timestamp: Date.now(),
             status: 'streaming',
+            agentId: chatAgentId,
           }
           onMessageStream.current?.(msg)
 
@@ -864,6 +890,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                   toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                   timestamp: Date.now(),
                   status: 'streaming',
+                  agentId: chatAgentId,
                 }
                 onMessageStream.current?.(m)
               } else {
@@ -944,6 +971,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         timestamp: Date.now(),
         status: 'done',
         taskStatus: 'completed',
+        agentId: chatAgentId,
       }
       onMessageStream.current?.(msg)
       // 埋点：本轮助手最终文本已确定
@@ -989,6 +1017,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         timestamp: Date.now(),
         status: isErrorOverflow ? 'done' : 'error',
         taskStatus: isErrorOverflow ? 'completed' : 'failed',
+        agentId: chatAgentId,
       }
       onMessageStream.current?.(msg)
       emitTelemetry({
@@ -1033,6 +1062,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         timestamp: Date.now(),
         status: 'done',
         taskStatus: isFrontendTimeoutRef.current ? 'retrying' : 'user_aborted',
+        agentId: chatAgentId,
       }
       onMessageStream.current?.(msg)
       // 埋点：用户中止生成
@@ -1074,6 +1104,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         timestamp: Date.now(),
         status: 'done',
         taskStatus: isTerminateOverflow ? 'completed' : 'interrupted',
+        agentId: chatAgentId,
       }
       onMessageStream.current?.(msg)
       if (isTerminateOverflow) {
@@ -1105,6 +1136,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         content: '无法发送消息：WebSocket 客户端未初始化，请检查网关状态',
         timestamp: Date.now(),
         status: 'error',
+        agentId: agentId,
       }
       onMessageStream.current?.(msg)
       return null
@@ -1209,6 +1241,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         content: `发送失败: ${translateError(err instanceof Error ? err.message : String(err))}`,
         timestamp: Date.now(),
         status: 'error',
+        agentId: agentId,
       }
       onMessageStream.current?.(msg)
       return null

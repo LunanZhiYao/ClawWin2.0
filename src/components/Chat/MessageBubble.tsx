@@ -450,13 +450,40 @@ interface MessageBubbleProps {
   message: ChatMessage
   onCopy?: () => void
   onRetry?: () => void
+  currentAgentId?: string
 }
 
-const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onRetry }) => {
+const GREEK_LETTERS = ['α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω']
+const SUB_AGENT_EMOJIS = ['🤖', '🔧', '🔍', '📊', '🎯', '💡', '🧪', '⚙️', '🛠️', '📡', '🔬', '📝', '🎪', '🏗️', '🧩', '🔑', '📈', '🧠', '💎', '🌟', '🚀', '🔮', '🎲', '⚡']
+
+const subAgentIndexMap = new Map<string, number>()
+let nextSubAgentIndex = 0
+
+function getSubAgentInfo(agentId: string): { name: string; emoji: string } {
+  let index = subAgentIndexMap.get(agentId)
+  if (index === undefined) {
+    index = nextSubAgentIndex++
+    subAgentIndexMap.set(agentId, index)
+  }
+  const letter = GREEK_LETTERS[index % GREEK_LETTERS.length]
+  const emoji = SUB_AGENT_EMOJIS[index % SUB_AGENT_EMOJIS.length]
+  return { name: `子代理-${letter}`, emoji }
+}
+
+function isSubAgent(agentId: string | undefined, currentAgentId: string | undefined): boolean {
+  if (!agentId) return false
+  if (agentId === 'main') return false
+  if (agentId === currentAgentId) return false
+  return true
+}
+
+const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onRetry, currentAgentId }) => {
   const isUser = message.role === 'user'
   const isQueued = message.status === 'queued'
   const isStreaming = message.status === 'streaming'
   const isError = message.status === 'error'
+  const messageIsSubAgent = isSubAgent(message.agentId, currentAgentId)
+  const subAgentInfo = messageIsSubAgent ? getSubAgentInfo(message.agentId!) : null
 
   const wasStreamingRef = useRef(false)
   const [justFinished, setJustFinished] = useState(false)
@@ -491,13 +518,17 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
   return (
     <div className={`message-row ${isUser ? 'user' : 'assistant'}`}>
       {!isUser && (
-        <div className="message-avatar ai">
-          <img src="/assets/logo.png" alt="AI" className="message-avatar-img" />
+        <div className={`message-avatar ${messageIsSubAgent ? 'sub-agent' : 'ai'}`}>
+          {messageIsSubAgent ? (
+            <span className="message-avatar-emoji">{subAgentInfo!.emoji}</span>
+          ) : (
+            <img src="/assets/logo.png" alt="AI" className="message-avatar-img" />
+          )}
         </div>
       )}
       <div className={`message-column${isUser ? ' user-message' : ''}`}>
         <div className="message-header">
-          {!isUser && <span className="message-nickname">千易</span>}
+          {!isUser && <span className="message-nickname">{messageIsSubAgent ? subAgentInfo!.name : '千易'}</span>}
           {!isUser && (toolCalls.length > 0 || message.taskStatus) && (
             <TaskStatusSummary
               toolCalls={toolCalls}
@@ -670,5 +701,7 @@ export const MessageBubble = React.memo(MessageBubbleInner, (prev, next) =>
   && prev.message.thinking === next.message.thinking
   && prev.onCopy === next.onCopy
   && prev.onRetry === next.onRetry
+  && prev.message.agentId === next.message.agentId
+  && prev.currentAgentId === next.currentAgentId
   && toolCallsEqual(prev.message.toolCalls, next.message.toolCalls)
 )
