@@ -131,11 +131,26 @@ function extractText(message: unknown): string {
   return ''
 }
 
+/** 检测文本是否为上下文溢出相关消息 */
+function isContextOverflowText(text: string): boolean {
+  const lower = text.toLowerCase()
+  return (
+    lower.includes('context overflow')
+    || lower.includes('prompt too large')
+    || (lower.includes('context') && lower.includes('too large'))
+    || (lower.includes('context') && lower.includes('overflow'))
+    || (lower.includes('context') && lower.includes('length') && (lower.includes('exceed') || lower.includes('too long') || lower.includes('limit')))
+  )
+}
+
+const CONTEXT_OVERFLOW_FRIENDLY_MSG = '哎呀，上下文溢出了，让我来压缩一下，并继续执行任务，请稍等！'
+
 /** 将常见英文错误消息翻译为中文 */
 function translateError(msg: string): string {
-  // 先做一次脱敏，避免错误消息里夹带服务端返回的原始凭证。
   const safeMsg = redactSensitiveText(msg)
   const lower = safeMsg.toLowerCase()
+  if (isContextOverflowText(safeMsg))
+    return CONTEXT_OVERFLOW_FRIENDLY_MSG
   if (lower.includes('insufficient') && (lower.includes('balance') || lower.includes('credit') || lower.includes('fund') || lower.includes('quota')))
     return '余额不足，请充值后再试'
   if (lower.includes('402') || lower.includes('payment required'))
@@ -154,8 +169,6 @@ function translateError(msg: string): string {
     return '网络连接失败，请检查网络'
   if (lower.includes('model') && lower.includes('not') && (lower.includes('found') || lower.includes('available') || lower.includes('support')))
     return '模型不可用，请切换其他模型'
-  if (lower.includes('context') && (lower.includes('length') || lower.includes('exceed') || lower.includes('too long')))
-    return '上下文长度超限，请压缩对话或开启新会话'
   return safeMsg
 }
 
@@ -212,6 +225,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const onFinalUsage = useRef<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>(null)
   const onContextOverflow = useRef<((sessionKey?: string) => void) | null>(null)
   const onCompactionEnd = useRef<((sessionKey?: string) => void) | null>(null)
+  const contextOverflowRunIdsRef = useRef<Set<string>>(new Set())
   // agent 活动开始通知（用于清除 isWaiting 等待状态）
   const onStreamStart = useRef<(() => void) | null>(null)
   /** 异步上报埋点：不 await，避免拖慢 WS 主流程 */
@@ -649,6 +663,24 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           activeRunIdRef.current = runId
         }
 
+        if (isContextOverflowText(accumulated)) {
+          contextOverflowRunIdsRef.current.add(runId)
+          const overflowMsg: ChatMessage = {
+            id: runId,
+            role: 'assistant',
+            content: CONTEXT_OVERFLOW_FRIENDLY_MSG,
+            toolCalls: currentToolCalls,
+            timestamp: Date.now(),
+            status: 'streaming',
+          }
+          onMessageStream.current?.(overflowMsg)
+          return
+        }
+
+        if (contextOverflowRunIdsRef.current.has(runId)) {
+          return
+        }
+
         // 有工具调用时，文本只累积不推送 — 等 final 一次性出现
         if (hasToolCalls) {
           return
@@ -879,8 +911,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
 
       const extractedText = extractText(payload.message)
       const bufferedText = streamBufferRef.current.get(runId)
-      const text = extractedText || bufferedText || ''
+      const rawText = extractedText || bufferedText || ''
+      const isOverflowDetected = contextOverflowRunIdsRef.current.has(runId) || isContextOverflowText(rawText)
+      const text = isOverflowDetected ? CONTEXT_OVERFLOW_FRIENDLY_MSG : rawText
       const hadStream = streamBufferRef.current.delete(runId)
+      if (isOverflowDetected) contextOverflowRunIdsRef.current.delete(runId)
       // 修复: 当只有 thinking delta (无 text delta) 时，streamBuffer 未设置
       // 但 streamingCount 已在 thinking 分支中递增，需要同步递减
       if (hadStream || hadTimer) setStreamingCount((c) => Math.max(0, c - 1))
@@ -930,9 +965,15 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const usage = extractUsage(payload)
       // 只要提取到 usage 就立刻回传给 App，避免首轮因为字段差异导致占用率一直停在 0。
       if (usage) onFinalUsage.current?.({ ...usage, sessionKey })
+
+      if (isOverflowDetected) {
+        onContextOverflow.current?.(sessionKey)
+      }
     } else if (state === 'error') {
       setBackendStatus('')
-      const errorMessage = translateError((payload.errorMessage as string) || '发生错误')
+      const rawErrorMsg = (payload.errorMessage as string) || '发生错误'
+      const errorMessage = translateError(rawErrorMsg)
+      const isErrorOverflow = isContextOverflowText(rawErrorMsg)
       const timer = streamThrottleRef.current.get(runId)
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
       lastPushedLenRef.current.delete(runId)
@@ -943,27 +984,30 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const msg: ChatMessage = {
         id: runId,
         role: 'assistant',
-        content: errorMessage,
+        content: isErrorOverflow ? CONTEXT_OVERFLOW_FRIENDLY_MSG : errorMessage,
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
-        status: 'error',
-        taskStatus: 'failed',
+        status: isErrorOverflow ? 'done' : 'error',
+        taskStatus: isErrorOverflow ? 'completed' : 'failed',
       }
       onMessageStream.current?.(msg)
-      // 埋点：助手回复以 error 结束
       emitTelemetry({
         event_name: 'assistant_message_rendered',
         event_time: new Date().toISOString(),
         user_id: userId ?? null,
         session_id: sessionKey || null,
         run_id: runId,
-        status: 'error',
+        status: isErrorOverflow ? 'final' : 'error',
         content: msg.content,
       })
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
       toolCallsBufferRef.current = []
+
+      if (isErrorOverflow) {
+        onContextOverflow.current?.(sessionKey)
+      }
     } else if (state === 'aborted') {
       setBackendStatus('')
       let text: string
@@ -1006,7 +1050,6 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       phaseRef.current = 'idle'
       toolCallsBufferRef.current = []
     } else if (state === 'terminated') {
-      // 上下文耗尽或进程被终止
       setBackendStatus('')
       const buffered = redactSensitiveText(streamBufferRef.current.get(runId) || '')
       const timer = streamThrottleRef.current.get(runId)
@@ -1015,37 +1058,34 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       idleCountRef.current.delete(runId)
       thinkingBufferRef.current.delete(runId)
       if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
-      const hint = '\n\n---\n> 回复被中断，可能是上下文空间不足。建议点击「压缩」后重试。'
+
+      const terminateReason = String(payload.errorMessage ?? payload.reason ?? '').toLowerCase()
+      const isTerminateOverflow = isContextOverflowText(terminateReason) || isContextOverflowText(buffered)
+
+      const displayContent = isTerminateOverflow
+        ? CONTEXT_OVERFLOW_FRIENDLY_MSG
+        : buffered + '\n\n---\n> 回复被中断，可能是上下文空间不足。建议点击「压缩」后重试。'
 
       const msg: ChatMessage = {
         id: runId,
         role: 'assistant',
-        content: buffered + hint,
+        content: displayContent,
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'done',
-        taskStatus: 'interrupted',
+        taskStatus: isTerminateOverflow ? 'completed' : 'interrupted',
       }
       onMessageStream.current?.(msg)
-      // 终止原因命中上下文溢出时，通知 App 层触发一次自动压缩兜底。
-      // 这里把 sessionKey 一并透出，避免 App 层误压缩当前激活之外的其它会话。
-      const terminateReason = String(payload.errorMessage ?? payload.reason ?? '').toLowerCase()
-      if (
-        terminateReason.includes('context overflow')
-        || terminateReason.includes('prompt too large')
-        || (terminateReason.includes('context') && terminateReason.includes('too large'))
-        || (terminateReason.includes('context') && terminateReason.includes('overflow'))
-      ) {
+      if (isTerminateOverflow) {
         onContextOverflow.current?.(sessionKey)
       }
-      // 埋点：上下文耗尽或进程终止导致的中断
       emitTelemetry({
         event_name: 'assistant_message_rendered',
         event_time: new Date().toISOString(),
         user_id: userId ?? null,
         session_id: sessionKey || null,
         run_id: runId,
-        status: 'terminated',
+        status: isTerminateOverflow ? 'final' : 'terminated',
         content: msg.content,
       })
       activeRunIdRef.current = null

@@ -221,6 +221,7 @@ function App() {
   // 记录“因流式进行中而延后”的自动压缩目标会话。
   // 根因：达到阈值时若 ws.isStreaming=true，旧逻辑会直接 return，导致本轮遗漏压缩。
   const pendingAutoCompactSessionRef = useRef<string | null>(null)
+  const contextOverflowRecoverySessionRef = useRef<string | null>(null)
   // 递增此值会销毁旧 GatewayClient 并创建新的，模拟完整重启
   const [wsReconnectKey, setWsReconnectKey] = useState(0)
   // 使用 ref 追踪最新的 activeSessionId，避免回调闭包中拿到旧值
@@ -971,7 +972,10 @@ function App() {
 
   // 兜底路径：若已出现上下文溢出错误，立即尝试自动压缩一次
   ws.onContextOverflow.current = useCallback((sessionId?: string) => {
-    // overflow 事件同样按来源会话触发，避免误压缩当前激活会话。
+    const sid = sessionId || activeSessionIdRef.current
+    if (sid) {
+      contextOverflowRecoverySessionRef.current = sid
+    }
     triggerAutoCompact(sessionId)
   }, [triggerAutoCompact])
 
@@ -1019,7 +1023,21 @@ function App() {
       }
       void refreshWithRetry()
     }
-  }, [ws, flushPendingAutoCompact])
+
+    const recoverySessionId = contextOverflowRecoverySessionRef.current
+    if (recoverySessionId) {
+      contextOverflowRecoverySessionRef.current = null
+      const recoverySession = sessionsRef.current.find((s) => s.id === recoverySessionId)
+      if (recoverySession && ws.connected && gateway.state === 'ready') {
+        setTimeout(() => {
+          startWaiting()
+          void ws.sendMessage(recoverySessionId, '继续任务', undefined, recoverySession.agentId, recoverySession.modelOverride).then((ack) => {
+            registerRunBinding(ack, recoverySessionId, undefined)
+          })
+        }, 1000)
+      }
+    }
+  }, [ws, flushPendingAutoCompact, gateway.state, startWaiting, registerRunBinding])
 
 
   // Get active session
