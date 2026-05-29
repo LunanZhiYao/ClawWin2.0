@@ -12,6 +12,13 @@
     </style>
   </head>
   <body>
+    <script>
+      if (window.location.hash === '#/widget') {
+        var s = document.createElement('style');
+        s.textContent = 'html,body,#root{background:transparent!important;}';
+        document.head.appendChild(s);
+      }
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

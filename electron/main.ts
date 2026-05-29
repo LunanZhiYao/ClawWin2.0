@@ -30,12 +30,14 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 let mainWindow: BrowserWindow | null = null
+let widgetWindow: BrowserWindow | null = null
 let gatewayManager: GatewayManager | null = null
 let tray: Tray | null = null
 let isQuitting = false
 let pendingUpdateInfo: UpdateInfo | null = null
 let downloadedInstallerPath: string | null = null
 let ollamaManager: OllamaManager | null = null
+let widgetVisible = false
 
 /** 后端 API 根地址（不含末尾斜杠），技能商城等接口在此拼接路径 */
 const API_BASE = 'http://10.0.23.136:8088'
@@ -337,6 +339,68 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+}
+
+function createWidgetWindow() {
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
+  
+  widgetWindow = new BrowserWindow({
+    width: 300,
+    height: 400,
+    x: screenWidth - 320,
+    y: screenHeight - 420,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: true,
+    hasShadow: false,
+    webPreferences: {
+      preload: PRELOAD,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  })
+
+  widgetWindow.setIgnoreMouseEvents(true, { forward: true })
+  
+  if (process.env.VITE_DEV_SERVER_URL) {
+    widgetWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}#/widget`)
+  } else {
+    widgetWindow.loadFile(path.join(DIST, 'index.html'), { hash: '/widget' })
+  }
+
+  widgetWindow.on('closed', () => {
+    widgetWindow = null
+    widgetVisible = false
+  })
+
+  widgetWindow.on('move', () => {
+    if (widgetWindow) {
+      const [x, y] = widgetWindow.getPosition()
+      const [width, height] = widgetWindow.getSize()
+      const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
+      
+      const edgeThreshold = 20
+      const edges: string[] = []
+      
+      if (x <= edgeThreshold) edges.push('left')
+      if (x + width >= screenWidth - edgeThreshold) edges.push('right')
+      if (y <= edgeThreshold) edges.push('top')
+      if (y + height >= screenHeight - edgeThreshold) edges.push('bottom')
+      
+      widgetWindow.webContents.send('widget:positionChanged', { 
+        x, y, 
+        isNearEdge: edges.length > 0,
+        edges 
+      })
+    }
+  })
+
+  widgetVisible = true
 }
 
 function setupIPC() {
@@ -1770,6 +1834,83 @@ function setupIPC() {
     ui.ollamaInstallDir = dir
     writeUiConfig(ui)
     ollamaManager.setOllamaDir(dir)
+  })
+
+  // ===== Widget Window Controls =====
+  
+  ipcMain.handle('widget:show', () => {
+    if (!widgetWindow) {
+      createWidgetWindow()
+    } else {
+      widgetWindow.show()
+      widgetVisible = true
+    }
+  })
+
+  ipcMain.handle('widget:hide', () => {
+    if (widgetWindow) {
+      widgetWindow.hide()
+      widgetVisible = false
+    }
+  })
+
+  ipcMain.handle('widget:toggle', () => {
+    if (widgetVisible) {
+      if (widgetWindow) widgetWindow.hide()
+      widgetVisible = false
+    } else {
+      if (!widgetWindow) {
+        createWidgetWindow()
+      } else {
+        widgetWindow.show()
+        widgetVisible = true
+      }
+    }
+  })
+
+  ipcMain.handle('widget:isVisible', () => {
+    return widgetVisible
+  })
+
+  ipcMain.handle('widget:sendMessage', (_event, message: string) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('widget:messageReceived', message)
+    }
+  })
+
+  ipcMain.handle('widget:taskComplete', (_event, success: boolean, message: string) => {
+    if (widgetWindow) {
+      widgetWindow.webContents.send('widget:taskComplete', { success, message })
+    }
+  })
+
+  ipcMain.handle('widget:close', () => {
+    if (widgetWindow) {
+      widgetWindow.close()
+      widgetWindow = null
+      widgetVisible = false
+    }
+  })
+
+  ipcMain.handle('widget:openMainWindow', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+
+  ipcMain.on('widget:setIgnoreMouseEvents', (_event, ignore: boolean) => {
+    if (widgetWindow) {
+      widgetWindow.setIgnoreMouseEvents(ignore, { forward: true })
+    }
+  })
+
+  ipcMain.on('widget:moveBy', (_event, dx: number, dy: number) => {
+    if (widgetWindow) {
+      const [x, y] = widgetWindow.getPosition()
+      widgetWindow.setPosition(x + Math.round(dx), y + Math.round(dy))
+    }
   })
 }
 

@@ -301,6 +301,35 @@ const electronAPI = {
     close: (): Promise<void> => ipcRenderer.invoke('window:close'),
     isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
   },
+
+  // Widget (Desktop Pet)
+  widget: {
+    show: (): Promise<void> => ipcRenderer.invoke('widget:show'),
+    hide: (): Promise<void> => ipcRenderer.invoke('widget:hide'),
+    toggle: (): Promise<void> => ipcRenderer.invoke('widget:toggle'),
+    isVisible: (): Promise<boolean> => ipcRenderer.invoke('widget:isVisible'),
+    sendMessage: (message: string): Promise<void> => ipcRenderer.invoke('widget:sendMessage', message),
+    taskComplete: (success: boolean, message: string): Promise<void> => ipcRenderer.invoke('widget:taskComplete', success, message),
+    close: (): Promise<void> => ipcRenderer.invoke('widget:close'),
+    openMainWindow: (): Promise<void> => ipcRenderer.invoke('widget:openMainWindow'),
+    setIgnoreMouseEvents: (ignore: boolean): void => ipcRenderer.send('widget:setIgnoreMouseEvents', ignore),
+    moveBy: (dx: number, dy: number): void => ipcRenderer.send('widget:moveBy', dx, dy),
+    onMessageReceived: (callback: (message: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, message: string) => callback(message)
+      ipcRenderer.on('widget:messageReceived', handler)
+      return () => ipcRenderer.removeListener('widget:messageReceived', handler)
+    },
+    onTaskComplete: (callback: (result: { success: boolean; message: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, result: { success: boolean; message: string }) => callback(result)
+      ipcRenderer.on('widget:taskComplete', handler)
+      return () => ipcRenderer.removeListener('widget:taskComplete', handler)
+    },
+    onPositionChanged: (callback: (data: { x: number; y: number; isNearEdge: boolean; edges: string[] }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { x: number; y: number; isNearEdge: boolean; edges: string[] }) => callback(data)
+      ipcRenderer.on('widget:positionChanged', handler)
+      return () => ipcRenderer.removeListener('widget:positionChanged', handler)
+    },
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

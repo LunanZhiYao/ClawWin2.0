@@ -23,11 +23,19 @@ import { fetchWelcomePage, type WelcomeTab } from './api/welcome'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, type SetupStep } from './hooks/useSetup'
+import { WidgetPage } from './pages/WidgetPage'
+import type { ElectronAPI } from './types/electron'
 import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, AvailableModel, WorkspaceEntry } from './types'
 import logoSrc from '../assets/logo.png'
 import './components/Login/Login.css'
 
+declare const window: Window & { electronAPI: ElectronAPI }
+
 const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
+
+const isWidgetRoute = () => {
+  return window.location.hash === '#/widget'
+}
 
 /** 设置页「关闭窗口」下拉选项（与主进程 CloseWindowBehavior 一致） */
 const CLOSE_WINDOW_SELECT_OPTIONS: { value: 'ask' | 'tray' | 'quit'; label: string }[] = [
@@ -124,6 +132,10 @@ function generateId(): string {
 
 
 function App() {
+  if (isWidgetRoute()) {
+    return <WidgetPage />
+  }
+
   const gateway = useGateway()
   const setup = useSetup()
 
@@ -149,7 +161,7 @@ function App() {
       }
     }
     console.log("[gateway:info] 注入环境变量:",JSON.stringify(Object.keys(exportEnvs)))
-    void window.electronAPI.gateway.setExtraEnvs(exportEnvs).catch((err) => {
+    void window.electronAPI.gateway.setExtraEnvs(exportEnvs).catch((err: unknown) => {
       console.warn('[gateway] 同步 extra envs 失败:', err)
     })
   }, [])
@@ -187,6 +199,7 @@ function App() {
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [agentWorkspaceMap, setAgentWorkspaceMap] = useState<Record<string, string>>({})
   const [welcomeTabs, setWelcomeTabs] = useState<WelcomeTab[]>([])
+  const widgetTaskCompleteRef = useRef<(success: boolean, message: string) => void>(() => {})
   const splashActivatedAt = useRef(0)
   const waitingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const timeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -513,11 +526,12 @@ function App() {
 
   // Load sessions from disk on mount
   useEffect(() => {
-    window.electronAPI.sessions.load().then((loaded) => {
+    window.electronAPI.sessions.load().then((loaded: unknown[]) => {
       if (Array.isArray(loaded) && loaded.length > 0) {
-        setSessions(loaded)
+        const sessions = loaded as ChatSession[]
+        setSessions(sessions)
         // Restore active session to the most recently updated one
-        const sorted = [...loaded].sort((a, b) => b.updatedAt - a.updatedAt)
+        const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
         setActiveSessionId(sorted[0].id)
       }
       setSessionsLoaded(true)
@@ -525,7 +539,7 @@ function App() {
       setSessionsLoaded(true)
     })
     // Load response timeout
-    window.electronAPI.config.getTimeout().then((ms) => {
+    window.electronAPI.config.getTimeout().then((ms: number) => {
       if (ms > 0) setResponseTimeout(ms)
     }).catch(() => {})
     // Load timeout enabled flag
@@ -615,14 +629,14 @@ function App() {
 
   /** 从主进程同步「关闭窗口」偏好（与关闭弹窗、设置共用） */
   useEffect(() => {
-    void window.electronAPI.app.getCloseWindowBehavior().then((b) => {
+    void window.electronAPI.app.getCloseWindowBehavior().then((b: 'ask' | 'tray' | 'quit') => {
       setCloseWindowBehavior(b)
     }).catch(() => {})
   }, [])
 
   useEffect(() => {
     if (!showSettings) return
-    void window.electronAPI.app.getCloseWindowBehavior().then((b) => {
+    void window.electronAPI.app.getCloseWindowBehavior().then((b: 'ask' | 'tray' | 'quit') => {
       setCloseWindowBehavior(b)
     }).catch(() => {})
   }, [showSettings])
@@ -630,7 +644,7 @@ function App() {
   // 监听更新通知
   useEffect(() => {
     if (skipUpdateCheck) return
-    const unsub = window.electronAPI.app.onUpdateAvailable((info) => {
+    const unsub = window.electronAPI.app.onUpdateAvailable((info: { version: string; releaseNotes: string; downloadUrl: string; fileName: string; forceUpdate?: boolean }) => {
       setUpdateInfo(info)
       setUpdateDialogVisible(true)
       setBgDownloadDone(false)
@@ -638,7 +652,7 @@ function App() {
     
     // 主动检查一次（防止后端事件在 React 挂载前已发送而被错过）
     const timer = setTimeout(() => {
-      window.electronAPI.app.checkForUpdate(localStorage.getItem('accessToken')).then((info) => {
+      window.electronAPI.app.checkForUpdate(localStorage.getItem('accessToken')).then((info: { version: string; releaseNotes: string; downloadUrl: string; fileName: string; forceUpdate?: boolean } | null) => {
         if (info) {
           setUpdateInfo(info)
           setUpdateDialogVisible(true)
@@ -724,19 +738,19 @@ function App() {
         stopTimeoutTimer()
         void refreshSessionUsageRef.current(sid, msg.status === 'done')
         if (msg.status === 'done') {
-          // 先清理该会话上一次遗留的补拉任务，避免快速连续回复时并发覆盖。
           const prevTimer = usageSyncTimerBySessionRef.current.get(sid)
           if (prevTimer) {
             clearTimeout(prevTimer)
             usageSyncTimerBySessionRef.current.delete(sid)
           }
-          // 再延迟补拉一次 authoritative usage：
-          // 目的不是“多做防御”，而是对齐网关已确认存在的异步写回时序。
           const timer = setTimeout(() => {
             usageSyncTimerBySessionRef.current.delete(sid)
             void refreshSessionUsageRef.current(sid, true)
           }, 900)
           usageSyncTimerBySessionRef.current.set(sid, timer)
+          widgetTaskCompleteRef.current(true, '任务已完成')
+        } else if (msg.status === 'error') {
+          widgetTaskCompleteRef.current(false, msg.content || '任务执行失败')
         }
       }
       markUserMessageComplete(sid, userMessageId)
@@ -1240,16 +1254,81 @@ function App() {
       if (ok) {
         setShowSetup(false)
         void loadAgentWorkspaceMap()
-        // 加载新配置的可用模型列表
         window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
-        // Refresh gateway token/port from the newly written config before starting
         await gateway.start()
       }
     } catch (err) {
-      // saveConfig already sets saveError internally, but log for debugging
       console.error('Setup completion failed:', err)
     }
   }, [setup, gateway, loadAgentWorkspaceMap])
+
+  const handleWidgetSendMessage = useCallback((content: string) => {
+    if (!activeSessionId) {
+      const agentId = ws.agents.length > 0 ? ws.defaultAgentId : undefined
+      const session: ChatSession = {
+        id: generateId(),
+        title: content.slice(0, 30) || '新对话',
+        agentId,
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+      const userMsg: ChatMessage = {
+        id: generateId(),
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+        status: 'done',
+      }
+      session.messages.push(userMsg)
+      setSessions((prev) => [session, ...prev])
+      activeSessionIdRef.current = session.id
+      lastSendSessionIdRef.current = session.id
+      setActiveSessionId(session.id)
+      startWaiting()
+      void ws.sendMessage(session.id, content, undefined, session.agentId, session.modelOverride).then((ack) => {
+        registerRunBinding(ack, session.id, userMsg.id)
+      })
+    } else {
+      const userMsg: ChatMessage = {
+        id: generateId(),
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+        status: 'done',
+      }
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== activeSessionId) return s
+          return {
+            ...s,
+            title: s.messages.length === 0 ? content.slice(0, 30) : s.title,
+            messages: [...s.messages, userMsg],
+            updatedAt: Date.now(),
+          }
+        })
+      )
+      startWaiting()
+      lastSendSessionIdRef.current = activeSessionId
+      const currentSession = sessionsRef.current.find((s) => s.id === activeSessionId)
+      void ws.sendMessage(activeSessionId, content, undefined, currentSession?.agentId, currentSession?.modelOverride).then((ack) => {
+        registerRunBinding(ack, activeSessionId, userMsg.id)
+      })
+    }
+  }, [activeSessionId, ws, startWaiting, registerRunBinding])
+
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.widget.onMessageReceived((message: string) => {
+      handleWidgetSendMessage(message)
+    })
+    return unsubscribe
+  }, [handleWidgetSendMessage])
+
+  const handleWidgetTaskComplete = useCallback((success: boolean, message: string) => {
+    void window.electronAPI.widget.taskComplete(success, message)
+  }, [])
+
+  widgetTaskCompleteRef.current = handleWidgetTaskComplete
 
   // 网关启动/重启时激活视频启动屏
   useEffect(() => {
@@ -1862,7 +1941,7 @@ function App() {
           onSaved={() => {
             setShowModelSettings(false)
             // 重新读取配置以更新前端状态（当前模型显示等）
-            window.electronAPI.config.readConfig().then((savedConfig) => {
+            window.electronAPI.config.readConfig().then((savedConfig: Record<string, unknown> | null) => {
               if (savedConfig) {
                 const agents = (savedConfig as Record<string, unknown>).agents as Record<string, unknown> | undefined
                 const defaults = agents?.defaults as Record<string, unknown> | undefined
@@ -1916,7 +1995,7 @@ function App() {
           onBackground={() => {
             setUpdateDialogVisible(false)
             // 下载继续在后台进行，监听完成事件
-            const unsub = window.electronAPI.app.onDownloadProgress((p) => {
+            const unsub = window.electronAPI.app.onDownloadProgress((p: { percent: number; transferredBytes: number; totalBytes: number }) => {
               if (p.percent >= 100) {
                 unsub()
                 setBgDownloadDone(true)
