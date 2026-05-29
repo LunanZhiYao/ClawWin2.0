@@ -585,9 +585,22 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       } else if (stream === 'compaction') {
         if (phase === 'start') {
           setBackendStatus('正在压缩上下文...')
+          const runId = agentRunId || activeRunIdRef.current
+          if (runId) {
+            onMessageStream.current?.({
+              id: runId,
+              role: 'assistant',
+              content: '',
+              thinking: '',
+              toolCalls: [],
+              timestamp: Date.now(),
+              status: 'streaming',
+              taskStatus: 'compacting',
+              agentId: agentIdFromEvent || (runId ? runIdAgentIdMapRef.current.get(runId) : undefined),
+            })
+          }
         } else if (phase === 'end') {
           setBackendStatus('压缩完成，正在思考...')
-          // 透传压缩事件的 sessionKey，避免 App 层在多会话场景下刷新错会话占用率。
           onCompactionEnd.current?.(normalizeSessionKey(p.sessionKey as string | undefined))
         }
       }

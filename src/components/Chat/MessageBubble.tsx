@@ -366,6 +366,7 @@ const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: bool
     running: '运行中',
     pending: '等待中',
     queued: '排队中',
+    compacting: '正在压缩上下文',
     completed: '任务已完成',
     retrying: '遇到点小问题，正在重试',
     interrupted: '任务已中断',
@@ -412,6 +413,7 @@ const TaskStatusSummary: React.FC<{ toolCalls: ChatToolCall[]; taskStatus?: Task
       ? taskStatus === 'completed' ? '任务已完成'
         : taskStatus === 'running' ? '运行中'
         : taskStatus === 'failed' ? '执行失败'
+        : taskStatus === 'compacting' ? '压缩上下文'
         : '处理中'
       : ''
 

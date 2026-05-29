@@ -277,6 +277,7 @@ export type TaskStatus =
   | 'waiting_input'
   | 'calling_tool'
   | 'starting'
+  | 'compacting'
   | 'completed'
   | 'failed'
   | 'interrupted'

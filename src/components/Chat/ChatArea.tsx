@@ -947,13 +947,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 />
               ))}
             {isWaiting && !isStreaming && !hasStreamingMessage && (
-              <div className="message-bubble message-assistant message-bubble-waiting">
-                <div className="message-body">
-                  <div className="message-content message-content-assistant">
-                    <div className="typing-dots">
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
+              <div className="message-row assistant">
+                <div className="message-avatar ai">
+                  <img src="/assets/logo.png" alt="AI" className="message-avatar-img" />
+                </div>
+                <div className="message-column">
+                  <div className="message-header">
+                    <span className="message-nickname">千易</span>
+                  </div>
+                  <div className="message-bubble message-assistant message-bubble-waiting">
+                    <div className="message-body">
+                      <div className="message-content message-content-assistant">
+                        <div className="typing-dots">
+                          <span className="typing-dot" />
+                          <span className="typing-dot" />
+                          <span className="typing-dot" />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
