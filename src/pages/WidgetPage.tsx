@@ -4,14 +4,6 @@ import logoUrl from '../../assets/logo.png'
 
 declare const window: Window & { electronAPI: ElectronAPI }
 
-function getEdgeIndicatorStyle(edges: string[]): React.CSSProperties {
-  if (edges.includes('left')) return { left: 0, top: '50%', transform: 'translateY(-50%)' }
-  if (edges.includes('right')) return { right: 0, top: '50%', transform: 'translateY(-50%)' }
-  if (edges.includes('top')) return { top: 0, left: '50%', transform: 'translateX(-50%)' }
-  if (edges.includes('bottom')) return { bottom: 0, left: '50%', transform: 'translateX(-50%)' }
-  return { left: 0, top: '50%', transform: 'translateY(-50%)' }
-}
-
 export const WidgetPage: React.FC = () => {
   const [isHovering, setIsHovering] = useState(false)
   const [isTaskRunning, setIsTaskRunning] = useState(false)
@@ -19,15 +11,12 @@ export const WidgetPage: React.FC = () => {
   const [showSpeechBubble, setShowSpeechBubble] = useState(false)
   const [showContextMenu, setShowContextMenu] = useState(false)
   const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 })
-  const [nearEdges, setNearEdges] = useState<string[]>([])
-  const [isEdgeHidden, setIsEdgeHidden] = useState(false)
   const [inputValue, setInputValue] = useState('')
 
   const inputRef = useRef<HTMLInputElement>(null)
   const ignoreMouseRef = useRef(true)
   const isDraggingRef = useRef(false)
   const dragStartRef = useRef({ screenX: 0, screenY: 0 })
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const speechBubbleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const leaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputFocusedRef = useRef(false)
@@ -52,16 +41,15 @@ export const WidgetPage: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    const unsubPosition = window.electronAPI.widget.onPositionChanged((data) => {
-      setNearEdges(data.edges || [])
-    })
-
     const unsubTask = window.electronAPI.widget.onTaskComplete((result) => {
       setIsTaskRunning(false)
       setTaskResult(result)
       setShowSpeechBubble(true)
-      setIsEdgeHidden(false)
       setIgnore(false)
+      if (leaveTimeoutRef.current) {
+        clearTimeout(leaveTimeoutRef.current)
+        leaveTimeoutRef.current = null
+      }
       if (speechBubbleTimerRef.current) clearTimeout(speechBubbleTimerRef.current)
       speechBubbleTimerRef.current = setTimeout(() => {
         setShowSpeechBubble(false)
@@ -70,11 +58,10 @@ export const WidgetPage: React.FC = () => {
     })
 
     return () => {
-      unsubPosition()
       unsubTask()
       if (speechBubbleTimerRef.current) clearTimeout(speechBubbleTimerRef.current)
     }
-  }, [])
+  }, [setIgnore])
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -90,7 +77,6 @@ export const WidgetPage: React.FC = () => {
 
       if (isOverInteractive) {
         setIgnore(false)
-        if (isEdgeHidden) setIsEdgeHidden(false)
         if (!isHovering) setIsHovering(true)
       } else {
         if (!inputFocusedRef.current && !showContextMenu && !showSpeechBubble) {
@@ -108,35 +94,18 @@ export const WidgetPage: React.FC = () => {
       document.removeEventListener('mousemove', handleMouseMove)
       if (leaveTimeoutRef.current) { clearTimeout(leaveTimeoutRef.current); leaveTimeoutRef.current = null }
     }
-  }, [isEdgeHidden, isHovering, showContextMenu, showSpeechBubble, setIgnore])
-
-  useEffect(() => {
-    if (isHovering || showContextMenu || showSpeechBubble || isTaskRunning || inputFocusedRef.current) {
-      if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null }
-      return
-    }
-    if (nearEdges.length === 0) {
-      if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null }
-      return
-    }
-    if (hideTimeoutRef.current) return
-
-    hideTimeoutRef.current = setTimeout(() => {
-      setIsEdgeHidden(true)
-      setIsHovering(false)
-      hideTimeoutRef.current = null
-    }, 3000)
-
-    return () => {
-      if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null }
-    }
-  }, [isHovering, showContextMenu, showSpeechBubble, isTaskRunning, nearEdges])
+  }, [isHovering, showContextMenu, showSpeechBubble, setIgnore])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
     setShowContextMenu(true)
-    setContextMenuPos({ x: e.clientX, y: e.clientY })
+    const menuHeight = 100
+    const menuWidth = 160
+    setContextMenuPos({
+      x: Math.max(0, Math.min(e.clientX, 300 - menuWidth)),
+      y: Math.max(0, Math.min(e.clientY, 400 - menuHeight)),
+    })
     setIgnore(false)
   }, [setIgnore])
 
@@ -174,6 +143,16 @@ export const WidgetPage: React.FC = () => {
     }, 150)
   }, [showContextMenu, setIgnore, showSpeechBubble])
 
+  const handleInputPanelMouseLeave = useCallback(() => {
+    if (inputFocusedRef.current || showSpeechBubble) return
+    setIsHovering(false)
+    setTimeout(() => {
+      if (!inputFocusedRef.current && !showSpeechBubble && !isDraggingRef.current) {
+        setIgnore(true)
+      }
+    }, 150)
+  }, [setIgnore, showSpeechBubble])
+
   useEffect(() => {
     if (!showContextMenu) return
     const handleClick = () => {
@@ -193,7 +172,7 @@ export const WidgetPage: React.FC = () => {
       document.removeEventListener('click', handleClick)
       window.removeEventListener('resize', handleResize)
     }
-  }, [showContextMenu, setIgnore])
+  }, [showContextMenu, setIgnore, showSpeechBubble])
 
   const handleIconMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -232,6 +211,22 @@ export const WidgetPage: React.FC = () => {
     setTaskResult(null)
   }, [])
 
+  const bubbleStyle: React.CSSProperties = isHovering ? {
+    position: 'absolute',
+    top: 12,
+    left: 16,
+    right: 16,
+    animation: 'widgetBubbleAppear 0.5s cubic-bezier(0.34,1.56,0.64,1)',
+    zIndex: 20,
+  } : {
+    position: 'absolute',
+    bottom: 96,
+    left: 16,
+    right: 16,
+    animation: 'widgetBubbleAppear 0.5s cubic-bezier(0.34,1.56,0.64,1)',
+    zIndex: 20,
+  }
+
   return (
     <div style={{
       width: '100vw',
@@ -241,17 +236,7 @@ export const WidgetPage: React.FC = () => {
       background: 'transparent',
     }}>
       {showSpeechBubble && taskResult && (
-        <div
-          className="widget-interactive"
-          style={{
-            position: 'absolute',
-            top: 12,
-            left: 16,
-            right: 16,
-            animation: 'widgetBubbleAppear 0.5s cubic-bezier(0.34,1.56,0.64,1)',
-            zIndex: 20,
-          }}
-        >
+        <div className="widget-interactive" style={bubbleStyle}>
           <div style={{
             background: taskResult.success
               ? 'linear-gradient(135deg, rgba(236,253,245,0.97) 0%, rgba(209,250,229,0.97) 100%)'
@@ -262,7 +247,7 @@ export const WidgetPage: React.FC = () => {
             boxShadow: '0 8px 32px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.04)',
             border: `1.5px solid ${taskResult.success ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`,
             position: 'relative',
-            maxHeight: 240,
+            maxHeight: 200,
             overflow: 'hidden',
           }}>
             <div style={{
@@ -294,7 +279,7 @@ export const WidgetPage: React.FC = () => {
             <div style={{
               fontSize: 13, color: '#374151', lineHeight: 1.6,
               wordBreak: 'break-word', paddingRight: 20,
-              maxHeight: 160,
+              maxHeight: 130,
               overflowY: 'auto',
               overflowX: 'hidden',
             }}>
@@ -310,9 +295,10 @@ export const WidgetPage: React.FC = () => {
         </div>
       )}
 
-      {isHovering && !isEdgeHidden && (
+      {isHovering && (
         <div
           className="widget-interactive"
+          onMouseLeave={handleInputPanelMouseLeave}
           style={{
             position: 'absolute',
             bottom: 96,
@@ -390,8 +376,6 @@ export const WidgetPage: React.FC = () => {
           height: 64,
           cursor: 'grab',
           userSelect: 'none',
-          opacity: isEdgeHidden ? 0 : 1,
-          transition: 'opacity 0.4s ease',
           zIndex: 10,
         }}
       >
@@ -411,29 +395,33 @@ export const WidgetPage: React.FC = () => {
           }}
         />
 
-        {isTaskRunning && !isEdgeHidden && (
-          <>
-            <div style={{
-              position: 'absolute', top: -8, left: -8, right: -8, bottom: -8,
-              border: '2.5px solid transparent', borderTopColor: '#3b82f6', borderRightColor: '#60a5fa',
-              borderRadius: '50%', animation: 'widgetSpin 1s linear infinite',
-              pointerEvents: 'none',
-            }} />
-            <div style={{
-              position: 'absolute', top: -14, left: -14, right: -14, bottom: -14,
-              border: '1.5px solid transparent', borderBottomColor: 'rgba(59,130,246,0.4)',
-              borderRadius: '50%', animation: 'widgetSpin 1.8s linear infinite reverse',
-              pointerEvents: 'none',
-            }} />
-            <div style={{
-              position: 'absolute', top: -4, right: -4, width: 12, height: 12,
-              borderRadius: '50%', background: '#3b82f6',
-              animation: 'widgetPulse 1.2s ease-in-out infinite',
-              boxShadow: '0 0 8px rgba(59,130,246,0.6)',
-              pointerEvents: 'none',
-            }} />
-          </>
-        )}
+        <>
+          <div style={{
+            position: 'absolute', top: -8, left: -8, right: -8, bottom: -8,
+            border: '2.5px solid transparent', borderTopColor: '#3b82f6', borderRightColor: '#60a5fa',
+            borderRadius: '50%', animation: isTaskRunning ? 'widgetSpin 1s linear infinite' : 'none',
+            pointerEvents: 'none',
+            opacity: isTaskRunning ? 1 : 0,
+            transition: 'opacity 0.3s ease',
+          }} />
+          <div style={{
+            position: 'absolute', top: -14, left: -14, right: -14, bottom: -14,
+            border: '1.5px solid transparent', borderBottomColor: 'rgba(59,130,246,0.4)',
+            borderRadius: '50%', animation: isTaskRunning ? 'widgetSpin 1.8s linear infinite reverse' : 'none',
+            pointerEvents: 'none',
+            opacity: isTaskRunning ? 1 : 0,
+            transition: 'opacity 0.3s ease',
+          }} />
+          <div style={{
+            position: 'absolute', top: -4, right: -4, width: 12, height: 12,
+            borderRadius: '50%', background: '#3b82f6',
+            animation: isTaskRunning ? 'widgetPulse 1.2s ease-in-out infinite' : 'none',
+            boxShadow: '0 0 8px rgba(59,130,246,0.6)',
+            pointerEvents: 'none',
+            opacity: isTaskRunning ? 1 : 0,
+            transition: 'opacity 0.3s ease',
+          }} />
+        </>
       </div>
 
       {showContextMenu && (
@@ -441,7 +429,7 @@ export const WidgetPage: React.FC = () => {
           className="widget-interactive"
           style={{
             position: 'absolute',
-            left: Math.min(contextMenuPos.x, 130),
+            left: contextMenuPos.x,
             top: contextMenuPos.y,
             background: 'rgba(255,255,255,0.98)',
             backdropFilter: 'blur(12px)',
@@ -451,7 +439,7 @@ export const WidgetPage: React.FC = () => {
             minWidth: 160,
             animation: 'widgetFadeIn 0.12s ease-out',
             zIndex: 30,
-            overflow: 'hidden',
+            overflow: 'visible',
           }}
         >
           <div
@@ -490,21 +478,6 @@ export const WidgetPage: React.FC = () => {
         </div>
       )}
 
-      {isEdgeHidden && (
-        <div
-          className="widget-interactive"
-          style={{
-            position: 'absolute',
-            width: 6, height: 40, borderRadius: 3,
-            background: 'linear-gradient(180deg, rgba(59,130,246,0.7) 0%, rgba(59,130,246,0.3) 100%)',
-            cursor: 'pointer',
-            animation: 'widgetEdgePulse 2s ease-in-out infinite',
-            ...getEdgeIndicatorStyle(nearEdges),
-            zIndex: 5,
-          }}
-        />
-      )}
-
       <style>{`
         html, body, #root {
           background: transparent !important;
@@ -537,10 +510,6 @@ export const WidgetPage: React.FC = () => {
           0% { opacity: 0; transform: scale(0.6) translateY(15px); }
           60% { transform: scale(1.05) translateY(-2px); }
           100% { opacity: 1; transform: scale(1) translateY(0); }
-        }
-        @keyframes widgetEdgePulse {
-          0%, 100% { opacity: 0.6; }
-          50% { opacity: 1; }
         }
       `}</style>
     </div>

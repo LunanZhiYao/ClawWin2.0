@@ -87,7 +87,18 @@ const BottomInput: React.FC<BottomInputProps> = ({
     const filesToProcess = Array.from(files).slice(0, MAX_ATTACHMENTS - attachments.length)
     if (filesToProcess.length === 0) return
 
-    const processOne = async (file: File) => {
+    const processOne = async (file: File): Promise<AttachmentWithPreview | null> => {
+      let filePath = ''
+      try {
+        filePath = window.electronAPI.file.getPath(file)
+      } catch {
+        // fallback: clipboard paste files have no backing path
+      }
+      if (!filePath) {
+        showError(`无法获取文件路径: ${file.name}，请使用拖放或文件选择`)
+        return null
+      }
+
       const isImage = file.type.startsWith('image/')
       let previewUrl: string | undefined
       let content: string | undefined
@@ -104,7 +115,7 @@ const BottomInput: React.FC<BottomInputProps> = ({
       return {
         type: isImage ? 'image' as const : 'file' as const,
         fileName: file.name,
-        filePath: '',
+        filePath,
         mimeType: file.type || undefined,
         content,
         previewUrl,
@@ -113,7 +124,7 @@ const BottomInput: React.FC<BottomInputProps> = ({
     }
 
     Promise.all(filesToProcess.map(processOne)).then((results) => {
-      const validAttachments = results.filter((a) => a !== null) as AttachmentWithPreview[]
+      const validAttachments = results.filter((a): a is AttachmentWithPreview => a !== null)
       if (validAttachments.length > 0) {
         setAttachments(prev => [...prev, ...validAttachments])
       }
@@ -498,7 +509,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [activeTabIndex, setActiveTabIndex] = useState(0)
   const [showCards, setShowCards] = useState(false)
   const [welcomeInput, setWelcomeInput] = useState('')
+  const [welcomeAttachments, setWelcomeAttachments] = useState<AttachmentWithPreview[]>([])
   const welcomeTextareaRef = useRef<HTMLTextAreaElement>(null)
+  const welcomeFileInputRef = useRef<HTMLInputElement>(null)
 
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
@@ -512,6 +525,133 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const ringRadius = 10
   const ringCircumference = 2 * Math.PI * ringRadius
   const ringOffset = ringCircumference * (1 - usageRate)
+
+  const showErrorWelcome = useCallback((msg: string) => {
+    console.warn('[WelcomeInput]', msg)
+  }, [])
+
+  const processWelcomeFiles = useCallback((files: FileList | File[]) => {
+    const filesToProcess = Array.from(files).slice(0, MAX_ATTACHMENTS - welcomeAttachments.length)
+    if (filesToProcess.length === 0) return
+
+    const processOne = async (file: File): Promise<AttachmentWithPreview | null> => {
+      let filePath = ''
+      try {
+        filePath = window.electronAPI.file.getPath(file)
+      } catch {
+        // fallback
+      }
+      if (!filePath) {
+        showErrorWelcome(`无法获取文件路径: ${file.name}`)
+        return null
+      }
+
+      const isImage = file.type.startsWith('image/')
+      let previewUrl: string | undefined
+      let content: string | undefined
+
+      if (isImage) {
+        previewUrl = URL.createObjectURL(file)
+        content = await new Promise<string>((resolve) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.readAsDataURL(file)
+        })
+      }
+
+      return {
+        type: isImage ? 'image' as const : 'file' as const,
+        fileName: file.name,
+        filePath,
+        mimeType: file.type || undefined,
+        content,
+        previewUrl,
+        size: file.size,
+      }
+    }
+
+    Promise.all(filesToProcess.map(processOne)).then((results) => {
+      const validAttachments = results.filter((a): a is AttachmentWithPreview => a !== null)
+      if (validAttachments.length > 0) {
+        setWelcomeAttachments(prev => [...prev, ...validAttachments])
+      }
+    })
+  }, [welcomeAttachments.length, showErrorWelcome])
+
+  const removeWelcomeAttachment = useCallback((index: number) => {
+    setWelcomeAttachments(prev => {
+      const removed = prev[index]
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl)
+      }
+      return prev.filter((_, i) => i !== index)
+    })
+  }, [])
+
+  const handleWelcomeSend = useCallback(async () => {
+    const trimmed = welcomeInput.trim()
+    const hasText = trimmed.length > 0
+    const hasAtt = welcomeAttachments.length > 0
+
+    if ((!hasText && !hasAtt) || disabled || !isReady) return
+
+    const resolvedAttachments = hasAtt
+      ? await Promise.all(
+          welcomeAttachments.map(async (a) => {
+            if (a.type === 'folder') return a
+            const result = await window.electronAPI.file.copyToWorkspace(a.filePath)
+            return { ...a, filePath: result.ok && result.destPath ? result.destPath : a.filePath }
+          })
+        )
+      : []
+
+    let content = trimmed
+    if (resolvedAttachments.length > 0) {
+      const paths = resolvedAttachments.map((a) => a.filePath).join('\n')
+      content = content ? `${content}\n${paths}` : paths
+    }
+
+    const chatAttachments: ChatAttachment[] | undefined = resolvedAttachments.length > 0
+      ? resolvedAttachments.map(({ type, fileName, filePath, mimeType, content: base64 }) => ({
+          type,
+          fileName,
+          filePath,
+          mimeType,
+          content: base64,
+        }))
+      : undefined
+
+    onSend(content, chatAttachments)
+    setWelcomeInput('')
+    for (const att of welcomeAttachments) {
+      if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
+    }
+    setWelcomeAttachments([])
+  }, [welcomeInput, welcomeAttachments, disabled, isReady, onSend])
+
+  const handleWelcomeKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleWelcomeSend()
+    }
+  }, [handleWelcomeSend])
+
+  const handleWelcomeFolderClick = useCallback(async () => {
+    if (disabled || !isReady || welcomeAttachments.length >= MAX_ATTACHMENTS) return
+    const folderPath = await window.electronAPI.dialog.selectFolder()
+    if (!folderPath) return
+    const folderName = folderPath.split(/[\\/]/).pop() || folderPath
+    setWelcomeAttachments(prev => [
+      ...prev,
+      { type: 'folder', fileName: folderName, filePath: folderPath, size: 0 },
+    ])
+  }, [disabled, isReady, welcomeAttachments.length])
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes}B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  }
 
   // 根据props初始化欢迎页配置
   useEffect(() => {
@@ -809,27 +949,56 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
           <div className="welcome-input-container">
             <input
+              ref={welcomeFileInputRef}
               type="file"
-              ref={undefined}
-              id="welcome-file-input"
+              accept="*/*"
+              multiple
               style={{ display: 'none' }}
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
-                  const file = e.target.files[0]
-                  if (file) {
-                    const fileName = file.name
-                    setWelcomeInput(prev => prev ? `${prev}\n${fileName}` : fileName)
-                  }
+                  processWelcomeFiles(e.target.files)
                 }
                 e.target.value = ''
               }}
             />
+            {welcomeAttachments.length > 0 && (
+              <div className="input-preview-strip">
+                {welcomeAttachments.map((att, index) => (
+                  <div key={index} className="input-preview-item">
+                    {att.previewUrl ? (
+                      <img src={att.previewUrl} alt={att.fileName} className="input-preview-thumb" />
+                    ) : att.type === 'folder' ? (
+                      <div className="input-preview-file-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                        </svg>
+                      </div>
+                    ) : (
+                      <div className="input-preview-file-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                          <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                      </div>
+                    )}
+                    <div className="input-preview-info">
+                      <span className="input-preview-name" title={att.type === 'folder' ? att.filePath : att.fileName}>
+                        {att.fileName.length > 12 ? att.fileName.slice(0, 9) + '...' : att.fileName}
+                      </span>
+                      <span className="input-preview-size">{att.type === 'folder' ? '文件夹' : formatFileSize(att.size)}</span>
+                    </div>
+                    <button className="input-preview-remove" onClick={() => removeWelcomeAttachment(index)} title="移除文件">&times;</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="welcome-input-wrapper">
               <textarea
                 ref={welcomeTextareaRef}
                 className="welcome-input"
                 value={welcomeInput}
                 onChange={(e) => setWelcomeInput(e.target.value)}
+                onKeyDown={handleWelcomeKeyDown}
                 placeholder="请输入任务，交给我来帮你完成"
                 disabled={disabled || !isReady}
               />
@@ -838,10 +1007,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <button
                     className="attach-btn"
                     title="选择文件"
-                    onClick={() => {
-                      const fileInput = document.getElementById('welcome-file-input') as HTMLInputElement
-                      fileInput?.click()
-                    }}
+                    onClick={() => welcomeFileInputRef.current?.click()}
+                    disabled={disabled || !isReady || welcomeAttachments.length >= MAX_ATTACHMENTS}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
@@ -850,13 +1017,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <button
                     className="attach-btn"
                     title="挂载文件夹"
-                    onClick={async () => {
-                      const folderPath = await window.electronAPI.dialog.selectFolder()
-                      if (folderPath) {
-                        const folderName = folderPath.split(/[\\/]/).pop() || folderPath
-                        setWelcomeInput(prev => prev ? `${prev}\n${folderName}` : folderName)
-                      }
-                    }}
+                    onClick={handleWelcomeFolderClick}
+                    disabled={disabled || !isReady || welcomeAttachments.length >= MAX_ATTACHMENTS}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
@@ -878,13 +1040,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
                 <button
                   className="welcome-send-btn"
-                  disabled={disabled || !isReady}
-                  onClick={() => {
-                    if (welcomeInput.trim()) {
-                      onSend(welcomeInput.trim())
-                      setWelcomeInput('')
-                    }
-                  }}
+                  disabled={disabled || !isReady || (!welcomeInput.trim() && welcomeAttachments.length === 0)}
+                  onClick={handleWelcomeSend}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>

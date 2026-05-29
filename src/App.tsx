@@ -1837,15 +1837,18 @@ function App() {
                   超时后自动中断并重新继续执行。开启时使用设置的时间，关闭时默认10分钟（防止大模型异常无法中断）。
                 </p>
                 <div className="settings-toggle-row" style={{ marginBottom: '16px' }}>
-                  <input
-                    type="checkbox"
-                    checked={timeoutEnabled}
-                    onChange={(e) => {
-                      const val = e.target.checked
-                      setTimeoutEnabled(val)
-                      window.electronAPI.config.saveTimeoutEnabled(val).catch(() => {})
-                    }}
-                  />
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={timeoutEnabled}
+                      onChange={(e) => {
+                        const val = e.target.checked
+                        setTimeoutEnabled(val)
+                        window.electronAPI.config.saveTimeoutEnabled(val).catch(() => {})
+                      }}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
                   <span>自定义超时时间</span>
                 </div>
                 <div className="settings-timeout-row" style={{ opacity: timeoutEnabled ? 1 : 0.5, pointerEvents: timeoutEnabled ? 'auto' : 'none' }}>
@@ -1890,15 +1893,18 @@ function App() {
               <div className="settings-grid">
                 <div className="settings-section">
                   <label className="settings-toggle-row">
-                    <input
-                      type="checkbox"
-                      checked={autoCompact}
-                      onChange={(e) => {
-                        const val = e.target.checked
-                        setAutoCompact(val)
-                        window.electronAPI.config.saveAutoCompact(val).catch(() => {})
-                      }}
-                    />
+                    <label className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={autoCompact}
+                        onChange={(e) => {
+                          const val = e.target.checked
+                          setAutoCompact(val)
+                          window.electronAPI.config.saveAutoCompact(val).catch(() => {})
+                        }}
+                      />
+                      <span className="toggle-slider" />
+                    </label>
                     <span>自动压缩上下文</span>
                   </label>
                 </div>
@@ -1918,15 +1924,18 @@ function App() {
                 </div> */}
                 <div className="settings-section">
                   <label className="settings-toggle-row">
-                    <input
-                      type="checkbox"
-                      checked={shellHints}
-                      onChange={(e) => {
-                        const val = e.target.checked
-                        setShellHints(val)
-                        window.electronAPI.config.saveShellHints(val).catch(() => {})
-                      }}
-                    />
+                    <label className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={shellHints}
+                        onChange={(e) => {
+                          const val = e.target.checked
+                          setShellHints(val)
+                          window.electronAPI.config.saveShellHints(val).catch(() => {})
+                        }}
+                      />
+                      <span className="toggle-slider" />
+                    </label>
                     <span>兼容 Windows</span>
                   </label>
                 </div>
