@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
 import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel } from '../../types'
 import { type WelcomeTab } from '../../api/welcome'
-import logoSrc from '../../assets/logo.png'
+import logoSrc from '../../../assets/logo.png'
 
 // 完整版底部输入框组件 - 整合所有功能
 interface BottomInputProps {

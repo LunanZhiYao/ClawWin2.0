@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import type { ChatSession, AgentInfo } from '../../types'
 import type { ElectronAPI } from '../../types/electron'
-import logoSrc from '../../assets/logo.png'
+import logoSrc from '../../../assets/logo.png'
 
 declare const window: Window & { electronAPI: ElectronAPI }
 

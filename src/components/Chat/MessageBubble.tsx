@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { ChatMessage, ChatToolCall, TaskStatus } from '../../types'
-import logoSrc from '../../assets/logo.png'
+import logoSrc from '../../../assets/logo.png'
 
 function formatMessageTime(timestamp: number): string {
   const date = new Date(timestamp)
