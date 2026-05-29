@@ -2,6 +2,7 @@
  * 应用级全屏启动等待层：与网关启动屏（VideoSplash）共用视觉结构，
  * 避免「初始化 / 验证登录」与「等待网关」两套样式不一致。
  */
+import logoSrc from '../../assets/logo.png'
 interface StartupSplashProps {
   /** 主状态文案，显示在转圈下方 */
   message: string
@@ -26,7 +27,7 @@ export function StartupSplash({
 
       <div className="startup-splash-center">
         <div className="startup-splash-spinner" aria-hidden>
-          <img src="/assets/logo.png" alt="ClawWin" className="startup-logo" />
+          <img src={logoSrc} alt="ClawWin" className="startup-logo" />
         </div>
         <p className="startup-splash-message">{message}</p>
       </div>

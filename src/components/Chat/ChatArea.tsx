@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
 import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel } from '../../types'
 import { type WelcomeTab } from '../../api/welcome'
+import logoSrc from '../../assets/logo.png'
 
 // 完整版底部输入框组件 - 整合所有功能
 interface BottomInputProps {
@@ -941,7 +942,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {messages.length === 0 ? (
         <div className="welcome-screen">
           <div className="welcome-content">
-            <img src="/assets/logo.png" alt="鲁南千易" className="welcome-avatar" />
+            <img src={logoSrc} alt="鲁南千易" className="welcome-avatar" />
             <div className="welcome-info">
               <div className="welcome-name">鲁南千易</div>
               <div className="welcome-desc">👋 千易 为你24小时随时在线</div>
@@ -1106,7 +1107,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             {isWaiting && !isStreaming && !hasStreamingMessage && (
               <div className="message-row assistant">
                 <div className="message-avatar ai">
-                  <img src="/assets/logo.png" alt="AI" className="message-avatar-img" />
+                  <img src={logoSrc} alt="AI" className="message-avatar-img" />
                 </div>
                 <div className="message-column">
                   <div className="message-header">

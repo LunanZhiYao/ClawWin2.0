@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import type { ChatSession, AgentInfo } from '../../types'
 import type { ElectronAPI } from '../../types/electron'
+import logoSrc from '../../assets/logo.png'
 
 declare const window: Window & { electronAPI: ElectronAPI }
 
@@ -286,7 +287,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 >
                   <div className="session-item-row">
                     <div className={`session-item-avatar ${isActive ? 'avatar-visible' : ''}`}>
-                      <img src="../../assets/logo.png" alt="" className="session-avatar-img" />
+                      <img src={logoSrc} alt="" className="session-avatar-img" />
                     </div>
                     <div className="session-item-content">
                       <div className="session-item-title" onDoubleClick={(e) => {

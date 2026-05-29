@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import type { ChatMessage, ChatToolCall, TaskStatus } from '../../types'
+import logoSrc from '../../assets/logo.png'
 
 function formatMessageTime(timestamp: number): string {
   const date = new Date(timestamp)
@@ -524,7 +525,7 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
           {messageIsSubAgent ? (
             <span className="message-avatar-emoji">{subAgentInfo!.emoji}</span>
           ) : (
-            <img src="/assets/logo.png" alt="AI" className="message-avatar-img" />
+            <img src={logoSrc} alt="AI" className="message-avatar-img" />
           )}
         </div>
       )}
