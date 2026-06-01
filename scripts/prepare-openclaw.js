@@ -199,7 +199,7 @@ function ensureTencentMemoryPlugin() {
   }
 
   console.log(`\n正在安装长期记忆插件 ${TENCENT_MEMORY_PLUGIN} ...`)
-  execSync(`npm install ${TENCENT_MEMORY_PLUGIN} --save --omit=dev --legacy-peer-deps`, {
+  execSync(`npm install ${TENCENT_MEMORY_PLUGIN} --save --omit=dev --legacy-peer-deps --ignore-scripts`, {
     cwd: TARGET_DIR,
     stdio: 'inherit',
     env: { ...process.env, NODE_ENV: 'production' },
