@@ -211,13 +211,15 @@ export class GatewayClient {
     this._offlineQueue = []
   }
 
-  /** 握手成功后：先发送断线期间积压的请求，再发送 OPEN 后、握手前的请求 */
+  /** 握手成功后：发送 OPEN 后、握手前的请求；离线队列不再自动重试，直接清空 */
   private drainAfterHandshake() {
-    const offline = this._offlineQueue.splice(0)
-    const pending = this._pendingQueue.splice(0)
-    for (const q of offline) {
-      this.request(q.method, q.params).then(q.resolve, q.reject)
+    // 清空离线队列，不再自动重试发送
+    const droppedOffline = this._offlineQueue.splice(0)
+    for (const q of droppedOffline) {
+      q.reject(new Error('offline queue dropped on reconnect'))
     }
+    // 只处理握手前缓冲的请求
+    const pending = this._pendingQueue.splice(0)
     for (const q of pending) {
       this.request(q.method, q.params).then(q.resolve, q.reject)
     }
@@ -383,16 +385,14 @@ export class GatewayClient {
           ws.addEventListener('close', onClose, { once: true })
         })
       }
-      // 重连间隙或 socket 正在关闭/已关闭：缓冲至下一次握手成功（否则用户点击发送会立刻 not connected）
+      // 重连间隙或 socket 正在关闭/已关闭：直接拒绝，不再缓冲到离线队列
       if (
         !this.closed &&
         (!this.ws ||
           this.ws.readyState === WebSocket.CLOSING ||
           this.ws.readyState === WebSocket.CLOSED)
       ) {
-        return new Promise<T>((resolve, reject) => {
-          this._offlineQueue.push({ method, params, resolve: (v) => resolve(v as T), reject })
-        })
+        return Promise.reject(new Error('not connected (offline queue disabled)'))
       }
     }
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {

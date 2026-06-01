@@ -536,7 +536,17 @@ function App() {
   useEffect(() => {
     window.electronAPI.sessions.load().then((loaded: unknown[]) => {
       if (Array.isArray(loaded) && loaded.length > 0) {
-        const sessions = loaded as ChatSession[]
+        const rawSessions = loaded as ChatSession[]
+        // 清理 streaming 状态的消息：软件异常关闭时可能残留 streaming 状态
+        // 将这些消息标记为 interrupted，避免 UI 显示为"正在生成"
+        const sessions = rawSessions.map((session) => ({
+          ...session,
+          messages: session.messages.map((msg) =>
+            msg.status === 'streaming'
+              ? { ...msg, status: 'done' as const, taskStatus: 'interrupted' as const }
+              : msg
+          ),
+        }))
         setSessions(sessions)
         // Restore active session to the most recently updated one
         const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
@@ -807,15 +817,10 @@ function App() {
   }, [stopWaiting])
 
   ws.onBackendDisconnected.current = useCallback(async (reason: string) => {
-    console.warn('[app] backend disconnected, auto-recovering:', reason)
-    if (isRecoveringRef.current) {
-      console.warn('[app] already recovering, skip duplicate trigger')
-      return
-    }
+    console.warn('[app] backend disconnected:', reason)
     stopWaiting()
     const sid = activeSessionIdRef.current
     if (sid && isStreamingRef.current) {
-      isRecoveringRef.current = true
       const session = sessionsRef.current?.find((s) => s.id === sid)
       try {
         await ws.abortSession(sid, session?.agentId, true)
@@ -827,16 +832,12 @@ function App() {
           if (s.id !== sid) return s
           const messages = s.messages.map((m) =>
             m.status === 'streaming'
-              ? { ...m, status: 'done' as const }
+              ? { ...m, status: 'done' as const, taskStatus: 'interrupted' as const }
               : m
           )
           return { ...s, messages, updatedAt: Date.now() }
         })
       )
-      setTimeout(() => {
-        sendContinueSilentlyRef.current?.()
-        isRecoveringRef.current = false
-      }, 500)
     }
   }, [stopWaiting, ws])
 
