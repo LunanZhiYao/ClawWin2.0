@@ -12,6 +12,8 @@ interface StartupSplashProps {
   showProgressBar?: boolean
   /** 退场动画（与 VideoSplash 一致） */
   exiting?: boolean
+  /** 关闭按钮回调 */
+  onClose?: () => void
 }
 
 export function StartupSplash({
@@ -19,12 +21,26 @@ export function StartupSplash({
   hint,
   showProgressBar = true,
   exiting = false,
+  onClose,
 }: StartupSplashProps) {
   return (
     <div className={`video-splash${exiting ? ' video-splash-exit' : ''}`}>
       <div className="startup-splash-gradient-bg" aria-hidden />
       <div className="video-splash-overlay" />
-
+      {onClose && (
+        <button
+          type="button"
+          className="splash-close-btn"
+          onClick={onClose}
+          aria-label="关闭应用"
+          title="关闭应用"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      )}
       <div className="startup-splash-center">
         <div className="startup-splash-spinner" aria-hidden>
           <img src={logoSrc} alt="ClawWin" className="startup-logo" />

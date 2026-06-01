@@ -5998,3 +5998,231 @@ body.widget-page #root {
   line-height: 1.6;
   word-break: break-word;
 }
+
+/* ============================================
+   App Close Dialog - 关闭确认对话框
+   ============================================ */
+
+.app-close-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999999;
+  animation: fadeIn 0.2s ease;
+}
+
+.app-close-dialog {
+  background: white;
+  border-radius: 20px;
+  padding: 32px 40px;
+  text-align: center;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+  animation: closeDialogSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  max-width: 420px;
+  width: 90%;
+}
+
+@keyframes closeDialogSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(30px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.app-close-dialog-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #D97706;
+  box-shadow: 0 8px 20px rgba(217, 119, 6, 0.2);
+}
+
+.app-close-dialog-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+  letter-spacing: -0.3px;
+}
+
+.app-close-dialog-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0 0 24px 0;
+}
+
+.app-close-dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.app-close-option-btn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.app-close-option-btn:hover {
+  border-color: var(--primary);
+  background: #EFF6FF;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+}
+
+.app-close-option-btn:active {
+  transform: translateY(0);
+}
+
+.app-close-option-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--bg-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.app-close-option-btn:hover .app-close-option-icon {
+  background: var(--primary);
+  color: white;
+}
+
+.app-close-option-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-close-option-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.app-close-option-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.app-close-option-quit:hover {
+  border-color: #EF4444;
+  background: #FEF2F2;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
+}
+
+.app-close-option-quit:hover .app-close-option-icon {
+  background: #EF4444;
+  color: white;
+}
+
+.app-close-cancel-btn {
+  width: 100%;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 16px;
+}
+
+.app-close-cancel-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.app-close-dialog-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* 向导页面关闭按钮 */
+.setup-close-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  z-index: 10;
+  backdrop-filter: blur(4px);
+}
+
+.setup-close-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  color: white;
+  transform: scale(1.05);
+}
+
+.setup-close-btn:active {
+  transform: scale(0.95);
+}
+
+/* 启动页面关闭按钮 */
+.splash-close-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  z-index: 10;
+  backdrop-filter: blur(4px);
+}
+
+.splash-close-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  color: white;
+  transform: scale(1.05);
+}
+
+.splash-close-btn:active {
+  transform: scale(0.95);
+}

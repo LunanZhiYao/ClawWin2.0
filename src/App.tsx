@@ -9,6 +9,7 @@ import { ErrorBoundary } from './components/Common/ErrorBoundary'
 import { StartupSplash } from './components/Common/StartupSplash'
 import { VideoSplash } from './components/Common/VideoSplash'
 import { WindowControls } from './components/Common/WindowControls'
+import { AppCloseDialog } from './components/Common/AppCloseDialog'
 import { UpdateNotification } from './components/Common/UpdateNotification'
 import { ModelSettings } from './components/Settings/ModelSettings'
 import { ChannelSettings } from './components/Settings/ChannelSettings'
@@ -160,7 +161,7 @@ function App() {
         exportEnvs[key] = value as string
       }
     }
-    console.log("[gateway:info] 注入环境变量:",JSON.stringify(Object.keys(exportEnvs)))
+    console.log("[gateway:info] 注入环境变量:",JSON.stringify(Object(exportEnvs)))
     void window.electronAPI.gateway.setExtraEnvs(exportEnvs).catch((err: unknown) => {
       console.warn('[gateway] 同步 extra envs 失败:', err)
     })
@@ -749,9 +750,13 @@ function App() {
             void refreshSessionUsageRef.current(sid, true)
           }, 900)
           usageSyncTimerBySessionRef.current.set(sid, timer)
-          widgetTaskCompleteRef.current(true, '任务已完成')
+          if (!msg.agentId || msg.agentId === 'main') {
+            widgetTaskCompleteRef.current(true, '任务已完成')
+          }
         } else if (msg.status === 'error') {
-          widgetTaskCompleteRef.current(false, msg.content || '任务执行失败')
+          if (!msg.agentId || msg.agentId === 'main') {
+            widgetTaskCompleteRef.current(false, msg.content || '任务执行失败')
+          }
         }
       }
       markUserMessageComplete(sid, userMessageId)
@@ -1400,53 +1405,28 @@ function App() {
   // 视频启动屏：激活后直到dismiss前一直显示
   const showVideoSplash = splashActive && !splashDismissed
 
-  /** 与主界面相同的关闭选择层；各分支早退时也必须挂载，否则 closeRequested 无 UI */
-  const appCloseDialog = showCloseDialog ? (
-    <div
-      className="settings-overlay app-close-dialog-overlay"
-      onClick={() => setShowCloseDialog(false)}
-    >
-      <div className="close-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="close-dialog-header">
-          <h2>关闭 鲁南千易</h2>
-        </div>
-        <div className="close-dialog-body">
-          <p>请选择关闭方式</p>
-        </div>
-        <div className="close-dialog-actions">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              setShowCloseDialog(false)
-              void window.electronAPI.app.setCloseWindowBehavior('tray')
-              setCloseWindowBehavior('tray')
-              void window.electronAPI.app.hideToTray()
-            }}
-          >
-            最小化到托盘
-          </button>
-          <button
-            type="button"
-            className="btn-danger"
-            onClick={() => {
-              setShowCloseDialog(false)
-              window.electronAPI.app.quitApp()
-            }}
-          >
-            退出程序
-          </button>
-        </div>
-        <p className="close-dialog-hint">最小化到托盘将保持网关运行，退出程序将关闭所有进程</p>
-      </div>
-    </div>
-  ) : null
+  const appCloseDialog = (
+    <AppCloseDialog
+      visible={showCloseDialog}
+      onClose={() => setShowCloseDialog(false)}
+      onMinimizeToTray={() => {
+        setShowCloseDialog(false)
+        void window.electronAPI.app.setCloseWindowBehavior('tray')
+        setCloseWindowBehavior('tray')
+        void window.electronAPI.app.hideToTray()
+      }}
+      onQuit={() => {
+        setShowCloseDialog(false)
+        window.electronAPI.app.quitApp()
+      }}
+    />
+  )
 
   // Loading state
   if (setup.isLoading) {
     return (
       <>
-        <StartupSplash message="正在初始化..." />
+        <StartupSplash message="正在初始化..." onClose={() => setShowCloseDialog(true)} />
         {appCloseDialog}
       </>
     )
@@ -1455,7 +1435,7 @@ function App() {
   if (!authBootstrapDone) {
     return (
       <>
-        <StartupSplash message="正在验证登录..." />
+        <StartupSplash message="正在验证登录..." onClose={() => setShowCloseDialog(true)} />
         {appCloseDialog}
       </>
     )
@@ -1483,6 +1463,18 @@ function App() {
       <>
         <ErrorBoundary>
           <div className="setup-container">
+            <button
+              type="button"
+              className="setup-close-btn"
+              onClick={() => setShowCloseDialog(true)}
+              aria-label="关闭应用"
+              title="关闭应用"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
             <div className="setup-progress">
               {SETUP_STEPS.map((s, i) => (
                 <div
@@ -1552,6 +1544,7 @@ function App() {
             gatewayState={gateway.state}
             exiting={showSplashExit}
             onRetry={() => restartGateway()}
+            onClose={() => setShowCloseDialog(true)}
           />
         </ErrorBoundary>
         {appCloseDialog}

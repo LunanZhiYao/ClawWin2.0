@@ -20,6 +20,7 @@ export const WidgetPage: React.FC = () => {
   const speechBubbleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const leaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputFocusedRef = useRef(false)
+  const inputPanelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     document.body.classList.add('widget-page')
@@ -79,7 +80,10 @@ export const WidgetPage: React.FC = () => {
         setIgnore(false)
         if (!isHovering) setIsHovering(true)
       } else {
-        if (!inputFocusedRef.current && !showContextMenu && !showSpeechBubble) {
+        if (inputFocusedRef.current && inputRef.current) {
+          inputRef.current.blur()
+        }
+        if (!showContextMenu && !showSpeechBubble) {
           leaveTimeoutRef.current = setTimeout(() => {
             setIgnore(true)
             setIsHovering(false)
@@ -185,8 +189,8 @@ export const WidgetPage: React.FC = () => {
       if (!isDraggingRef.current) return
       const dx = ev.screenX - dragStartRef.current.screenX
       const dy = ev.screenY - dragStartRef.current.screenY
-      dragStartRef.current = { screenX: ev.screenX, screenY: ev.screenY }
       if (dx !== 0 || dy !== 0) {
+        dragStartRef.current = { screenX: ev.screenX, screenY: ev.screenY }
         window.electronAPI.widget.moveBy(dx, dy)
       }
     }
@@ -206,14 +210,19 @@ export const WidgetPage: React.FC = () => {
     window.addEventListener('mouseup', handleUp)
   }, [setIgnore, showContextMenu, showSpeechBubble])
 
+  const handleIconDoubleClick = useCallback(() => {
+    window.electronAPI.widget.openMainWindow()
+  }, [])
+
   const dismissSpeechBubble = useCallback(() => {
     setShowSpeechBubble(false)
     setTaskResult(null)
   }, [])
 
+  const inputPanelOffset = inputPanelRef.current?.offsetHeight ?? 0
   const bubbleStyle: React.CSSProperties = isHovering ? {
     position: 'absolute',
-    top: 12,
+    bottom: 96 + inputPanelOffset + 8,
     left: 16,
     right: 16,
     animation: 'widgetBubbleAppear 0.5s cubic-bezier(0.34,1.56,0.64,1)',
@@ -297,6 +306,7 @@ export const WidgetPage: React.FC = () => {
 
       {isHovering && (
         <div
+          ref={inputPanelRef}
           className="widget-interactive"
           onMouseLeave={handleInputPanelMouseLeave}
           style={{
@@ -366,6 +376,7 @@ export const WidgetPage: React.FC = () => {
       <div
         className="widget-interactive"
         onMouseDown={handleIconMouseDown}
+        onDoubleClick={handleIconDoubleClick}
         onContextMenu={handleContextMenu}
         style={{
           position: 'absolute',

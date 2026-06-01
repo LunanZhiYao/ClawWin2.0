@@ -2345,6 +2345,9 @@ app.whenReady().then(async () => {
 
   // 启动后检查更新（尊重用户的跳过更新设置）
   mainWindow?.webContents.on('did-finish-load', () => {
+    if (!widgetWindow) {
+      createWidgetWindow()
+    }
     try {
       const uiPath = path.join(os.homedir(), '.openclaw', 'clawwin-ui.json')
       if (fs.existsSync(uiPath)) {
