@@ -34,6 +34,7 @@ interface UseWebSocketReturn {
   reconnect: () => void
   refreshAgents: () => void
   client: GatewayClient | null
+  clearOfflineQueue: () => void
 }
 
 function generateId(): string {
@@ -1518,5 +1519,9 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     }
   }, [])
 
-  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current }
+  const clearOfflineQueue = useCallback(() => {
+    clientRef.current?.clearOfflineQueue()
+  }, [])
+
+  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current, clearOfflineQueue }
 }

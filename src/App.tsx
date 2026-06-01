@@ -228,6 +228,8 @@ function App() {
   // 使用 ref 追踪最新的 activeSessionId，避免回调闭包中拿到旧值
   const activeSessionIdRef = useRef<string | null>(null)
   activeSessionIdRef.current = activeSessionId
+  // 使用 ref 存储 clearOfflineQueue 函数，避免依赖 ws 对象导致回调频繁重建
+  const clearOfflineQueueRef = useRef<(() => void) | null>(null)
 
   // 使用 ref 追踪 sessions 实时值，避免回调闭包捕获旧值
   const sessionsRef = useRef(sessions)
@@ -283,6 +285,7 @@ function App() {
   const DEFAULT_TIMEOUT = 10 * 60 * 1000
   const sendContinueSilentlyRef = useRef<(() => void) | null>(null)
   const isStreamingRef = useRef(false)
+  const isRecoveringRef = useRef(false)
 
   const startTimeoutTimer = useCallback(() => {
     if (timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current)
@@ -354,6 +357,7 @@ function App() {
   })
   abortSessionRef.current = ws.abortSession
   isStreamingRef.current = ws.isStreaming
+  clearOfflineQueueRef.current = ws.clearOfflineQueue
   const activeAgentId = useMemo(() => {
     const current = sessions.find((s) => s.id === activeSessionId)
     return current?.agentId || ws.defaultAgentId || 'main'
@@ -373,6 +377,7 @@ function App() {
 
   /** 重启 Gateway 并销毁旧 WebSocket 客户端，模拟完整重启 */
   const restartGateway = useCallback(async () => {
+    clearOfflineQueueRef.current?.()
     await gateway.restart()
     // 递增 reconnectKey 销毁旧 GatewayClient、创建新连接，确保 session 状态一致
     setWsReconnectKey(k => k + 1)
@@ -385,6 +390,7 @@ function App() {
   const ensureGatewayAfterAuth = useCallback(async () => {
     const g = gatewayRef.current
     if (g.state === 'ready' || g.state === 'starting' || g.state === 'restarting') {
+      clearOfflineQueueRef.current?.()
       await g.restart()
       setWsReconnectKey((k) => k + 1)
     } else {
@@ -802,9 +808,14 @@ function App() {
 
   ws.onBackendDisconnected.current = useCallback(async (reason: string) => {
     console.warn('[app] backend disconnected, auto-recovering:', reason)
+    if (isRecoveringRef.current) {
+      console.warn('[app] already recovering, skip duplicate trigger')
+      return
+    }
     stopWaiting()
     const sid = activeSessionIdRef.current
     if (sid && isStreamingRef.current) {
+      isRecoveringRef.current = true
       const session = sessionsRef.current?.find((s) => s.id === sid)
       try {
         await ws.abortSession(sid, session?.agentId, true)
@@ -824,6 +835,7 @@ function App() {
       )
       setTimeout(() => {
         sendContinueSilentlyRef.current?.()
+        isRecoveringRef.current = false
       }, 500)
     }
   }, [stopWaiting, ws])
@@ -1256,6 +1268,14 @@ function App() {
     const sid = activeSessionIdRef.current
     if (!sid) {
       console.log('[app] sendContinueSilently: no active session, skip')
+      return
+    }
+    if (isRecoveringRef.current) {
+      console.log('[app] sendContinueSilently: already recovering, skip duplicate')
+      return
+    }
+    if (ws.isStreaming) {
+      console.log('[app] sendContinueSilently: already streaming, skip')
       return
     }
     if (!ws.connected || gateway.state !== 'ready') {

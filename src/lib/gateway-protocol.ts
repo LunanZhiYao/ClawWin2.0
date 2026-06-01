@@ -122,6 +122,12 @@ export class GatewayClient {
     this.flushQueue(err)
   }
 
+  clearOfflineQueue() {
+    const count = this._offlineQueue.length
+    this._offlineQueue = []
+    console.log('[gateway] cleared offline queue, dropped', count, 'pending requests')
+  }
+
   private doConnect() {
     if (this.closed) return
     this._handshakeCompleted = false
