@@ -106,6 +106,7 @@ export function SkillSettings({ onBack }: SkillSettingsProps) {
   const [storeRefreshTick, setStoreRefreshTick] = useState(0)
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [skillToDelete, setSkillToDelete] = useState<SkillInfo | null>(null)
+  const [showUnavailable, setShowUnavailable] = useState(false)
   const downloadBeforeNamesRef = useRef<Record<string, Set<string>>>({})
   const gatewayRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -184,6 +185,10 @@ export function SkillSettings({ onBack }: SkillSettingsProps) {
     } else if (tab === 'local') {
       list = list.filter(s => s.source === 'local' || s.source === 'workspace')
     }
+    // hide unavailable skills (blocked) unless showUnavailable is true
+    if (!showUnavailable && tab === 'all') {
+      list = list.filter(s => s.status !== 'blocked')
+    }
     // search filter
     if (search) {
       const q = search.toLowerCase()
@@ -194,7 +199,7 @@ export function SkillSettings({ onBack }: SkillSettingsProps) {
       )
     }
     return list
-  }, [skills, tab, search])
+  }, [skills, tab, search, showUnavailable])
 
   useEffect(() => {
     setStorePage(0)
@@ -516,6 +521,17 @@ export function SkillSettings({ onBack }: SkillSettingsProps) {
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          {tab === 'all' && (
+            <label className="skill-checkbox-label">
+              <input
+                type="checkbox"
+                checked={showUnavailable}
+                onChange={e => setShowUnavailable(e.target.checked)}
+                className="skill-checkbox"
+              />
+              <span>显示不可用</span>
+            </label>
+          )}
         </div>
 
         {/* grid */}

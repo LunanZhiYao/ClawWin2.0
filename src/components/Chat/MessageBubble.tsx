@@ -370,7 +370,7 @@ const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: bool
     compacting: '正在压缩上下文',
     completed: '任务已完成',
     retrying: '遇到点小问题，正在重试',
-    interrupted: '任务已中断',
+    interrupted: '信息流异常，已暂停任务',
     failed: '执行失败了，要不要重试一下？',
     user_aborted: '任务已手动中断',
   }

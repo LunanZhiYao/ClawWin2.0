@@ -847,6 +847,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                     toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                     timestamp: Date.now(),
                     status: 'done',
+                    taskStatus: 'interrupted',
                     agentId: chatAgentId,
                   }
                   onMessageStream.current?.(m)
@@ -927,7 +928,21 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                   streamThrottleRef.current.delete(runId)
                   lastPushedLenRef.current.delete(runId)
                   idleCountRef.current.delete(runId)
+                  if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
                   thinkingBufferRef.current.delete(runId)
+                  // 推送最终状态
+                  const m: ChatMessage = {
+                    id: runId,
+                    role: 'assistant',
+                    content: '',
+                    thinking: thinkingNow,
+                    toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
+                    timestamp: Date.now(),
+                    status: 'done',
+                    taskStatus: 'interrupted',
+                    agentId: chatAgentId,
+                  }
+                  onMessageStream.current?.(m)
                   activeRunIdRef.current = null
                   agentLifecycleRunIdRef.current = null
                   phaseRef.current = 'idle'

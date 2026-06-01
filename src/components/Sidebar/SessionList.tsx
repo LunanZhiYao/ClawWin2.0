@@ -209,7 +209,7 @@ export const SessionList: React.FC<SessionListProps> = ({
           textTransform: 'uppercase',
           letterSpacing: '0.05em'
         }}>
-          对话
+          对话列表<span style={{ fontWeight: '400', color: 'var(--text-muted)', textTransform: 'none', fontSize: '11px' }}>  [双击标题重命名]</span>
         </div>
         
         {showPicker && (
