@@ -307,7 +307,7 @@ function App() {
             if (s.id !== sid) return s
             const messages = s.messages.map((m) =>
               m.status === 'streaming'
-                ? { ...m, status: 'done' as const }
+                ? { ...m, status: 'done' as const, taskStatus: 'retrying' as const }
                 : m
             )
             return { ...s, messages, updatedAt: Date.now() }
@@ -766,7 +766,8 @@ function App() {
             void refreshSessionUsageRef.current(sid, true)
           }, 900)
           usageSyncTimerBySessionRef.current.set(sid, timer)
-          if (!msg.agentId || msg.agentId === 'main') {
+          // 超时重试场景下不触发小工具完成提示
+          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'retrying') {
             widgetTaskCompleteRef.current(true, '任务已完成')
           }
         } else if (msg.status === 'error') {
