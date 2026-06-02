@@ -702,6 +702,7 @@ export const MessageBubble = React.memo(MessageBubbleInner, (prev, next) =>
   && prev.message.content === next.message.content
   && prev.message.status === next.message.status
   && prev.message.thinking === next.message.thinking
+  && prev.message.taskStatus === next.message.taskStatus
   && prev.onCopy === next.onCopy
   && prev.onRetry === next.onRetry
   && prev.message.agentId === next.message.agentId

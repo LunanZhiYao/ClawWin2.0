@@ -266,6 +266,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const contextOverflowRunIdsRef = useRef<Set<string>>(new Set())
   // agent 活动开始通知（用于清除 isWaiting 等待状态）
   const onStreamStart = useRef<(() => void) | null>(null)
+  // 追踪最后发送的消息内容，用于检测 /compact 命令的响应
+  const lastSentMessageRef = useRef<string>('')
   /** 异步上报埋点：不 await，避免拖慢 WS 主流程 */
   const emitTelemetry = useCallback((payload: Parameters<typeof sendTelemetryEvent>[0]) => {
     void sendTelemetryEvent(payload).catch((err) => {
@@ -619,23 +621,42 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       } else if (stream === 'compaction') {
         if (phase === 'start') {
           setBackendStatus('正在压缩上下文...')
+          const runId = agentRunId || activeRunIdRef.current || generateId()
+          activeRunIdRef.current = runId
+          setStreamingCount((c) => c + 1)
+          console.log('[ws] compaction.start: runId=', runId, 'agentRunId=', agentRunId, 'activeRunIdRef=', runId)
+          onMessageStream.current?.({
+            id: runId,
+            role: 'assistant',
+            content: '',
+            thinking: '',
+            toolCalls: [],
+            timestamp: Date.now(),
+            status: 'streaming',
+            taskStatus: 'compacting',
+            agentId: agentIdFromEvent || runIdAgentIdMapRef.current.get(runId),
+            sessionKey: agentSessionKey,
+          })
+        } else if (phase === 'end') {
+          setBackendStatus('压缩完成')
           const runId = agentRunId || activeRunIdRef.current
+          console.log('[ws] compaction.end: runId=', runId, 'activeRunIdRef=', activeRunIdRef.current)
           if (runId) {
+            setStreamingCount((c) => Math.max(0, c - 1))
             onMessageStream.current?.({
               id: runId,
               role: 'assistant',
-              content: '',
+              content: '上下文压缩已完成',
               thinking: '',
               toolCalls: [],
               timestamp: Date.now(),
-              status: 'streaming',
-              taskStatus: 'compacting',
-              agentId: agentIdFromEvent || (runId ? runIdAgentIdMapRef.current.get(runId) : undefined),
+              status: 'done',
+              taskStatus: 'completed',
+              agentId: agentIdFromEvent || runIdAgentIdMapRef.current.get(runId),
               sessionKey: agentSessionKey,
             })
+            activeRunIdRef.current = null
           }
-        } else if (phase === 'end') {
-          setBackendStatus('压缩完成，正在思考...')
           onCompactionEnd.current?.(normalizeSessionKey(p.sessionKey as string | undefined))
         }
       }
@@ -996,15 +1017,19 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const bufferedText = streamBufferRef.current.get(runId)
       const rawText = extractedText || bufferedText || ''
       const isOverflowDetected = contextOverflowRunIdsRef.current.has(runId) || isContextOverflowText(rawText)
-      const text = isOverflowDetected ? CONTEXT_OVERFLOW_FRIENDLY_MSG : rawText
+      const isCompactResponse = !rawText && lastSentMessageRef.current.trim().startsWith('/compact')
+      lastSentMessageRef.current = ''
+      const text = isCompactResponse ? '上下文压缩已完成' : (isOverflowDetected ? CONTEXT_OVERFLOW_FRIENDLY_MSG : rawText)
       const hadStream = streamBufferRef.current.delete(runId)
       if (isOverflowDetected) contextOverflowRunIdsRef.current.delete(runId)
       // 修复: 当只有 thinking delta (无 text delta) 时，streamBuffer 未设置
       // 但 streamingCount 已在 thinking 分支中递增，需要同步递减
-      if (hadStream || hadTimer) setStreamingCount((c) => Math.max(0, c - 1))
+      // 同时确保 /compact 命令响应也能正确减少 streamingCount
+      if (hadStream || hadTimer || isCompactResponse) setStreamingCount((c) => Math.max(0, c - 1))
 
       // 空内容不创建消息，避免空白气泡（但有工具调用时仍然推送）
-      if (!text && !(toolCallsBufferRef.current.length > 0)) {
+      // 例外：如果是对 /compact 命令的响应，则创建压缩完成消息
+      if (!text && !(toolCallsBufferRef.current.length > 0) && !isCompactResponse) {
         resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
         return
       }
@@ -1157,6 +1182,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   }, [])
 
   const sendMessage = useCallback(async (sessionKey: string, content: string, attachments?: ChatAttachment[], agentId?: string, modelOverride?: string) => {
+    // 记录发送的消息内容，用于检测 /compact 命令的响应
+    lastSentMessageRef.current = content
     const client = clientRef.current
     if (!client) {
       console.error('[ws] cannot send: no client instance')

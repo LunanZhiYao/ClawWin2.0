@@ -788,7 +788,7 @@ function App() {
         sid = lastSendSessionIdRef.current ?? activeSessionIdRef.current ?? undefined
         if (sid) runIdSessionMapRef.current.set(msg.id, sid)
       }
-      console.log('[app] onMessageStream called:', { sid, msgId: msg.id, content: msg.content?.slice(0, 100), status: msg.status })
+      console.log('[app] onMessageStream called:', { sid, msgId: msg.id, content: msg.content?.slice(0, 100), status: msg.status, taskStatus: msg.taskStatus, sessionKey: msg.sessionKey })
       if (!sid) {
         console.warn('[app] DROPPED message: no session for runId', msg.id)
         return
