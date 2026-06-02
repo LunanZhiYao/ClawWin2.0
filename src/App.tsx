@@ -818,7 +818,7 @@ function App() {
           usageSyncTimerBySessionRef.current.set(sid, timer)
           // 超时重试场景下不触发小工具完成提示
           if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'retrying') {
-            widgetTaskCompleteRef.current(true, '任务已完成')
+            widgetTaskCompleteRef.current(true, msg.content || '任务已完成')
           }
         } else if (msg.status === 'error') {
           if (!msg.agentId || msg.agentId === 'main') {
