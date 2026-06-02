@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, useReducer } from 'react'
 import { ChatArea } from './components/Chat/ChatArea'
 import { SessionList } from './components/Sidebar/SessionList'
 import { WorkspaceList } from './components/Sidebar/WorkspaceList'
@@ -26,7 +26,7 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { useSetup, type SetupStep } from './hooks/useSetup'
 import { WidgetPage } from './pages/WidgetPage'
 import type { ElectronAPI } from './types/electron'
-import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, AvailableModel, WorkspaceEntry } from './types'
+import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, AvailableModel, WorkspaceEntry, TaskStatus } from './types'
 import logoSrc from '../assets/logo.png'
 import './components/Login/Login.css'
 
@@ -131,6 +131,86 @@ function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
+type SessionAction =
+  | { type: 'SET_ALL'; sessions: ChatSession[] }
+  | { type: 'ADD'; session: ChatSession }
+  | { type: 'DELETE'; id: string }
+  | { type: 'UPDATE'; id: string; updates: Partial<ChatSession> }
+  | { type: 'UPSERT_MESSAGE'; sessionId: string; message: ChatMessage }
+  | { type: 'MARK_STREAMING_AS'; sessionId: string; taskStatus: TaskStatus }
+  | { type: 'MARK_USER_MESSAGE_COMPLETE'; sessionId: string; userMessageId?: string }
+  | { type: 'SEND_USER_MESSAGE'; sessionId: string; message: ChatMessage; title?: string }
+  | { type: 'CLEAR_MODEL_OVERRIDES' }
+
+function sessionReducer(state: ChatSession[], action: SessionAction): ChatSession[] {
+  switch (action.type) {
+    case 'SET_ALL':
+      return action.sessions
+    case 'ADD':
+      return [action.session, ...state]
+    case 'DELETE':
+      return state.filter((s) => s.id !== action.id)
+    case 'UPDATE':
+      return state.map((s) =>
+        s.id === action.id ? { ...s, ...action.updates, updatedAt: Date.now() } : s
+      )
+    case 'UPSERT_MESSAGE':
+      return state.map((s) => {
+        if (s.id !== action.sessionId) return s
+        const messages = [...s.messages]
+        const idx = messages.findIndex((m) => m.id === action.message.id)
+        if (idx >= 0) {
+          if (messages[idx].status === 'done' && action.message.status === 'streaming') return s
+          messages[idx] = action.message
+        } else {
+          messages.push(action.message)
+        }
+        return { ...s, messages, updatedAt: Date.now() }
+      })
+    case 'MARK_STREAMING_AS':
+      return state.map((s) => {
+        if (s.id !== action.sessionId) return s
+        const messages = s.messages.map((m) =>
+          m.status === 'streaming'
+            ? { ...m, status: 'done' as const, taskStatus: action.taskStatus }
+            : m
+        )
+        return { ...s, messages, updatedAt: Date.now() }
+      })
+    case 'MARK_USER_MESSAGE_COMPLETE':
+      return state.map((session) => {
+        if (session.id !== action.sessionId) return session
+        let updated = false
+        let consumedFallbackQueue = false
+        const messages = session.messages.map((message) => {
+          if (action.userMessageId) {
+            if (message.id !== action.userMessageId || message.status !== 'queued') return message
+          } else if (message.status !== 'queued' || consumedFallbackQueue) {
+            return message
+          }
+          updated = true
+          if (!action.userMessageId) consumedFallbackQueue = true
+          return { ...message, status: 'done' as const }
+        })
+        return updated ? { ...session, messages, updatedAt: Date.now() } : session
+      })
+    case 'SEND_USER_MESSAGE':
+      return state.map((s) => {
+        if (s.id !== action.sessionId) return s
+        return {
+          ...s,
+          ...(action.title != null ? { title: action.title } : {}),
+          messages: [...s.messages, action.message],
+          updatedAt: Date.now(),
+        }
+      })
+    case 'CLEAR_MODEL_OVERRIDES':
+      return state.map((s) => ({ ...s, modelOverride: undefined, updatedAt: Date.now() }))
+    default:
+      return state
+  }
+}
+
 
 function App() {
   if (isWidgetRoute()) {
@@ -167,7 +247,7 @@ function App() {
     })
   }, [])
 
-  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [sessions, dispatch] = useReducer(sessionReducer, [])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [showSetup, setShowSetup] = useState(false)
@@ -251,27 +331,7 @@ function App() {
   const usageSyncTimerBySessionRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   const markUserMessageComplete = useCallback((sessionId: string, userMessageId?: string) => {
-    setSessions((prev) =>
-      prev.map((session) => {
-        if (session.id !== sessionId) return session
-
-        let updated = false
-        let consumedFallbackQueue = false
-        const messages = session.messages.map((message) => {
-          if (userMessageId) {
-            if (message.id !== userMessageId || message.status !== 'queued') return message
-          } else if (message.status !== 'queued' || consumedFallbackQueue) {
-            return message
-          }
-
-          updated = true
-          if (!userMessageId) consumedFallbackQueue = true
-          return { ...message, status: 'done' as const }
-        })
-
-        return updated ? { ...session, messages, updatedAt: Date.now() } : session
-      })
-    )
+    dispatch({ type: 'MARK_USER_MESSAGE_COMPLETE', sessionId, userMessageId })
   }, [])
 
   const registerRunBinding = useCallback((ack: { runId?: string; sessionKey: string } | null, sessionId: string, userMessageId?: string) => {
@@ -302,17 +362,7 @@ function App() {
         } catch (err) {
           console.warn('[app] timeout abort failed:', err)
         }
-        setSessions((prev) =>
-          prev.map((s) => {
-            if (s.id !== sid) return s
-            const messages = s.messages.map((m) =>
-              m.status === 'streaming'
-                ? { ...m, status: 'done' as const, taskStatus: 'retrying' as const }
-                : m
-            )
-            return { ...s, messages, updatedAt: Date.now() }
-          })
-        )
+        dispatch({ type: 'MARK_STREAMING_AS', sessionId: sid, taskStatus: 'retrying' })
         console.log('[app] timeout: sending 继续 in 500ms')
         setTimeout(() => {
           console.log('[app] timeout: executing sendContinueSilently')
@@ -447,7 +497,7 @@ function App() {
         refreshModelPicker: refreshModelPickerFromDisk,
       })
       // 重新登录后服务端默认模型可能已变；会话级 modelOverride 会盖住新 default，须清空以免 UI 仍显示旧模型
-      setSessions((prev) => prev.map((s) => ({ ...s, modelOverride: undefined, updatedAt: Date.now() })))
+      dispatch({ type: 'CLEAR_MODEL_OVERRIDES' })
       if (shouldEnterFirstRunSetup) {
         // 首次进入向导时强制回到第一步，避免复用旧 step 导致直接落在最后一页。
         setup.setStep('workspace')
@@ -547,7 +597,7 @@ function App() {
               : msg
           ),
         }))
-        setSessions(sessions)
+        dispatch({ type: 'SET_ALL', sessions })
         // Restore active session to the most recently updated one
         const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
         setActiveSessionId(sorted[0].id)
@@ -786,27 +836,7 @@ function App() {
         })
       }
 
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sid) return s
-          // 收到 AI 回复，将所有 queued 消息标记为 done
-          const messages = [...s.messages]
-          const existingIdx = messages.findIndex((m) => m.id === msg.id)
-          if (existingIdx >= 0) {
-            // 防止已完成的消息被残留的流式定时器回调覆盖
-            if (messages[existingIdx].status === 'done' && msg.status === 'streaming') {
-              return s
-            }
-            messages[existingIdx] = msg
-            return { ...s, messages, updatedAt: Date.now() }
-          }
-          return {
-            ...s,
-            messages: [...messages, msg],
-            updatedAt: Date.now(),
-          }
-        })
-      )
+      dispatch({ type: 'UPSERT_MESSAGE', sessionId: sid, message: msg })
     },
     [markUserMessageComplete, stopWaiting, stopTimeoutTimer]
   )
@@ -828,17 +858,7 @@ function App() {
       } catch (err) {
         console.warn('[app] auto-abort failed:', err)
       }
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sid) return s
-          const messages = s.messages.map((m) =>
-            m.status === 'streaming'
-              ? { ...m, status: 'done' as const, taskStatus: 'interrupted' as const }
-              : m
-          )
-          return { ...s, messages, updatedAt: Date.now() }
-        })
-      )
+      dispatch({ type: 'MARK_STREAMING_AS', sessionId: sid, taskStatus: 'interrupted' })
     }
   }, [stopWaiting, ws])
 
@@ -855,9 +875,9 @@ function App() {
    */
   const triggerAutoCompact = useCallback((targetSessionId?: string): boolean => {
     if (!autoCompactRef.current) return false
-    // 优先使用触发来源会话，避免多会话时压缩错会话；兜底再回退到当前激活会话。
     const sid = targetSessionId || activeSessionIdRef.current
     if (!sid) return false
+    if (!sessionsRef.current.find((s) => s.id === sid)) return false
     if (isAutoCompactingRef.current) {
       // 当前正在压缩，先记录待处理会话，待 compaction.end 后补触发。
       pendingAutoCompactSessionRef.current = sid
@@ -894,7 +914,7 @@ function App() {
     if (checkAutoCompact) {
       // 首轮回复后 sessions.list 的 usage 可能延迟写回（实测可超过 800ms），
       // 这里适当拉长重试窗口，避免 UI 长时间停留在 0。
-      for (let attempt = 0; attempt < 10; attempt++) {
+      for (let attempt = 0; attempt < 5; attempt++) {
         if (usage) {
           // 首轮通常还没有 prevTotal；这时“读到 0”并不代表真实写回完成，
           // 不能把 undefined -> 0 当成“已变化”提前退出重试。
@@ -912,7 +932,7 @@ function App() {
           if (totalReady || contextReady) break
         }
         // 每次重试间隔稍微放大，降低短时抖动读到旧值的概率。
-        await new Promise((resolve) => setTimeout(resolve, 250))
+        await new Promise((resolve) => setTimeout(resolve, 300 * Math.pow(2, attempt)))
         const retried = await ws.getSessionTokenUsage(sessionId, session?.agentId)
         // 无论 retried 是否为空都覆盖 usage，确保“最后一次有效值”被保留。
         usage = retried ?? usage
@@ -953,8 +973,8 @@ function App() {
   const flushPendingAutoCompact = useCallback(async () => {
     const pendingSessionId = pendingAutoCompactSessionRef.current
     if (!pendingSessionId) return
-    // 先清空标记，避免异常路径下重复进入死循环。
     pendingAutoCompactSessionRef.current = null
+    if (!sessionsRef.current.find((s) => s.id === pendingSessionId)) return
     await refreshSessionUsageRef.current(pendingSessionId, true)
   }, [])
 
@@ -1087,17 +1107,12 @@ function App() {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }
-      setSessions((prev) => [session, ...prev])
+      dispatch({ type: 'ADD', session })
       setActiveSessionId(session.id)
       return
     }
 
-    setSessions((prev) =>
-      prev.map((s) => s.id === activeSessionId
-        ? { ...s, modelOverride: override, updatedAt: Date.now() }
-        : s
-      )
-    )
+    dispatch({ type: 'UPDATE', id: activeSessionId, updates: { modelOverride: override } })
     ws.sendModelDirective(activeSessionId, modelKey, sessionsRef.current.find((s) => s.id === activeSessionId)?.agentId)
   }, [activeSessionId, defaultModelKey, ws])
 
@@ -1113,9 +1128,7 @@ function App() {
   // 切换当前会话的 agent
   const handleChangeAgent = useCallback((agentId: string) => {
     if (!activeSessionId) return
-    setSessions((prev) =>
-      prev.map((s) => s.id === activeSessionId ? { ...s, agentId, updatedAt: Date.now() } : s)
-    )
+    dispatch({ type: 'UPDATE', id: activeSessionId, updates: { agentId } })
   }, [activeSessionId])
 
   // 选中会话时清除未读标记
@@ -1146,7 +1159,7 @@ function App() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }
-    setSessions((prev) => [session, ...prev])
+    dispatch({ type: 'ADD', session })
     setActiveSessionId(session.id)
     // 新会话也要发送 /model 指令，确保 gateway 侧 session store 生效
     if (inheritedModel) {
@@ -1156,12 +1169,13 @@ function App() {
 
   const deleteSession = useCallback(
     (id: string) => {
-      setSessions((prev) => prev.filter((s) => s.id !== id))
+      const remaining = sessionsRef.current.filter((s) => s.id !== id)
+      dispatch({ type: 'DELETE', id })
       if (activeSessionId === id) {
-        setActiveSessionId(sessions.length > 1 ? sessions.find((s) => s.id !== id)?.id ?? null : null)
+        setActiveSessionId(remaining.length > 0 ? remaining[0]?.id ?? null : null)
       }
     },
-    [activeSessionId, sessions]
+    [activeSessionId]
   )
 
   const handleSend = useCallback(
@@ -1194,8 +1208,8 @@ function App() {
           timestamp: Date.now(),
           status: 'done',
         }
-        session.messages.push(userMsg)
-        setSessions((prev) => [session, ...prev])
+        const sessionWithMsg: ChatSession = { ...session, messages: [userMsg] }
+        dispatch({ type: 'ADD', session: sessionWithMsg })
         // 立即同步更新 ref，确保 gateway 响应到达时回调能拿到正确的 sessionId
         activeSessionIdRef.current = session.id
         lastSendSessionIdRef.current = session.id
@@ -1226,18 +1240,9 @@ function App() {
         status: isAiBusy ? 'queued' : 'done',
       }
 
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== activeSessionId) return s
-          const sessionTitle = s.messages.length === 0 ? title : s.title
-          return {
-            ...s,
-            title: sessionTitle,
-            messages: [...s.messages, userMsg],
-            updatedAt: Date.now(),
-          }
-        })
-      )
+      const sendSession = sessionsRef.current.find((s) => s.id === activeSessionId)
+      const isFirstMessage = sendSession?.messages.length === 0
+      dispatch({ type: 'SEND_USER_MESSAGE', sessionId: activeSessionId, message: userMsg, title: isFirstMessage ? title : undefined })
 
       // 只在空闲时才显示等待指示器，避免空白气泡
       if (!isAiBusy) {
@@ -1325,8 +1330,8 @@ function App() {
         timestamp: Date.now(),
         status: 'done',
       }
-      session.messages.push(userMsg)
-      setSessions((prev) => [session, ...prev])
+      const sessionWithMsg: ChatSession = { ...session, messages: [userMsg] }
+      dispatch({ type: 'ADD', session: sessionWithMsg })
       activeSessionIdRef.current = session.id
       lastSendSessionIdRef.current = session.id
       setActiveSessionId(session.id)
@@ -1342,20 +1347,11 @@ function App() {
         timestamp: Date.now(),
         status: 'done',
       }
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== activeSessionId) return s
-          return {
-            ...s,
-            title: s.messages.length === 0 ? content.slice(0, 30) : s.title,
-            messages: [...s.messages, userMsg],
-            updatedAt: Date.now(),
-          }
-        })
-      )
+      const currentSession = sessionsRef.current.find((s) => s.id === activeSessionId)
+      const isFirstMessage = currentSession?.messages.length === 0
+      dispatch({ type: 'SEND_USER_MESSAGE', sessionId: activeSessionId, message: userMsg, title: isFirstMessage ? content.slice(0, 30) : undefined })
       startWaiting()
       lastSendSessionIdRef.current = activeSessionId
-      const currentSession = sessionsRef.current.find((s) => s.id === activeSessionId)
       void ws.sendMessage(activeSessionId, content, undefined, currentSession?.agentId, currentSession?.modelOverride).then((ack) => {
         registerRunBinding(ack, activeSessionId, userMsg.id)
       })
@@ -1666,7 +1662,7 @@ function App() {
                 onRestartGateway={() => restartGateway()}
                 onSetSidebarView={setSidebarView}
                 onOpenSettings={() => setShowSettings(true)}
-                onRenameSession={(id, title) => { setSessions(prev => prev.map(s => s.id === id ? { ...s, title } : s)) }}
+                onRenameSession={(id, title) => { dispatch({ type: 'UPDATE', id, updates: { title } }) }}
               />
             </div>
           </div>
@@ -2002,9 +1998,7 @@ function App() {
             }).catch(() => {})
             // 清除当前会话的模型覆盖，让下拉框跟随新默认模型
             if (activeSessionId) {
-              setSessions((prev) => prev.map((s) =>
-                s.id === activeSessionId ? { ...s, modelOverride: undefined, updatedAt: Date.now() } : s
-              ))
+              dispatch({ type: 'UPDATE', id: activeSessionId, updates: { modelOverride: undefined } })
             }
             // 重新加载可用模型列表
             window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
