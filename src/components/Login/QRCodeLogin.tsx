@@ -7,9 +7,11 @@ import { getQRCode, checkQRCode } from '../../api/auth'
 interface QRCodeLoginProps {
   /** 传入 QR 接口返回的 access_token；由调用方 fetchMeSession 完成后续同步 */
   onLoginSuccess: (token: string) => Promise<void>
+  /** 关闭/退出按钮回调 */
+  onClose?: () => void
 }
 
-export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
+export function QRCodeLogin({ onLoginSuccess, onClose }: QRCodeLoginProps) {
   const [qrCodeData, setQRCodeData] = useState<any>(null)
   const [qrCodeKey, setQRCodeKey] = useState<string>('')
   const [status, setStatus] = useState<'loading' | 'waiting' | 'scanned' | 'expired' | 'error'>('loading')
@@ -104,6 +106,14 @@ export function QRCodeLogin({ onLoginSuccess }: QRCodeLoginProps) {
 
   return (
     <div className="qrcode-login-container">
+      {onClose && (
+        <button className="qrcode-login-close" onClick={onClose} title="关闭">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      )}
       <div className="qrcode-login-card">
         <h2 className="qrcode-login-title">鲁南千易 - 扫码登录</h2>
 

@@ -9,6 +9,26 @@
       /* Fallback: if CDN font fails, use system fonts */
       body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
       code, pre { font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace; }
+      /* 内联启动画面：在 React 挂载前显示，避免白屏 */
+      #root:empty {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+      #root:empty::after {
+        content: '';
+        width: 44px;
+        height: 44px;
+        border: 4px solid rgba(255,255,255,0.3);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: _bootSpin 0.8s linear infinite;
+      }
+      @keyframes _bootSpin {
+        to { transform: rotate(360deg); }
+      }
     </style>
   </head>
   <body>

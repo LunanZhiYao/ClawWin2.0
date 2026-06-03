@@ -1399,6 +1399,13 @@ function App() {
     }
   }, [gateway.state, splashActive, splashDismissed])
 
+  // 启动屏退场完毕后显示桌面小工具
+  useEffect(() => {
+    if (splashDismissed && !splashActive && gateway.state === 'ready') {
+      void window.electronAPI.widget.show()
+    }
+  }, [splashDismissed, splashActive, gateway.state])
+
   // 应用启动时获取欢迎页配置（仅调用一次）
   useEffect(() => {
     const loadWelcomeConfig = async () => {
@@ -1464,7 +1471,7 @@ function App() {
     return (
       <>
         <ErrorBoundary>
-          <QRCodeLogin onLoginSuccess={handleLoginSuccess} />
+          <QRCodeLogin onLoginSuccess={handleLoginSuccess} onClose={() => setShowCloseDialog(true)} />
         </ErrorBoundary>
         {appCloseDialog}
       </>
