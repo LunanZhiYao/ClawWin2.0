@@ -235,6 +235,31 @@ export function applyTencentLongTermMemoryPolicy(config: Record<string, unknown>
     changed = true
   }
 
+  // 关键：设置 memory slot 指向 memory-tencentdb，否则默认 slot 指向 memory-core
+  // 纯 kind: "memory" 插件如果未获得 slot，会被 OpenClaw 加载器完全禁用
+  if (!plugins.slots || typeof plugins.slots !== 'object') {
+    plugins.slots = {}
+    changed = true
+  }
+  const slots = plugins.slots as Record<string, unknown>
+  if (slots.memory !== 'memory-tencentdb') {
+    slots.memory = 'memory-tencentdb'
+    changed = true
+  }
+
+  // 禁用内置 memory-core 插件，避免与 memory-tencentdb 竞争 memory slot
+  let memCore = entries['memory-core']
+  if (!memCore || typeof memCore !== 'object') {
+    entries['memory-core'] = { enabled: false }
+    changed = true
+  } else {
+    const memCoreObj = memCore as Record<string, unknown>
+    if (memCoreObj.enabled !== false) {
+      memCoreObj.enabled = false
+      changed = true
+    }
+  }
+
   if (!config.hooks || typeof config.hooks !== 'object') {
     config.hooks = {}
     changed = true

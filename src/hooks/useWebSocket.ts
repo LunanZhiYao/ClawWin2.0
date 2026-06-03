@@ -468,6 +468,36 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const agentRunId = p.runId as string | undefined
       const agentIdFromEvent = (p.agentId as string | undefined) || extractSubAgentId(p.sessionKey as string | undefined)
       const agentSessionKey = normalizeSessionKey(p.sessionKey as string | undefined)
+
+      // 识别后台任务（memory 插件的 L1/L2/L3 提取任务等）
+      const isBackgroundTask = agentRunId?.startsWith('memory-') ||
+        agentIdFromEvent?.startsWith('memory-') ||
+        agentRunId?.includes('-extraction-run-') ||
+        agentRunId?.includes('-scene-run-') ||
+        agentRunId?.includes('-persona-run-')
+
+      if (isBackgroundTask) {
+        // 后台任务：只在状态栏显示进度，不作为主对话消息处理
+        if (stream === 'lifecycle') {
+          if (phase === 'start') {
+            const taskType = agentRunId?.includes('l1-extraction') ? 'L1 记忆提取' :
+              agentRunId?.includes('scene') ? 'L2 场景归纳' :
+              agentRunId?.includes('persona') ? 'L3 用户画像' : '后台任务'
+            setBackendStatus(`[${taskType}] 运行中...`)
+          } else if (phase === 'end') {
+            setBackendStatus('')
+          }
+        } else if (stream === 'assistant') {
+          // L1 提取输出 JSON，显示简短预览
+          const text = (data.text as string) || ''
+          if (text && text.length < 200) {
+            setBackendStatus(`[L1 提取] ${text.slice(0, 60)}...`)
+          }
+        }
+        console.log('[ws] agent event: background task', { agentRunId, stream, phase, dataKeys: Object.keys(data) })
+        return
+      }
+
       if (agentRunId && agentIdFromEvent) {
         runIdAgentIdMapRef.current.set(agentRunId, agentIdFromEvent)
       }
