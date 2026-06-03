@@ -95,10 +95,9 @@ export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
       </div>
 
       <div className="setup-actions">
-        {/*<button className="btn-secondary" onClick={onBack}>上一步</button>*/}
-        {onSkip && <button className="btn-secondary" onClick={onSkip}>跳过</button>}
+        {/* 跳过按钮已隐藏 */}
         <button className="btn-primary" onClick={handleNext}>
-          下一步
+          开始使用
         </button>
       </div>
     </div>

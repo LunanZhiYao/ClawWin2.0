@@ -1500,31 +1500,21 @@ function App() {
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
             </button>
-            <div className="setup-progress">
-              {SETUP_STEPS.map((s, i) => (
-                <div
-                  key={s}
-                  className={`progress-step ${
-                    displayStep === s ? 'active' : i < currentStepIndex ? 'done' : ''
-                  }`}
-                >
-                  <div className="progress-dot">{i + 1}</div>
-                </div>
-              ))}
-            </div>
+            {/* 步骤栏已隐藏 - 只显示工作空间设置页 */}
 
             {setup.step === 'workspace' && (
               <WorkspaceSetup
                 workspace={setup.config.workspace ?? '~/qianyi'}
-                onNext={(workspace) => {
+                onNext={async (workspace) => {
                   setup.updateConfig({ workspace })
-                  setup.setStep('gateway')
+                  // 直接完成设置，跳过 gateway 和 complete 步骤
+                  await handleSetupComplete()
                 }}
-                onSkip={() => setup.setStep('gateway')}
               />
             )}
 
-            {setup.step === 'gateway' && (
+            {/* gateway 和 complete 步骤已隐藏，使用默认配置 */}
+            {/* {setup.step === 'gateway' && (
               <GatewaySetup
                 port={setup.config.gatewayPort ?? 18888}
                 token={setup.config.gatewayToken ?? ''}
@@ -1552,7 +1542,7 @@ function App() {
                 }}
                 onComplete={handleSetupComplete}
               />
-            )}
+            )} */}
           </div>
         </ErrorBoundary>
         {appCloseDialog}
@@ -1961,7 +1951,7 @@ function App() {
 
               {/* 底部操作栏 */}
               <div className="settings-footer">
-                <button
+                {/* <button
                   className="btn-secondary settings-reconfig-btn"
                   onClick={() => {
                     setShowSettings(false)
@@ -1970,6 +1960,15 @@ function App() {
                   }}
                 >
                   重新配置向导
+                </button> */}
+                <button
+                  className="btn-secondary settings-logout-btn"
+                  onClick={async () => {
+                    setShowSettings(false)
+                    await handleLogout()
+                  }}
+                >
+                  退出登录
                 </button>
               </div>
             </div>

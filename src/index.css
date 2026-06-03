@@ -2704,16 +2704,48 @@ body.widget-page #root {
 }
 
 .settings-footer {
-  padding: 12px 0 4px;
+  padding: 16px 0;
   border-top: 1px solid var(--border-light);
   margin-top: 16px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .settings-reconfig-btn {
-  font-size: 12px;
-  padding: 6px 16px;
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.settings-reconfig-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.settings-logout-btn {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  transition: all 0.2s ease;
+}
+
+.settings-logout-btn:hover {
+  background: #fee2e2;
+  border-color: #dc2626;
+  color: #b91c1c;
 }
 
 .settings-close-behavior-wrap {
