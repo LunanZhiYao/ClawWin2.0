@@ -10,8 +10,8 @@ interface WorkspaceSetupProps {
 export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
   workspace: initialWorkspace,
   // onBack,
-  onNext,
-  onSkip,
+  onNext
+  // onSkip,
 }) => {
   const [workspace, setWorkspace] = useState(initialWorkspace)
   const [error, setError] = useState<string | null>(null)

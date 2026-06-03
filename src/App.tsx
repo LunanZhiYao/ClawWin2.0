@@ -3,8 +3,8 @@ import { ChatArea } from './components/Chat/ChatArea'
 import { SessionList } from './components/Sidebar/SessionList'
 import { WorkspaceList } from './components/Sidebar/WorkspaceList'
 import { WorkspaceSetup } from './components/Setup/WorkspaceSetup'
-import { GatewaySetup } from './components/Setup/GatewaySetup'
-import { SetupComplete } from './components/Setup/SetupComplete'
+// import { GatewaySetup } from './components/Setup/GatewaySetup'
+// import { SetupComplete } from './components/Setup/SetupComplete'
 import { ErrorBoundary } from './components/Common/ErrorBoundary'
 import { StartupSplash } from './components/Common/StartupSplash'
 import { VideoSplash } from './components/Common/VideoSplash'
@@ -23,7 +23,8 @@ import { fetchMeSession, type MeSessionResult } from './api/auth'
 import { fetchWelcomePage, type WelcomeTab } from './api/welcome'
 import { useGateway } from './hooks/useGateway'
 import { useWebSocket } from './hooks/useWebSocket'
-import { useSetup, type SetupStep } from './hooks/useSetup'
+// type SetupStep
+import { useSetup} from './hooks/useSetup'
 import { WidgetPage } from './pages/WidgetPage'
 import type { ElectronAPI } from './types/electron'
 import type { ChatMessage, ChatSession, ChatAttachment, UpdateInfo, AvailableModel, WorkspaceEntry, TaskStatus } from './types'
@@ -32,7 +33,7 @@ import './components/Login/Login.css'
 
 declare const window: Window & { electronAPI: ElectronAPI }
 
-const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
+// const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
 
 const isWidgetRoute = () => {
   return window.location.hash === '#/widget'
@@ -1481,8 +1482,8 @@ function App() {
   // Setup wizard
   if (showSetup) {
     // modelselect maps to the same progress position as clawwin
-    const displayStep = setup.step === 'modelselect' ? 'clawwin' : setup.step
-    const currentStepIndex = SETUP_STEPS.indexOf(displayStep)
+    // const displayStep = setup.step === 'modelselect' ? 'clawwin' : setup.step
+    // const currentStepIndex = SETUP_STEPS.indexOf(displayStep)
 
     return (
       <>
