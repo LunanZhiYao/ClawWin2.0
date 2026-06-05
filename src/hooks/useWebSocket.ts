@@ -268,6 +268,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const onStreamStart = useRef<(() => void) | null>(null)
   // 追踪最后发送的消息内容，用于检测 /compact 命令的响应
   const lastSentMessageRef = useRef<string>('')
+  // 存储 /compact 命令的 idempotencyKey，用于更新压缩进度消息
+  const compactMessageIdRef = useRef<string | null>(null)
   /** 异步上报埋点：不 await，避免拖慢 WS 主流程 */
   const emitTelemetry = useCallback((payload: Parameters<typeof sendTelemetryEvent>[0]) => {
     void sendTelemetryEvent(payload).catch((err) => {
@@ -1081,8 +1083,14 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         )
       }
 
+      // 使用 compactMessageIdRef.current 作为消息 ID，确保更新之前创建的压缩进度消息
+      const msgId = isCompactResponse && compactMessageIdRef.current ? compactMessageIdRef.current : runId
+      if (isCompactResponse) {
+        compactMessageIdRef.current = null
+      }
+
       const msg: ChatMessage = {
-        id: runId,
+        id: msgId,
         role: 'assistant',
         content: text,
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
@@ -1309,6 +1317,24 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           }
         }
       }
+    }
+
+    // 特殊处理 /compact 命令：立即创建"正在压缩..."的消息气泡
+    if (content.trim().startsWith('/compact')) {
+      console.log('[溢出] 发送 /compact 命令，创建压缩进度消息气泡')
+      setStreamingCount((c) => c + 1)
+      compactMessageIdRef.current = idempotencyKey
+      const compactMsg: ChatMessage = {
+        id: idempotencyKey,
+        role: 'assistant',
+        content: '正在压缩上下文...',
+        timestamp: Date.now(),
+        status: 'streaming',
+        taskStatus: 'compacting',
+        agentId: agentId,
+        sessionKey,
+      }
+      onMessageStream.current?.(compactMsg)
     }
 
     try {
