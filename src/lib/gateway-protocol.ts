@@ -400,6 +400,7 @@ export class GatewayClient {
     }
     const id = generateId()
     const frame = { type: 'req', id, method, params }
+    console.log('[gateway] sending request:', { method, id, params })
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject })
     })

@@ -875,18 +875,29 @@ function App() {
    * - context overflow 终止兜底触发
    */
   const triggerAutoCompact = useCallback((targetSessionId?: string): boolean => {
-    if (!autoCompactRef.current) return false
+    if (!autoCompactRef.current) {
+      console.log('[溢出] 自动压缩已禁用，跳过')
+      return false
+    }
     const sid = targetSessionId || activeSessionIdRef.current
-    if (!sid) return false
-    if (!sessionsRef.current.find((s) => s.id === sid)) return false
+    if (!sid) {
+      console.log('[溢出] 无目标会话ID，跳过自动压缩')
+      return false
+    }
+    if (!sessionsRef.current.find((s) => s.id === sid)) {
+      console.log('[溢出] 目标会话不存在，跳过自动压缩:', sid)
+      return false
+    }
     if (isAutoCompactingRef.current) {
       // 当前正在压缩，先记录待处理会话，待 compaction.end 后补触发。
       pendingAutoCompactSessionRef.current = sid
+      console.log('[溢出] 正在压缩中，记录待处理会话:', sid)
       return false
     }
     // 模型仍在流式输出时先延后，避免中断当前回复；流结束后会自动补触发。
     if (ws.isStreaming) {
       pendingAutoCompactSessionRef.current = sid
+      console.log('[溢出] 正在流式输出，延后压缩，记录待处理会话:', sid)
       return false
     }
 
@@ -896,11 +907,13 @@ function App() {
     if (autoCompactUnlockTimerRef.current) clearTimeout(autoCompactUnlockTimerRef.current)
     // 兜底解锁：避免 compaction end 事件丢失导致后续一直不再触发自动压缩
     autoCompactUnlockTimerRef.current = setTimeout(() => {
+      console.log('[溢出] 兜底解锁触发，重置压缩状态')
       isAutoCompactingRef.current = false
       autoCompactUnlockTimerRef.current = null
     }, 15000)
 
     const compactSession = sessionsRef.current.find((s) => s.id === sid)
+    console.log('[溢出] 发送 /compact 命令:', { sessionId: sid, agentId: compactSession?.agentId })
     void ws.sendMessage(sid, '/compact', undefined, compactSession?.agentId)
     return true
   }, [ws, ws.isStreaming])
@@ -974,10 +987,17 @@ function App() {
   const flushPendingAutoCompact = useCallback(async () => {
     const pendingSessionId = pendingAutoCompactSessionRef.current
     if (!pendingSessionId) return
+    console.log('[溢出] flushPendingAutoCompact: 开始处理待压缩会话:', pendingSessionId)
     pendingAutoCompactSessionRef.current = null
-    if (!sessionsRef.current.find((s) => s.id === pendingSessionId)) return
-    await refreshSessionUsageRef.current(pendingSessionId, true)
-  }, [])
+    if (!sessionsRef.current.find((s) => s.id === pendingSessionId)) {
+      console.log('[溢出] flushPendingAutoCompact: 待处理会话不存在:', pendingSessionId)
+      return
+    }
+    // 直接触发压缩，不再通过 refreshSessionUsage 判断阈值
+    // 因为上下文溢出时，usage 可能已经很高，必须强制压缩
+    const triggered = triggerAutoCompact(pendingSessionId)
+    console.log('[溢出] flushPendingAutoCompact: 压缩触发结果:', triggered)
+  }, [triggerAutoCompact])
 
   // Gateway 连接恢复后，主动为已有会话回填 usage，避免重启后所有会话先显示 0%。
   useEffect(() => {
@@ -1013,19 +1033,24 @@ function App() {
   // 兜底路径：若已出现上下文溢出错误，立即尝试自动压缩一次
   ws.onContextOverflow.current = useCallback((sessionId?: string) => {
     const sid = sessionId || activeSessionIdRef.current
+    console.log('[溢出] 检测到上下文溢出，准备触发自动压缩:', { sessionId, activeSessionId: sid })
     if (sid) {
       contextOverflowRecoverySessionRef.current = sid
+      console.log('[溢出] 已记录恢复会话ID:', sid)
     }
-    triggerAutoCompact(sessionId)
+    const triggered = triggerAutoCompact(sessionId)
+    console.log('[溢出] 自动压缩触发结果:', triggered)
   }, [triggerAutoCompact])
 
   // 收到压缩完成事件后解锁，允许后续再次自动触发
   ws.onCompactionEnd.current = useCallback((sessionKey?: string) => {
+    console.log('[溢出] 收到压缩完成事件:', { sessionKey })
     if (autoCompactUnlockTimerRef.current) {
       clearTimeout(autoCompactUnlockTimerRef.current)
       autoCompactUnlockTimerRef.current = null
     }
     isAutoCompactingRef.current = false
+    console.log('[溢出] 已解锁自动压缩状态')
     // 若压缩期间积压了新的待压缩会话，按阈值口径补判定，避免重复压缩。
     void flushPendingAutoCompact()
     // 优先使用压缩事件来源会话，避免用户切换会话后把占用率刷到错误会话。
@@ -1051,6 +1076,7 @@ function App() {
         // 只要拿到了 usage，并且上下文窗口可判定（本次返回或历史缓存），就更新展示值；
         // input 允许为 0（压缩后常见），否则会卡住旧占用率。
         if (usage && nextContextWindow && nextContextWindow > 0) {
+          console.log('[溢出] 压缩后 usage 更新:', { sessionId: sid, input: usage.input, contextWindow: nextContextWindow })
           setSessionUsageTotalMap((prev) => ({ ...prev, [sid]: usage.input }))
           if (usage.contextWindow && usage.contextWindow > 0) {
             setSessionContextWindowMap((prev) => ({ ...prev, [sid]: usage.contextWindow as number }))
@@ -1066,16 +1092,37 @@ function App() {
 
     const recoverySessionId = contextOverflowRecoverySessionRef.current
     if (recoverySessionId) {
+      console.log('[溢出] 检测到恢复会话ID，准备发送继续任务:', recoverySessionId)
       contextOverflowRecoverySessionRef.current = null
       const recoverySession = sessionsRef.current.find((s) => s.id === recoverySessionId)
-      if (recoverySession && ws.connected && gateway.state === 'ready') {
+      if (recoverySession) {
+        console.log('[溢出] 找到恢复会话，准备发送继续任务:', {
+          sessionId: recoverySessionId,
+          agentId: recoverySession.agentId,
+          modelOverride: recoverySession.modelOverride
+        })
+        // 放宽条件判断：即使 ws 未连接或网关未就绪，也尝试发送，让 sendMessage 内部处理错误
         setTimeout(() => {
+          console.log('[溢出] 开始发送继续任务指令')
           startWaiting()
           void ws.sendMessage(recoverySessionId, '继续任务', undefined, recoverySession.agentId, recoverySession.modelOverride).then((ack) => {
+            console.log('[溢出] 继续任务指令发送结果:', { ack, sessionId: recoverySessionId })
             registerRunBinding(ack, recoverySessionId, undefined)
+            // 如果发送失败（ack 为 null），确保停止 waiting
+            if (!ack) {
+              console.warn('[溢出] 恢复任务发送失败，停止等待')
+              stopWaiting()
+            }
+          }).catch((err) => {
+            console.error('[溢出] 恢复任务发送异常:', err)
+            stopWaiting()
           })
         }, 1000)
+      } else {
+        console.warn('[溢出] 未找到恢复会话:', recoverySessionId)
       }
+    } else {
+      console.log('[溢出] 无恢复会话ID，跳过发送继续任务')
     }
   }, [ws, flushPendingAutoCompact, gateway.state, startWaiting, registerRunBinding])
 

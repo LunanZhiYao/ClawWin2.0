@@ -650,6 +650,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         }
       } else if (stream === 'compaction') {
         if (phase === 'start') {
+          console.log('[溢出] 收到 compaction.start 事件:', { agentRunId, activeRunId: activeRunIdRef.current, sessionKey: agentSessionKey })
           setBackendStatus('正在压缩上下文...')
           const runId = agentRunId || activeRunIdRef.current || generateId()
           activeRunIdRef.current = runId
@@ -668,6 +669,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             sessionKey: agentSessionKey,
           })
         } else if (phase === 'end') {
+          console.log('[溢出] 收到 compaction.end 事件:', { agentRunId, activeRunId: activeRunIdRef.current, sessionKey: agentSessionKey })
           setBackendStatus('压缩完成')
           const runId = agentRunId || activeRunIdRef.current
           console.log('[ws] compaction.end: runId=', runId, 'activeRunIdRef=', activeRunIdRef.current)
@@ -687,6 +689,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             })
             activeRunIdRef.current = null
           }
+          console.log('[溢出] 触发 onCompactionEnd 回调:', normalizeSessionKey(p.sessionKey as string | undefined))
           onCompactionEnd.current?.(normalizeSessionKey(p.sessionKey as string | undefined))
         }
       }
@@ -782,6 +785,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         }
 
         if (isContextOverflowText(accumulated)) {
+          console.log('[溢出] delta 阶段检测到上下文溢出:', { runId, sessionKey, textLength: accumulated.length })
           contextOverflowRunIdsRef.current.add(runId)
           const overflowMsg: ChatMessage = {
             id: runId,
@@ -1048,6 +1052,12 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const rawText = extractedText || bufferedText || ''
       const isOverflowDetected = contextOverflowRunIdsRef.current.has(runId) || isContextOverflowText(rawText)
       const isCompactResponse = !rawText && lastSentMessageRef.current.trim().startsWith('/compact')
+      if (isCompactResponse) {
+        console.log('[溢出] 检测到 /compact 命令响应 (final):', { runId, sessionKey, lastSentMessage: lastSentMessageRef.current })
+      }
+      if (isOverflowDetected) {
+        console.log('[溢出] final 阶段检测到上下文溢出:', { runId, sessionKey, textLength: rawText.length })
+      }
       lastSentMessageRef.current = ''
       const text = isCompactResponse ? '上下文压缩已完成' : (isOverflowDetected ? CONTEXT_OVERFLOW_FRIENDLY_MSG : rawText)
       const hadStream = streamBufferRef.current.delete(runId)
@@ -1100,7 +1110,15 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 只要提取到 usage 就立刻回传给 App，避免首轮因为字段差异导致占用率一直停在 0。
       if (usage) onFinalUsage.current?.({ ...usage, sessionKey })
 
+      // 如果是 /compact 命令的响应，触发 onCompactionEnd 回调
+      // 这样即使网关不支持 compaction 事件，也能正确处理压缩完成后的恢复逻辑
+      if (isCompactResponse) {
+        console.log('[溢出] /compact 命令响应完成，触发 onCompactionEnd 回调:', sessionKey)
+        onCompactionEnd.current?.(sessionKey)
+      }
+
       if (isOverflowDetected) {
+        console.log('[溢出] 触发 onContextOverflow 回调:', sessionKey)
         onContextOverflow.current?.(sessionKey)
       }
     } else if (state === 'error') {
@@ -1108,6 +1126,9 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const rawErrorMsg = (payload.errorMessage as string) || '发生错误'
       const errorMessage = translateError(rawErrorMsg)
       const isErrorOverflow = isContextOverflowText(rawErrorMsg)
+      if (isErrorOverflow) {
+        console.log('[溢出] error 阶段检测到上下文溢出:', { runId, sessionKey, errorMessage: rawErrorMsg.slice(0, 100) })
+      }
       cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
 
       const msg: ChatMessage = {
@@ -1134,6 +1155,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
 
       if (isErrorOverflow) {
+        console.log('[溢出] error 阶段触发 onContextOverflow 回调:', sessionKey)
         onContextOverflow.current?.(sessionKey)
       }
     } else if (state === 'aborted') {
@@ -1178,6 +1200,9 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
 
       const terminateReason = String(payload.errorMessage ?? payload.reason ?? '').toLowerCase()
       const isTerminateOverflow = isContextOverflowText(terminateReason) || isContextOverflowText(buffered)
+      if (isTerminateOverflow) {
+        console.log('[溢出] terminated 阶段检测到上下文溢出:', { runId, sessionKey, terminateReason: terminateReason.slice(0, 100) })
+      }
 
       const displayContent = isTerminateOverflow
         ? CONTEXT_OVERFLOW_FRIENDLY_MSG
@@ -1196,6 +1221,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       }
       onMessageStream.current?.(msg)
       if (isTerminateOverflow) {
+        console.log('[溢出] terminated 阶段触发 onContextOverflow 回调:', sessionKey)
         onContextOverflow.current?.(sessionKey)
       }
       emitTelemetry({
@@ -1301,6 +1327,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         },
       })
       const ack = await client.request<{ runId?: string; status?: string }>('chat.send', payload)
+      // 特殊处理 /compact 命令的日志
+      if (content.trim().startsWith('/compact')) {
+        console.log('[溢出] /compact 命令发送成功，收到 ack:', { runId: ack?.runId, status: ack?.status, sessionKey: builtSessionKey })
+      }
       // 埋点：chat.send 已收到 ack，建立 idempotency_key -> run_id 映射
       emitTelemetry({
         event_name: 'chat_send_ack',
@@ -1330,7 +1360,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         timestamp: Date.now(),
         status: 'error',
         agentId: agentId,
-        sessionKey,
+        sessionKey: normalizeSessionKey(builtSessionKey) || sessionKey,
       }
       onMessageStream.current?.(msg)
       return null
