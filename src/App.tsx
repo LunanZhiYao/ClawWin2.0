@@ -1624,6 +1624,7 @@ function App() {
             {setup.step === 'workspace' && (
               <WorkspaceSetup
                 workspace={setup.config.workspace ?? '~/qianyi'}
+                saving={setup.isSaving}
                 onNext={async (workspace) => {
                   setup.updateConfig({ workspace })
                   // 直接完成设置，跳过 gateway 和 complete 步骤

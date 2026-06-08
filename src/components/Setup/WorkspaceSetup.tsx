@@ -5,18 +5,21 @@ interface WorkspaceSetupProps {
   // onBack: () => void
   onNext: (workspace: string) => void
   onSkip?: () => void
+  saving?: boolean
 }
 
 export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
   workspace: initialWorkspace,
   // onBack,
-  onNext
+  onNext,
   // onSkip,
+  saving = false,
 }) => {
   const [workspace, setWorkspace] = useState(initialWorkspace)
   const [error, setError] = useState<string | null>(null)
 
   const handleNext = useCallback(() => {
+    if (saving) return // 防止重复点击
     const trimmed = workspace.trim()
     if (!trimmed) {
       setError('请输入工作空间路径')
@@ -33,7 +36,7 @@ export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
     }
     setError(null)
     onNext(trimmed)
-  }, [workspace, onNext])
+  }, [workspace, onNext, saving])
 
   return (
     <div className="setup-page workspace-setup">
@@ -96,10 +99,19 @@ export const WorkspaceSetup: React.FC<WorkspaceSetupProps> = ({
 
       <div className="setup-actions">
         {/* 跳过按钮已隐藏 */}
-        <button className="btn-primary" onClick={handleNext}>
-          开始使用
+        <button className="btn-primary" onClick={handleNext} disabled={saving}>
+          {saving ? '正在保存配置...' : '开始使用'}
         </button>
       </div>
+
+      {saving && (
+        <div className="setup-saving-progress">
+          <div className="setup-saving-bar">
+            <div className="setup-saving-bar-inner" />
+          </div>
+          <p className="setup-saving-text">正在保存配置并准备启动网关...</p>
+        </div>
+      )}
     </div>
   )
 }
