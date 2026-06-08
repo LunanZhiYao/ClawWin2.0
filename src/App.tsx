@@ -292,6 +292,13 @@ function App() {
   const [shellHints, setShellHints] = useState(true)
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([])
   const [sessionUsageTotalMap, setSessionUsageTotalMap] = useState<Record<string, number>>({})
+  // 外部附件（用于引用文件功能）
+  const [externalAttachment, setExternalAttachment] = useState<{
+    type: 'file' | 'folder'
+    fileName: string
+    filePath: string
+    size: number
+  } | null>(null)
   const [sessionContextWindowMap, setSessionContextWindowMap] = useState<Record<string, number>>({})
   // 使用 ref 持有最新 usage 映射，供异步重试逻辑读取“当前 UI 值”避免闭包拿旧值。
   const sessionUsageTotalMapRef = useRef<Record<string, number>>({})
@@ -653,6 +660,16 @@ function App() {
       setWorkspaceLoading(false)
     }
   }, [workspacePath])
+
+  // 处理引用文件/文件夹
+  const handleReferenceEntry = useCallback((entry: WorkspaceEntry) => {
+    setExternalAttachment({
+      type: entry.kind === 'dir' ? 'folder' : 'file',
+      fileName: entry.name,
+      filePath: entry.path,
+      size: entry.size ?? 0,
+    })
+  }, [])
 
   useEffect(() => {
     if (sidebarView !== 'workspace') return
@@ -1801,6 +1818,8 @@ function App() {
                 sidebarView={sidebarView}
                 sessionTitle={activeSession?.title}
                 welcomeTabs={welcomeTabs}
+                externalAttachment={externalAttachment}
+                onExternalAttachmentConsumed={() => setExternalAttachment(null)}
               />
             )}
           </div>
@@ -1816,6 +1835,7 @@ function App() {
                 onOpenEntry={(entry) => { void window.electronAPI.shell.openPath(entry.path) }}
                 onOpenWorkspace={() => { if (workspacePath) void window.electronAPI.shell.openPath(workspacePath) }}
                 onClose={() => setSidebarView('sessions')}
+                onReference={handleReferenceEntry}
               />
             </div>
           )}

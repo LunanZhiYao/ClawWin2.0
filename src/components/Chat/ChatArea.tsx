@@ -1,8 +1,9 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
-import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel } from '../../types'
+import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel, SkillInfo } from '../../types'
 import { type WelcomeTab } from '../../api/welcome'
 import logoSrc from '../../../assets/logo.png'
+import { SKILL_CN } from '../../constants/skillCn'
 
 // 完整版底部输入框组件 - 整合所有功能
 interface BottomInputProps {
@@ -17,6 +18,8 @@ interface BottomInputProps {
   onExternalInputConsumed?: () => void  // 外部输入被消费后的回调
   containerRef?: React.RefObject<HTMLDivElement>  // 容器 ref，用于 ResizeObserver
   activityStatus?: string  // 活动状态文字，为空则不显示
+  externalAttachment?: AttachmentWithPreview | null  // 外部注入的附件（如引用文件）
+  onExternalAttachmentConsumed?: () => void  // 外部附件被消费后的回调
 }
 
 const MAX_ATTACHMENTS = 5
@@ -43,6 +46,8 @@ const BottomInput: React.FC<BottomInputProps> = ({
   onExternalInputConsumed,
   containerRef,
   activityStatus = '',
+  externalAttachment,
+  onExternalAttachmentConsumed,
 }) => {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<AttachmentWithPreview[]>([])
@@ -56,6 +61,10 @@ const BottomInput: React.FC<BottomInputProps> = ({
 
   // Skill quote state
   const [quotedSkills, setQuotedSkills] = useState<string[]>([])
+  const [showSkillPicker, setShowSkillPicker] = useState(false)
+  const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const skillPickerRef = useRef<HTMLDivElement>(null)
 
   // 接收外部注入的输入内容（如重发）
   useEffect(() => {
@@ -65,6 +74,20 @@ const BottomInput: React.FC<BottomInputProps> = ({
       setTimeout(() => textareaRef.current?.focus(), 0)
     }
   }, [externalInput, onExternalInputConsumed])
+
+  // 接收外部注入的附件（如引用文件）
+  useEffect(() => {
+    if (externalAttachment) {
+      setAttachments((prev) => {
+        if (prev.length >= MAX_ATTACHMENTS) return prev
+        // 检查是否已存在相同路径的附件
+        if (prev.some(a => a.filePath === externalAttachment.filePath)) return prev
+        return [...prev, externalAttachment]
+      })
+      onExternalAttachmentConsumed?.()
+      setTimeout(() => textareaRef.current?.focus(), 0)
+    }
+  }, [externalAttachment, onExternalAttachmentConsumed])
 
   // 错误提示
   const showError = useCallback((msg: string) => {
@@ -76,6 +99,41 @@ const BottomInput: React.FC<BottomInputProps> = ({
   const handleRemoveQuotedSkill = useCallback((name: string) => {
     setQuotedSkills(prev => prev.filter(s => s !== name))
   }, [])
+
+  // Load available skills when picker opens
+  useEffect(() => {
+    if (showSkillPicker) {
+      setSkillsLoading(true)
+      window.electronAPI.skills.list().then((list: SkillInfo[]) => {
+        // Filter to only show enabled and ready skills
+        const available = list.filter(s => s.enabled && s.status === 'ready')
+        setAvailableSkills(available)
+        setSkillsLoading(false)
+      }).catch(() => {
+        setSkillsLoading(false)
+      })
+    }
+  }, [showSkillPicker])
+
+  // Close picker when clicking outside
+  useEffect(() => {
+    if (!showSkillPicker) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (skillPickerRef.current && !skillPickerRef.current.contains(e.target as Node)) {
+        setShowSkillPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showSkillPicker])
+
+  const handleSelectSkill = useCallback((skillName: string) => {
+    if (!quotedSkills.includes(skillName)) {
+      setQuotedSkills(prev => [...prev, skillName])
+    }
+    setShowSkillPicker(false)
+    setTimeout(() => textareaRef.current?.focus(), 0)
+  }, [quotedSkills])
 
   // 文件处理
   const formatFileSize = (bytes: number): string => {
@@ -389,11 +447,7 @@ const BottomInput: React.FC<BottomInputProps> = ({
               <button
                 className="attach-btn"
                 title="引用技能"
-                onClick={() => {
-                  const newInput = input ? `${input}\n@` : '@'
-                  setInput(newInput)
-                  setTimeout(() => textareaRef.current?.focus(), 0)
-                }}
+                onClick={() => setShowSkillPicker(v => !v)}
                 disabled={disabled}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -401,6 +455,29 @@ const BottomInput: React.FC<BottomInputProps> = ({
                   <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
                 </svg>
               </button>
+              {showSkillPicker && (
+                <div ref={skillPickerRef} className="skill-picker-dropdown">
+                  {skillsLoading ? (
+                    <div className="skill-picker-loading">加载中...</div>
+                  ) : availableSkills.length === 0 ? (
+                    <div className="skill-picker-empty">暂无可用技能</div>
+                  ) : (
+                    availableSkills.map(skill => (
+                      <div
+                        key={skill.name}
+                        className={`skill-picker-item ${quotedSkills.includes(skill.name) ? 'active' : ''}`}
+                        onClick={() => handleSelectSkill(skill.name)}
+                      >
+                        <span className="skill-picker-icon">{skill.emoji || '🔧'}</span>
+                        <div className="skill-picker-info">
+                          <span className="skill-picker-name">{skill.name}</span>
+                          <span className="skill-picker-desc">{SKILL_CN[skill.name] || skill.description || '暂无描述'}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             {(isStreaming || isWaiting) ? (
               <button className="btn-stop" onClick={async () => { if (isStopping || !onStop) return; setIsStopping(true); try { await onStop() } catch (err) { console.error('stop error:', err) } finally { setIsStopping(false) } }} disabled={isStopping} title={isStopping ? '正在停止...' : '停止回复'}>
@@ -444,6 +521,8 @@ interface ChatAreaProps {
   sidebarView: string
   sessionTitle?: string
   welcomeTabs?: WelcomeTab[]
+  externalAttachment?: AttachmentWithPreview | null
+  onExternalAttachmentConsumed?: () => void
 }
 
 function getAgentDisplayName(agent: AgentInfo): string {
@@ -492,6 +571,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   sidebarView,
   sessionTitle,
   welcomeTabs: propWelcomeTabs,
+  externalAttachment,
+  onExternalAttachmentConsumed,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollRafRef = useRef(0)
@@ -513,6 +594,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [welcomeAttachments, setWelcomeAttachments] = useState<AttachmentWithPreview[]>([])
   const welcomeTextareaRef = useRef<HTMLTextAreaElement>(null)
   const welcomeFileInputRef = useRef<HTMLInputElement>(null)
+  const [welcomeQuotedSkills, setWelcomeQuotedSkills] = useState<string[]>([])
+  const [showWelcomeSkillPicker, setShowWelcomeSkillPicker] = useState(false)
+  const [welcomeAvailableSkills, setWelcomeAvailableSkills] = useState<SkillInfo[]>([])
+  const [welcomeSkillsLoading, setWelcomeSkillsLoading] = useState(false)
+  const welcomeSkillPickerRef = useRef<HTMLDivElement>(null)
 
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
@@ -594,7 +680,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const hasText = trimmed.length > 0
     const hasAtt = welcomeAttachments.length > 0
 
-    if ((!hasText && !hasAtt) || disabled || !isReady) return
+    if ((!hasText && !hasAtt && welcomeQuotedSkills.length === 0) || disabled || !isReady) return
 
     const resolvedAttachments = hasAtt
       ? await Promise.all(
@@ -612,6 +698,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       content = content ? `${content}\n${paths}` : paths
     }
 
+    // Prepend quoted skill names
+    if (welcomeQuotedSkills.length > 0) {
+      const prefix = welcomeQuotedSkills.map(s => `@${s}`).join(' ')
+      content = content ? `${prefix} ${content}` : prefix
+    }
+
     const chatAttachments: ChatAttachment[] | undefined = resolvedAttachments.length > 0
       ? resolvedAttachments.map(({ type, fileName, filePath, mimeType, content: base64 }) => ({
           type,
@@ -624,11 +716,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     onSend(content, chatAttachments)
     setWelcomeInput('')
+    setWelcomeQuotedSkills([])
     for (const att of welcomeAttachments) {
       if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
     }
     setWelcomeAttachments([])
-  }, [welcomeInput, welcomeAttachments, disabled, isReady, onSend])
+  }, [welcomeInput, welcomeAttachments, disabled, isReady, onSend, welcomeQuotedSkills])
 
   const handleWelcomeKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -647,6 +740,44 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       { type: 'folder', fileName: folderName, filePath: folderPath, size: 0 },
     ])
   }, [disabled, isReady, welcomeAttachments.length])
+
+  const handleRemoveWelcomeQuotedSkill = useCallback((name: string) => {
+    setWelcomeQuotedSkills(prev => prev.filter(s => s !== name))
+  }, [])
+
+  // Load available skills for welcome page when picker opens
+  useEffect(() => {
+    if (showWelcomeSkillPicker) {
+      setWelcomeSkillsLoading(true)
+      window.electronAPI.skills.list().then((list: SkillInfo[]) => {
+        const available = list.filter(s => s.enabled && s.status === 'ready')
+        setWelcomeAvailableSkills(available)
+        setWelcomeSkillsLoading(false)
+      }).catch(() => {
+        setWelcomeSkillsLoading(false)
+      })
+    }
+  }, [showWelcomeSkillPicker])
+
+  // Close welcome skill picker when clicking outside
+  useEffect(() => {
+    if (!showWelcomeSkillPicker) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (welcomeSkillPickerRef.current && !welcomeSkillPickerRef.current.contains(e.target as Node)) {
+        setShowWelcomeSkillPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showWelcomeSkillPicker])
+
+  const handleSelectWelcomeSkill = useCallback((skillName: string) => {
+    if (!welcomeQuotedSkills.includes(skillName)) {
+      setWelcomeQuotedSkills(prev => [...prev, skillName])
+    }
+    setShowWelcomeSkillPicker(false)
+    setTimeout(() => welcomeTextareaRef.current?.focus(), 0)
+  }, [welcomeQuotedSkills])
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes}B`
@@ -962,6 +1093,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 e.target.value = ''
               }}
             />
+            {welcomeQuotedSkills.length > 0 && (
+              <div className="skill-tags-strip">
+                {welcomeQuotedSkills.map(name => (
+                  <span key={name} className="skill-tag-chip">
+                    @{name}
+                    <span className="skill-tag-remove" onClick={() => handleRemoveWelcomeQuotedSkill(name)}>&times;</span>
+                  </span>
+                ))}
+              </div>
+            )}
             {welcomeAttachments.length > 0 && (
               <div className="input-preview-strip">
                 {welcomeAttachments.map((att, index) => (
@@ -1028,20 +1169,40 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <button
                     className="attach-btn"
                     title="引用技能"
-                    onClick={() => {
-                      setWelcomeInput(prev => prev ? `${prev}\n@` : '@')
-                      setTimeout(() => welcomeTextareaRef.current?.focus(), 0)
-                    }}
+                    onClick={() => setShowWelcomeSkillPicker(v => !v)}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="4"></circle>
                       <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
                     </svg>
                   </button>
+                  {showWelcomeSkillPicker && (
+                    <div ref={welcomeSkillPickerRef} className="skill-picker-dropdown">
+                      {welcomeSkillsLoading ? (
+                        <div className="skill-picker-loading">加载中...</div>
+                      ) : welcomeAvailableSkills.length === 0 ? (
+                        <div className="skill-picker-empty">暂无可用技能</div>
+                      ) : (
+                        welcomeAvailableSkills.map(skill => (
+                          <div
+                            key={skill.name}
+                            className={`skill-picker-item ${welcomeQuotedSkills.includes(skill.name) ? 'active' : ''}`}
+                            onClick={() => handleSelectWelcomeSkill(skill.name)}
+                          >
+                            <span className="skill-picker-icon">{skill.emoji || '🔧'}</span>
+                            <div className="skill-picker-info">
+                              <span className="skill-picker-name">{skill.name}</span>
+                              <span className="skill-picker-desc">{SKILL_CN[skill.name] || skill.description || '暂无描述'}</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
                 <button
                   className="welcome-send-btn"
-                  disabled={disabled || !isReady || (!welcomeInput.trim() && welcomeAttachments.length === 0)}
+                  disabled={disabled || !isReady || (!welcomeInput.trim() && welcomeAttachments.length === 0 && welcomeQuotedSkills.length === 0)}
                   onClick={handleWelcomeSend}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1178,6 +1339,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           onExternalInputConsumed={() => setRetryInput(null)}
           containerRef={inputContainerRef}
           activityStatus={isReady && backendStatus && (isStreaming || isWaiting) ? backendStatus : ''}
+          externalAttachment={externalAttachment}
+          onExternalAttachmentConsumed={onExternalAttachmentConsumed}
         />
       )}
     </div>

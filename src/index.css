@@ -1134,6 +1134,96 @@ body.widget-page #root {
   color: var(--text-muted);
 }
 
+/* Skill picker dropdown */
+.skill-picker-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 280px;
+  max-width: 400px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 6px;
+  z-index: 100;
+  box-shadow: var(--shadow-lg);
+  animation: fadeSlideUp 0.2s ease-out;
+}
+
+.skill-picker-loading,
+.skill-picker-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.skill-picker-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.skill-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.skill-picker-item.active {
+  background: #EFF6FF;
+}
+
+.skill-picker-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.skill-picker-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skill-picker-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-picker-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ============================================
    Main Content Area
    ============================================ */
@@ -4733,7 +4823,7 @@ body.widget-page #root {
 .ws-file-name {
   font-size: 14px;
   font-weight: 500;
-  color: #2563EB;
+  color: #374151;
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4741,7 +4831,7 @@ body.widget-page #root {
 }
 
 .ws-file-card:hover .ws-file-name {
-  color: #1D4ED8;
+  color: #2563EB;
 }
 
 .ws-file-meta {
@@ -4778,6 +4868,131 @@ body.widget-page #root {
 .ws-file-delete:hover {
   background: #FEE2E2;
   color: #EF4444;
+}
+
+/* 引用按钮 */
+.ws-file-reference {
+  position: absolute;
+  right: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  opacity: 0;
+}
+
+.ws-file-card:hover .ws-file-reference {
+  opacity: 1;
+  color: var(--text-muted);
+}
+
+.ws-file-reference:hover {
+  background: #DBEAFE;
+  color: #2563EB;
+}
+
+/* 删除确认弹窗 */
+.workspace-delete-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.workspace-delete-modal {
+  background: var(--bg-main);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  max-width: 400px;
+  width: 90%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.workspace-delete-modal-title {
+  padding: 16px 20px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.workspace-delete-modal-body {
+  padding: 20px;
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.workspace-delete-modal-body strong {
+  color: #EF4444;
+  font-weight: 600;
+}
+
+.workspace-delete-modal-warn {
+  display: block;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #FEF2F2;
+  border-radius: var(--radius);
+  color: #DC2626;
+  font-size: 13px;
+}
+
+.workspace-delete-modal-actions {
+  padding: 16px 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.workspace-delete-btn-cancel {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.workspace-delete-btn-cancel:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--text-muted);
+}
+
+.workspace-delete-btn-confirm {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius);
+  background: #EF4444;
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.workspace-delete-btn-confirm:hover {
+  background: #DC2626;
 }
 
 /* ============================================

@@ -11,6 +11,7 @@ interface WorkspaceListProps {
   onOpenEntry: (entry: WorkspaceEntry) => void
   onOpenWorkspace: () => void
   onClose?: () => void
+  onReference?: (entry: WorkspaceEntry) => void
 }
 
 /** 树节点：文件夹或文件 */
@@ -243,7 +244,8 @@ const TreeNodeItem: React.FC<{
   toggleExpand: (path: string) => void
   onOpenEntry: (entry: WorkspaceEntry) => void
   onDelete: (node: TreeNode) => void
-}> = ({ node, depth, expandedPaths, toggleExpand, onOpenEntry, onDelete }) => {
+  onReference?: (node: TreeNode) => void
+}> = ({ node, depth, expandedPaths, toggleExpand, onOpenEntry, onDelete, onReference }) => {
   const isDir = node.kind === 'dir'
   const isExpanded = expandedPaths.has(node.relativePath)
   const ext = fileExtension(node.name)
@@ -268,6 +270,11 @@ const TreeNodeItem: React.FC<{
     onDelete(node)
   }, [node, onDelete])
 
+  const handleReferenceClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    onReference?.(node)
+  }, [node, onReference])
+
   if (isDir) {
     return (
       <>
@@ -288,6 +295,12 @@ const TreeNodeItem: React.FC<{
             <span className="ws-file-name">{node.name}</span>
             <span className="ws-file-meta">{node.children.length} 项</span>
           </div>
+          <button className="ws-file-reference" onClick={handleReferenceClick} title="引用">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            </svg>
+          </button>
           <button className="ws-file-delete" onClick={handleDeleteClick} title="删除">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="3 6 5 6 21 6" />
@@ -304,6 +317,7 @@ const TreeNodeItem: React.FC<{
             toggleExpand={toggleExpand}
             onOpenEntry={onOpenEntry}
             onDelete={onDelete}
+            onReference={onReference}
           />
         ))}
       </>
@@ -325,6 +339,12 @@ const TreeNodeItem: React.FC<{
           最后修改 {node.modifiedAt > 0 ? formatTime(node.modifiedAt) : '--'}
         </span>
       </div>
+      <button className="ws-file-reference" onClick={handleReferenceClick} title="引用">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+        </svg>
+      </button>
       <button className="ws-file-delete" onClick={handleDeleteClick} title="删除">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="3 6 5 6 21 6" />
@@ -345,6 +365,7 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
   onOpenEntry,
   onOpenWorkspace: _onOpenWorkspace,
   onClose,
+  onReference,
 }) => {
   // 记录已展开的文件夹路径
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
@@ -502,6 +523,16 @@ export const WorkspaceList: React.FC<WorkspaceListProps> = ({
               toggleExpand={toggleExpand}
               onOpenEntry={onOpenEntry}
               onDelete={handleDeleteRequest}
+              onReference={onReference ? (node) => {
+                onReference({
+                  name: node.name,
+                  path: node.path,
+                  relativePath: node.relativePath,
+                  kind: node.kind,
+                  size: node.size,
+                  modifiedAt: node.modifiedAt,
+                })
+              } : undefined}
             />
           ))}
         </div>
