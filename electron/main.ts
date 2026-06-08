@@ -240,6 +240,8 @@ function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 12, y: 12 },
+    transparent: true,
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: PRELOAD,
       contextIsolation: true,

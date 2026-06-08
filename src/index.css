@@ -50,6 +50,8 @@ html, body {
   height: 100%;
   width: 100%;
   overflow: hidden;
+  /*窗口圆角在这修改*/
+  border-radius: 30px;
 }
 
 /* Modern Scrollbar Styles */
@@ -93,11 +95,12 @@ html, body {
 #root {
   height: 100vh;
   width: 100vw;
+  border-radius: 14px;
 }
 
 body {
   font-family: var(--font-main);
-  background: var(--bg-main);
+  background: transparent;
   color: var(--text-primary);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -303,6 +306,7 @@ body.widget-page #root {
   overflow: hidden;
   background: var(--bg-main);
   position: relative; /* 确保子元素的fixed定位正确 */
+  border-radius: 14px;
 }
 
 /* 拖动区域 - 顶部（仅左侧，避开窗口控制按钮） */
@@ -394,6 +398,14 @@ body.widget-page #root {
   align-items: center;
   gap: 12px;
   border-bottom: 1px solid var(--border-light);
+}
+
+.app-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .app-title {

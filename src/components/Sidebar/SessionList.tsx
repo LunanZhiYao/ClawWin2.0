@@ -100,6 +100,7 @@ export const SessionList: React.FC<SessionListProps> = ({
     <>
       {/* Sidebar Header */}
       <div className="sidebar-header">
+        <img src={logoSrc} alt="鲁南千易" className="app-logo" />
         <div className="app-title">鲁南千易</div>
       </div>
 
