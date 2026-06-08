@@ -361,55 +361,55 @@ const BottomInput: React.FC<BottomInputProps> = ({
         </div>
       )}
 
-      {/* Quoted skills strip */}
-      {quotedSkills.length > 0 && (
-        <div className="skill-tags-strip">
-          {quotedSkills.map(name => (
-            <span key={name} className="skill-tag-chip">
-              @{name}
-              <span className="skill-tag-remove" onClick={() => handleRemoveQuotedSkill(name)}>&times;</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Preview strip */}
-      {attachments.length > 0 && (
-        <div className="input-preview-strip">
-          {attachments.map((att, index) => (
-            <div key={index} className="input-preview-item">
-              {att.previewUrl ? (
-                <img src={att.previewUrl} alt={att.fileName} className="input-preview-thumb" />
-              ) : att.type === 'folder' ? (
-                <div className="input-preview-file-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-                  </svg>
-                </div>
-              ) : (
-                <div className="input-preview-file-icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                </div>
-              )}
-              <div className="input-preview-info">
-                <span className="input-preview-name" title={att.type === 'folder' ? att.filePath : att.fileName}>
-                  {att.fileName.length > 12 ? att.fileName.slice(0, 9) + '...' : att.fileName}
-                </span>
-                <span className="input-preview-size">{att.type === 'folder' ? '文件夹' : formatFileSize(att.size)}</span>
-              </div>
-              <button className="input-preview-remove" onClick={() => removeAttachment(index)} title="移除文件">&times;</button>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* Input container - 与欢迎页一致 */}
       <div className="welcome-input-container" style={{ width: '100%', maxWidth: '1000px', margin: '0 auto' }}>
         {/* Hidden file input */}
         <input ref={fileInputRef} type="file" accept="*/*" multiple style={{ display: 'none' }} onChange={handleFileChange} />
+        
+        {/* Quoted skills strip */}
+        {quotedSkills.length > 0 && (
+          <div className="skill-tags-strip">
+            {quotedSkills.map(name => (
+              <span key={name} className="skill-tag-chip">
+                @{name}
+                <span className="skill-tag-remove" onClick={() => handleRemoveQuotedSkill(name)}>&times;</span>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Preview strip */}
+        {attachments.length > 0 && (
+          <div className="input-preview-strip">
+            {attachments.map((att, index) => (
+              <div key={index} className="input-preview-item">
+                {att.previewUrl ? (
+                  <img src={att.previewUrl} alt={att.fileName} className="input-preview-thumb" />
+                ) : att.type === 'folder' ? (
+                  <div className="input-preview-file-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                    </svg>
+                  </div>
+                ) : (
+                  <div className="input-preview-file-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                  </div>
+                )}
+                <div className="input-preview-info">
+                  <span className="input-preview-name" title={att.type === 'folder' ? att.filePath : att.fileName}>
+                    {att.fileName.length > 12 ? att.fileName.slice(0, 9) + '...' : att.fileName}
+                  </span>
+                  <span className="input-preview-size">{att.type === 'folder' ? '文件夹' : formatFileSize(att.size)}</span>
+                </div>
+                <button className="input-preview-remove" onClick={() => removeAttachment(index)} title="移除文件">&times;</button>
+              </div>
+            ))}
+          </div>
+        )}
         
         <div className="welcome-input-wrapper">
           <textarea
@@ -1177,7 +1177,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </svg>
                   </button>
                   {showWelcomeSkillPicker && (
-                    <div ref={welcomeSkillPickerRef} className="skill-picker-dropdown">
+                    <div ref={welcomeSkillPickerRef} className="skill-picker-dropdown skill-picker-dropdown-below">
                       {welcomeSkillsLoading ? (
                         <div className="skill-picker-loading">加载中...</div>
                       ) : welcomeAvailableSkills.length === 0 ? (

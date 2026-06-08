@@ -1900,6 +1900,13 @@ function setupIPC() {
     }
   })
 
+  // 同步等待状态到小工具窗口
+  ipcMain.handle('widget:setWaitingState', (_event, isWaiting: boolean, isStreaming: boolean) => {
+    if (widgetWindow) {
+      widgetWindow.webContents.send('widget:waitingStateChanged', { isWaiting, isStreaming })
+    }
+  })
+
   ipcMain.on('widget:setIgnoreMouseEvents', (_event, ignore: boolean) => {
     if (widgetWindow) {
       widgetWindow.setIgnoreMouseEvents(ignore, { forward: true })

@@ -314,6 +314,7 @@ const electronAPI = {
     openMainWindow: (): Promise<void> => ipcRenderer.invoke('widget:openMainWindow'),
     setIgnoreMouseEvents: (ignore: boolean): void => ipcRenderer.send('widget:setIgnoreMouseEvents', ignore),
     moveBy: (dx: number, dy: number): void => ipcRenderer.send('widget:moveBy', dx, dy),
+    setWaitingState: (isWaiting: boolean, isStreaming: boolean): Promise<void> => ipcRenderer.invoke('widget:setWaitingState', isWaiting, isStreaming),
     onMessageReceived: (callback: (message: string) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, message: string) => callback(message)
       ipcRenderer.on('widget:messageReceived', handler)
@@ -328,6 +329,11 @@ const electronAPI = {
       const handler = (_event: Electron.IpcRendererEvent, data: { x: number; y: number; isNearEdge: boolean; edges: string[] }) => callback(data)
       ipcRenderer.on('widget:positionChanged', handler)
       return () => ipcRenderer.removeListener('widget:positionChanged', handler)
+    },
+    onWaitingStateChanged: (callback: (data: { isWaiting: boolean; isStreaming: boolean }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { isWaiting: boolean; isStreaming: boolean }) => callback(data)
+      ipcRenderer.on('widget:waitingStateChanged', handler)
+      return () => ipcRenderer.removeListener('widget:waitingStateChanged', handler)
     },
   },
 }

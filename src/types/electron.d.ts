@@ -9,9 +9,11 @@ export interface WidgetAPI {
   openMainWindow: () => Promise<void>
   setIgnoreMouseEvents: (ignore: boolean) => void
   moveBy: (dx: number, dy: number) => void
+  setWaitingState: (isWaiting: boolean, isStreaming: boolean) => Promise<void>
   onMessageReceived: (callback: (message: string) => void) => () => void
   onTaskComplete: (callback: (result: { success: boolean; message: string }) => void) => () => void
   onPositionChanged: (callback: (data: { x: number; y: number; isNearEdge: boolean; edges: string[] }) => void) => () => void
+  onWaitingStateChanged: (callback: (data: { isWaiting: boolean; isStreaming: boolean }) => void) => () => void
 }
 
 export interface ElectronAPI {

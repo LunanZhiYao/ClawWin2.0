@@ -1485,6 +1485,11 @@ function App() {
 
   widgetTaskCompleteRef.current = handleWidgetTaskComplete
 
+  // 同步等待状态到小工具窗口
+  useEffect(() => {
+    void window.electronAPI.widget.setWaitingState(isWaiting, ws.isStreaming)
+  }, [isWaiting, ws.isStreaming])
+
   // 网关启动/重启时激活视频启动屏
   useEffect(() => {
     if (gateway.state === 'starting' || gateway.state === 'restarting' || gateway.state === 'error') {

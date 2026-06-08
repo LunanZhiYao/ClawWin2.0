@@ -60,6 +60,17 @@ export const WidgetPage: React.FC = () => {
     }
   }, [setIgnore])
 
+  // 监听主窗口的等待状态变化
+  useEffect(() => {
+    const unsubWaiting = window.electronAPI.widget.onWaitingStateChanged((data) => {
+      // 当主窗口正在等待或正在流式输出时，显示等待动画
+      setIsTaskRunning(data.isWaiting || data.isStreaming)
+    })
+    return () => {
+      unsubWaiting()
+    }
+  }, [])
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (isDraggingRef.current) return
