@@ -3721,6 +3721,7 @@ body.widget-page #root {
   justify-content: center;
   z-index: 9999;
   animation: splashFadeIn 0.5s ease-out;
+  overflow: hidden;
 }
 
 .video-splash-exit {
@@ -5100,19 +5101,21 @@ body.widget-page #root {
 
 .window-control-minimize:hover {
   background-color: rgba(0, 0, 0, 0.1);
+  border-radius: 16px;
 }
 
 /* 最大化/还原按钮 */
 .window-control-maximize:hover,
 .window-control-restore:hover {
   background-color: rgba(0, 0, 0, 0.1);
+  border-radius: 16px;
 }
 
 /* 关闭按钮 */
 .window-control-close:hover {
   background-color: #E81123;
   color: #FFFFFF;
-  border-radius: 0 0 0 6px; /* 左下圆角 */
+  border-radius: 16px; /* 左下圆角 */
 }
 
 /* 悬停时的过渡效果 */
@@ -6905,4 +6908,154 @@ body.widget-page #root {
 
 .splash-close-btn:active {
   background: rgba(255, 255, 255, 0.15);
+}
+
+/* ============================================
+   Update Dialog - 更新提示对话框
+   ============================================ */
+
+.update-dialog {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: updateDialogSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes updateDialogSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.update-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.update-dialog-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.update-dialog-body {
+  margin-bottom: 24px;
+}
+
+.update-version {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--primary);
+  margin: 0 0 12px 0;
+}
+
+.update-current-version {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+
+.update-notes {
+  background: var(--bg-main);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 12px;
+}
+
+.update-notes p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 6px 0;
+  line-height: 1.6;
+}
+
+.update-notes p:last-child {
+  margin-bottom: 0;
+}
+
+.update-status-text {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin: 0 0 12px 0;
+  font-weight: 500;
+}
+
+.update-progress-bar {
+  height: 8px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.update-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary) 0%, var(--primary-hover) 100%);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.update-progress-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.update-hint-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 8px 0 0 0;
+}
+
+.update-error-text {
+  font-size: 13px;
+  color: var(--error);
+  margin: 0;
+  padding: 12px;
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  border-radius: 6px;
+}
+
+.update-dialog-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.btn-update {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-update:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-update:active {
+  transform: translateY(0);
 }

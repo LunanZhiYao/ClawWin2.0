@@ -45,16 +45,18 @@ function isNewer(remote: string, local: string): boolean {
 }
 
 /**
- * 规范化下载 URL：合并路径中连续斜杠（如 https://host//uploadfiles/...），
+ * 规范化下载 URL：移除反引号，合并路径中连续斜杠（如 https://host//uploadfiles/...），
  * 否则 pathname 会变成 //uploadfiles/...，部分 CDN 会返回 404。
  */
 function normalizeDownloadUrl(url: string): string {
   try {
-    const u = new URL(url.trim())
+    // 移除反引号和前后空格
+    let cleanUrl = url.trim().replace(/`/g, '')
+    const u = new URL(cleanUrl)
     u.pathname = u.pathname.replace(/\/{2,}/g, '/')
     return u.href
   } catch {
-    return url.trim()
+    return url.trim().replace(/`/g, '')
   }
 }
 
@@ -131,7 +133,8 @@ function fileNameFromDownloadUrl(downloadUrl: string): string {
 
 function matchVersionOk(matchVersion: unknown, currentVersion: string): boolean {
   const m = typeof matchVersion === 'string' ? matchVersion.trim() : ''
-  if (!m) return true
+  // match_version 为空或反引号包裹时，视为不限制版本
+  if (!m || m === '`' || m.startsWith('`')) return true
   return m === currentVersion
 }
 
@@ -210,31 +213,20 @@ export async function checkForUpdate(accessToken: string | null): Promise<Update
   const d = root.data
 
   const mustVer = typeof d.must_version_code === 'string' ? d.must_version_code.trim() : ''
-  const mustUrl = pickExeUrl(d.must_exe_path, d.must_exe_path_32)
-
-  // 优先 must_*：仅当 must 版本高于当前时使用 must 包地址（与当前相同时不占用 must 通道）
-  if (mustVer && mustUrl && matchVersionOk(d.must_match_version, currentVersion)) {
-    if (isNewer(mustVer, currentVersion) && shouldOfferUpdate(mustVer, currentVersion, d.must_force_update)) {
-      console.log('[update] must update:', mustVer)
-      return buildUpdateFromPayload(mustVer, d.must_remark, mustUrl, isForceFlag(d.must_force_update))
-    }
-  }
-
   const ver = typeof d.version_code === 'string' ? d.version_code.trim() : ''
   const exeUrl = pickExeUrl(d.exe_path, d.exe_path_32)
 
-  // must_version_code 与当前相同（或当前已不低于 must、或缺少 must 包地址）时，才用 version_code + exe_path / exe_path_32
-  const canUseOptionalExe =
-    !mustVer || !isNewer(mustVer, currentVersion) || !mustUrl
+  // 如果当前版本低于 must_version_code，强制更新到最新版本（version_code）
+  if (mustVer && isNewer(mustVer, currentVersion)) {
+    if (ver && exeUrl) {
+      console.log('[update] force update to latest:', ver, '(must threshold:', mustVer, ')')
+      return buildUpdateFromPayload(ver, d.remark, exeUrl, true)
+    }
+  }
 
-  if (
-    canUseOptionalExe &&
-    ver &&
-    exeUrl &&
-    matchVersionOk(d.match_version, currentVersion) &&
-    isNewer(ver, currentVersion)
-  ) {
-    console.log('[update] latest update:', ver)
+  // 否则如果有非强制更新，提示更新至最新版本
+  if (ver && exeUrl && isNewer(ver, currentVersion)) {
+    console.log('[update] optional update:', ver)
     return buildUpdateFromPayload(ver, d.remark, exeUrl, isForceFlag(d.force_update))
   }
 
