@@ -24,6 +24,10 @@ interface UseWebSocketReturn {
   backendHealthy: boolean
   onMessageStream: React.MutableRefObject<((msg: ChatMessage) => void) | null>
   onFinalUsage: React.MutableRefObject<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>
+  onSessionUsageUpdate: React.MutableRefObject<
+    | ((usage: { totalTokens?: number; contextTokens?: number; sessionKey?: string }) => void)
+    | null
+  >
   onContextOverflow: React.MutableRefObject<((sessionKey?: string) => void) | null>
   onCompactionEnd: React.MutableRefObject<((sessionKey?: string) => void) | null>
   onStreamStart: React.MutableRefObject<(() => void) | null>
@@ -261,6 +265,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const phaseRef = useRef<'idle' | 'thinking' | 'tool' | 'text'>('idle')
   // 自动压缩：暴露给 App.tsx 的回调
   const onFinalUsage = useRef<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>(null)
+  const onSessionUsageUpdate = useRef<
+    | ((usage: { totalTokens?: number; contextTokens?: number; sessionKey?: string }) => void)
+    | null
+  >(null)
   const onContextOverflow = useRef<((sessionKey?: string) => void) | null>(null)
   const onCompactionEnd = useRef<((sessionKey?: string) => void) | null>(null)
   const contextOverflowRunIdsRef = useRef<Set<string>>(new Set())
@@ -504,6 +512,23 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         runIdAgentIdMapRef.current.set(agentRunId, agentIdFromEvent)
       }
       console.log('[ws] agent event:', { stream, phase, agentRunId, agentIdFromEvent, sessionKey: p.sessionKey, activeRunId: activeRunIdRef.current, toolCallsCount: toolCallsBufferRef.current.length, dataKeys: Object.keys(data) })
+
+      // 从 agent 事件的 session 字段中提取 token 使用信息
+      const sessionData = p.session as Record<string, unknown> | undefined
+      if (sessionData && agentSessionKey) {
+        const totalTokens = sessionData.totalTokens as number | undefined
+        const contextTokens = sessionData.contextTokens as number | undefined
+        const totalTokensFresh = sessionData.totalTokensFresh as boolean | undefined
+
+        // 只有当 totalTokensFresh 为 true 或者有有效的 token 值时才更新
+        if (totalTokensFresh || (totalTokens !== undefined && totalTokens > 0) || (contextTokens !== undefined && contextTokens > 0)) {
+          onSessionUsageUpdate.current?.({
+            totalTokens,
+            contextTokens,
+            sessionKey: agentSessionKey
+          })
+        }
+      }
 
       if (stream === 'assistant') {
         // AI 正在生成文本，显示预览
@@ -1654,5 +1679,5 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     clientRef.current?.clearOfflineQueue()
   }, [])
 
-  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current, clearOfflineQueue }
+  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onSessionUsageUpdate, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current, clearOfflineQueue }
 }

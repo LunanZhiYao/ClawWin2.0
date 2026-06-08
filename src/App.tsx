@@ -956,11 +956,37 @@ function App() {
     if (!usage) return
 
     // 页面展示值与自动压缩判定值必须同源同口径：
-    // 统一使用本次 sessions.list 读取到的 usage.input（会话累计值）。
+    // usage.input 已经是 normalizedInput（优先 total，否则 input+output）
+    // 所以直接使用 usage.input 作为累计值
     const currentUsageTotal = usage.input
+
+    // 关键修复：避免 sessions.list 返回的 0 值覆盖从 agent 事件中更新的有效值
+    // 只有当 sessions.list 返回有效的 token 值时才更新，否则保留之前的值
+    const shouldUpdateUsage = currentUsageTotal > 0 || prevTotal === undefined || prevTotal === 0
+
+    if (!shouldUpdateUsage) {
+      // 仍然需要更新 contextWindow
+      const contextWindowToUpdate = usage.contextWindow && usage.contextWindow > 0
+        ? usage.contextWindow
+        : (setup.config.contextWindow && setup.config.contextWindow > 0 ? setup.config.contextWindow : undefined)
+
+      if (contextWindowToUpdate && contextWindowToUpdate > 0) {
+        setSessionContextWindowMap((prev) => ({ ...prev, [sessionId]: contextWindowToUpdate }))
+      }
+      return
+    }
+
     setSessionUsageTotalMap((prev) => ({ ...prev, [sessionId]: currentUsageTotal }))
-    if (usage.contextWindow && usage.contextWindow > 0) {
-      setSessionContextWindowMap((prev) => ({ ...prev, [sessionId]: usage.contextWindow as number }))
+
+    // contextWindow 更新逻辑：
+    // 1. 优先使用后端返回的 contextWindow
+    // 2. 如果后端没有返回，则使用全局配置的 contextWindow
+    const contextWindowToUpdate = usage.contextWindow && usage.contextWindow > 0
+      ? usage.contextWindow
+      : (setup.config.contextWindow && setup.config.contextWindow > 0 ? setup.config.contextWindow : undefined)
+
+    if (contextWindowToUpdate && contextWindowToUpdate > 0) {
+      setSessionContextWindowMap((prev) => ({ ...prev, [sessionId]: contextWindowToUpdate }))
     }
 
     // 自动压缩判定必须与页面展示口径一致：
@@ -1029,6 +1055,29 @@ function App() {
     if (!sessionKey) return
     void refreshSessionUsageRef.current(sessionKey, true)
   }, [])
+
+  // 从 agent 事件的 session 字段中直接更新 token 使用信息
+  // 这是更实时的更新方式，可以避免等待 sessions.list 的延迟
+  ws.onSessionUsageUpdate.current = useCallback(
+    ({ totalTokens, contextTokens, sessionKey }: { totalTokens?: number; contextTokens?: number; sessionKey?: string }) => {
+      if (!sessionKey) return
+
+      // sessionKey 格式是 "agent:main:xxx"，需要提取最后的 sessionId 部分
+      // 以便与 activeSessionId（格式是 "xxx"）匹配
+      const sessionId = sessionKey.includes(':') ? sessionKey.split(':').pop()! : sessionKey
+
+      // 更新 token 使用量
+      if (totalTokens !== undefined && totalTokens > 0) {
+        setSessionUsageTotalMap((prev) => ({ ...prev, [sessionId]: totalTokens }))
+      }
+
+      // 更新 context window
+      if (contextTokens !== undefined && contextTokens > 0) {
+        setSessionContextWindowMap((prev) => ({ ...prev, [sessionId]: contextTokens }))
+      }
+    },
+    []
+  )
 
   // 兜底路径：若已出现上下文溢出错误，立即尝试自动压缩一次
   ws.onContextOverflow.current = useCallback((sessionId?: string) => {
