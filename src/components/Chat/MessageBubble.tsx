@@ -359,10 +359,10 @@ const TaskStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
 const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: boolean }> = ({ taskStatus, showWithContent }) => {
   const statusTextMap: Record<TaskStatus, string> = {
     starting: '🤔 让我想想',
-    calling_tool: '🔧 正在调用工具',
-    executing: '⚙️ 执行指令中',
+    calling_tool: '正在调用工具',
+    executing: '执行指令中',
     using_skill: '✨ 让我来使用技能',
-    waiting: '⌛ 处理中，请稍候',
+    waiting: '处理中，请稍候',
     waiting_input: '✋ 等待输入',
     running: '🚀 运行中',
     pending: '⏳ 等待中',
