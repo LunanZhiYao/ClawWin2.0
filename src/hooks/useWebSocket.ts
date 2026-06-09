@@ -263,6 +263,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   // 阶段追踪：idle → thinking → tool → text → idle
   // thinking/tool 阶段不推送流式文本，只推送工具调用和思考内容
   const phaseRef = useRef<'idle' | 'thinking' | 'tool' | 'text'>('idle')
+  // 等待 lifecycle.start 的超时定时器：用于在发送消息后一段时间内没有收到响应时显示"正在处理中..."
+  const lifecycleStartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 自动压缩：暴露给 App.tsx 的回调
   const onFinalUsage = useRef<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>(null)
   const onSessionUsageUpdate = useRef<
@@ -642,6 +644,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         }
       } else if (stream === 'lifecycle') {
         if (phase === 'start') {
+          // 收到 lifecycle.start，清除等待超时定时器
+          if (lifecycleStartTimeoutRef.current) {
+            clearTimeout(lifecycleStartTimeoutRef.current)
+            lifecycleStartTimeoutRef.current = null
+          }
           toolCallsBufferRef.current = []
           toolCallIdRef.current = 0
           phaseRef.current = 'thinking'
@@ -670,6 +677,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             })
           }
         } else if (phase === 'end' || phase === 'error') {
+          // 收到 lifecycle.end/error，清除等待超时定时器
+          if (lifecycleStartTimeoutRef.current) {
+            clearTimeout(lifecycleStartTimeoutRef.current)
+            lifecycleStartTimeoutRef.current = null
+          }
           phaseRef.current = 'idle'
           setBackendStatus('')
           // agent 活动结束时减少 streamingCount
@@ -1401,8 +1413,35 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         activeRunIdRef.current = ack.runId
         lastRunIdBySessionRef.current.set(normalizeSessionKey(builtSessionKey) || builtSessionKey, ack.runId)
       }
+      // 启动等待 lifecycle.start 的超时定时器：5秒内没有收到响应则在气泡中显示"正在优化上下文"
+      if (lifecycleStartTimeoutRef.current) {
+        clearTimeout(lifecycleStartTimeoutRef.current)
+      }
+      const timeoutRunId = ack?.runId || idempotencyKey
+      lifecycleStartTimeoutRef.current = setTimeout(() => {
+        console.log('[ws] lifecycle.start 超时，在气泡中显示"正在优化上下文"')
+        setBackendStatus('正在处理上下文长度')
+        // 在气泡中显示提示
+        onMessageStream.current?.({
+          id: timeoutRunId,
+          role: 'assistant',
+          content: '',
+          thinking: '',
+          toolCalls: [],
+          timestamp: Date.now(),
+          status: 'streaming',
+          taskStatus: 'auto_compacting',
+          agentId: agentId,
+          sessionKey: normalizeSessionKey(builtSessionKey) || sessionKey,
+        })
+      }, 5000)
       return { ...ack, sessionKey: builtSessionKey, idempotencyKey }
     } catch (err) {
+      // 发送失败，清除等待超时定时器
+      if (lifecycleStartTimeoutRef.current) {
+        clearTimeout(lifecycleStartTimeoutRef.current)
+        lifecycleStartTimeoutRef.current = null
+      }
       console.error('[ws] chat.send failed:', err)
       const msg: ChatMessage = {
         id: idempotencyKey,

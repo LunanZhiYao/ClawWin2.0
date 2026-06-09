@@ -278,6 +278,7 @@ export type TaskStatus =
   | 'calling_tool'
   | 'starting'
   | 'compacting'
+  | 'auto_compacting'
   | 'completed'
   | 'failed'
   | 'interrupted'

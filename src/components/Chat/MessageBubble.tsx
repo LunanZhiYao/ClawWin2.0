@@ -358,22 +358,23 @@ const TaskStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
 // 任务状态提示组件
 const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: boolean }> = ({ taskStatus, showWithContent }) => {
   const statusTextMap: Record<TaskStatus, string> = {
-    starting: '让我想想',
-    calling_tool: '正在调用工具',
-    executing: '执行指令中',
-    using_skill: '让我来使用技能',
-    waiting: '处理中，请稍候',
-    waiting_input: '等待输入',
-    running: '运行中',
-    pending: '等待中',
-    queued: '排队中',
-    compacting: '正在压缩上下文',
+    starting: '🤔 让我想想',
+    calling_tool: '🔧 正在调用工具',
+    executing: '⚙️ 执行指令中',
+    using_skill: '✨ 让我来使用技能',
+    waiting: '⌛ 处理中，请稍候',
+    waiting_input: '✋ 等待输入',
+    running: '🚀 运行中',
+    pending: '⏳ 等待中',
+    queued: '📋 排队中',
+    compacting: '📦 正在压缩上下文',
+    auto_compacting: '✨ 让我先整理一下内容~',
     completed: '任务已完成',
     retrying: '遇到点小问题，正在重试',
     interrupted: '信息流异常，已暂停任务',
     failed: '执行失败了，要不要重试一下？',
     user_aborted: '任务已手动中断',
-  }
+}
 
   const finalStatuses: TaskStatus[] = ['completed', 'failed', 'interrupted', 'user_aborted']
   const isFinalStatus = taskStatus ? finalStatuses.includes(taskStatus) : false
@@ -415,6 +416,7 @@ const TaskStatusSummary: React.FC<{ toolCalls: ChatToolCall[]; taskStatus?: Task
         : taskStatus === 'running' ? '运行中'
         : taskStatus === 'failed' ? '执行失败'
         : taskStatus === 'compacting' ? '压缩上下文'
+        : taskStatus === 'auto_compacting' ? '优化上下文'
         : '处理中'
       : ''
 
