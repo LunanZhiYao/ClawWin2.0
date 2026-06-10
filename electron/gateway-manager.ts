@@ -373,6 +373,17 @@ export class GatewayManager {
     // and derives state dir as $OPENCLAW_HOME/.openclaw/
     env.OPENCLAW_HOME = os.homedir()
 
+    // Set OPENCLAW_BUNDLED_SKILLS_DIR to the bundled skills directory
+    // This is required for the gateway to find bundled skills in packaged environments
+    // where resolveBundledSkillsDir() cannot auto-detect the correct path.
+    const bundledSkillsDir = path.join(this.opts.openclawPath, 'skills')
+    if (fs.existsSync(bundledSkillsDir)) {
+      env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledSkillsDir
+      this.log('info', `[skills] 设置 OPENCLAW_BUNDLED_SKILLS_DIR=${bundledSkillsDir}`)
+    } else {
+      this.log('warn', `[skills] bundled skills 目录不存在: ${bundledSkillsDir}`)
+    }
+
     // 将 bundled 技能 bin 目录和本地安装的 skill-bins 加入 PATH
     // 这样 gateway 子进程中运行 agent-browser 等命令时能找到它们
     const extraPaths = [...getAllBundledBinPaths(), getLocalNpmBinDir()]

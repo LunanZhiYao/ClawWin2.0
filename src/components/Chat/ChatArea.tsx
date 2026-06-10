@@ -444,17 +444,18 @@ const BottomInput: React.FC<BottomInputProps> = ({
                   <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
                 </svg>
               </button>
-              <button
-                className="attach-btn"
-                title="引用技能"
-                onClick={() => setShowSkillPicker(v => !v)}
-                disabled={disabled}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="4"></circle>
-                  <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
-                </svg>
-              </button>
+              {/*todo 技能引用*/}
+              {/*<button*/}
+              {/*  className="attach-btn"*/}
+              {/*  title="引用技能"*/}
+              {/*  onClick={() => setShowSkillPicker(v => !v)}*/}
+              {/*  disabled={disabled}*/}
+              {/*>*/}
+              {/*  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">*/}
+              {/*    <circle cx="12" cy="12" r="4"></circle>*/}
+              {/*    <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>*/}
+              {/*  </svg>*/}
+              {/*</button>*/}
               {showSkillPicker && (
                 <div ref={skillPickerRef} className="skill-picker-dropdown">
                   {skillsLoading ? (
@@ -838,21 +839,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
   }, [])
 
-  // 监听底部输入框高度变化，动态调整消息区域 padding-bottom
-  useEffect(() => {
-    const inputEl = inputContainerRef.current
-    if (!inputEl || !scrollRef.current) return
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const height = entry.contentRect.height + 32 // 16px padding * 2
-        if (scrollRef.current) {
-          scrollRef.current.style.paddingBottom = `${height + 8}px`
-        }
-      }
-    })
-    observer.observe(inputEl)
-    return () => observer.disconnect()
-  }, [messages.length > 0])
+  // // todo 临时取消监听底部输入框高度变化，动态调整消息区域 padding-bottom
+  // useEffect(() => {
+  //   const inputEl = inputContainerRef.current
+  //   if (!inputEl || !scrollRef.current) return
+  //   const observer = new ResizeObserver((entries) => {
+  //     for (const entry of entries) {
+  //       const height = entry.contentRect.height + 32 // 16px padding * 2
+  //       if (scrollRef.current) {
+  //         scrollRef.current.style.paddingBottom = `${height + 8}px`
+  //       }
+  //     }
+  //   })
+  //   observer.observe(inputEl)
+  //   return () => observer.disconnect()
+  // }, [messages.length > 0])
 
   // 监听截屏完成事件
   useEffect(() => {
@@ -1020,25 +1021,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
             </div>
           )}
-          <div
-            className="chat-context-usage"
-            title={`当前上下文使用率 ${usagePercent}%（${usageTotalLabel}/${contextWindowLabel}）`}
-            aria-label={`当前上下文使用率 ${usagePercent}%，已用 ${usageTotalLabel}，总窗口 ${contextWindowLabel}`}
-            style={{ display: messages.length === 0 ? 'none' : 'flex' }}
-          >
-            <svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true">
-              <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />
-              <circle
-                className="chat-context-usage-progress"
-                cx="14"
-                cy="14"
-                r={ringRadius}
-                strokeDasharray={ringCircumference}
-                strokeDashoffset={ringOffset}
-              />
-            </svg>
-            <span className="chat-context-label">{usagePercent}%</span>
-          </div>
+          {/*todo 上下文检测不对*/}
+          {/*<div*/}
+          {/*  className="chat-context-usage"*/}
+          {/*  title={`当前上下文使用率 ${usagePercent}%（${usageTotalLabel}/${contextWindowLabel}）`}*/}
+          {/*  aria-label={`当前上下文使用率 ${usagePercent}%，已用 ${usageTotalLabel}，总窗口 ${contextWindowLabel}`}*/}
+          {/*  style={{ display: messages.length === 0 ? 'none' : 'flex' }}*/}
+          {/*>*/}
+          {/*  <svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true">*/}
+          {/*    <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />*/}
+          {/*    <circle*/}
+          {/*      className="chat-context-usage-progress"*/}
+          {/*      cx="14"*/}
+          {/*      cy="14"*/}
+          {/*      r={ringRadius}*/}
+          {/*      strokeDasharray={ringCircumference}*/}
+          {/*      strokeDashoffset={ringOffset}*/}
+          {/*    />*/}
+          {/*  </svg>*/}
+          {/*  <span className="chat-context-label">{usagePercent}%</span>*/}
+          {/*</div>*/}
           <button
             className="chat-action-btn"
             onClick={handleCompact}
@@ -1166,16 +1168,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
                     </svg>
                   </button>
-                  <button
-                    className="attach-btn"
-                    title="引用技能"
-                    onClick={() => setShowWelcomeSkillPicker(v => !v)}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="4"></circle>
-                      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
-                    </svg>
-                  </button>
+                   {/*todo 技能引用*/}
+                  {/*<button*/}
+                  {/*  className="attach-btn"*/}
+                  {/*  title="引用技能"*/}
+                  {/*  onClick={() => setShowWelcomeSkillPicker(v => !v)}*/}
+                  {/*>*/}
+                  {/*  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">*/}
+                  {/*    <circle cx="12" cy="12" r="4"></circle>*/}
+                  {/*    <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>*/}
+                  {/*  </svg>*/}
+                  {/*</button>*/}
                   {showWelcomeSkillPicker && (
                     <div ref={welcomeSkillPickerRef} className="skill-picker-dropdown skill-picker-dropdown-below">
                       {welcomeSkillsLoading ? (
