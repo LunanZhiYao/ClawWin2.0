@@ -309,6 +309,17 @@ body.widget-page #root {
   border-radius: 14px;
 }
 
+/* 边框使用伪元素绘制，确保在所有子元素之上，圆角处不被遮挡 */
+.app-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  border: 1px solid #D1D5DB;
+  pointer-events: none;
+  z-index: 999998;
+}
+
 /* 拖动区域 - 顶部（仅左侧，避开窗口控制按钮） */
 .app-drag-region {
   position: fixed;
@@ -335,6 +346,7 @@ body.widget-page #root {
   flex-shrink: 0;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
+  border-radius: 14px 0 0 14px;
 }
 
 .left-panels.collapsed {
@@ -390,6 +402,7 @@ body.widget-page #root {
   opacity: 1;
   transform: translateX(0);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 14px 0 0 14px;
 }
 
 .sidebar-header {
@@ -1356,6 +1369,7 @@ body.widget-page #root {
   gap: 16px;
   position: relative;
   z-index: 999995;
+  border-radius: 0 14px 0 0;
 }
 
 .chat-header::after {
@@ -1514,6 +1528,7 @@ body.widget-page #root {
   overflow: hidden;
   background: var(--bg-main);
   width: 100%;
+  border-radius: 0 14px 14px 0;
 }
 
 /* Chat Header - 标题居中 + 右侧操作按钮 */
@@ -4327,6 +4342,91 @@ body.widget-page #root {
   background: #FEF2F2;
 }
 
+/* Skill Delete Confirm Dialog */
+.session-delete-confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.session-delete-confirm-dialog {
+  background: var(--bg-main);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+  max-width: 400px;
+  width: 90%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.session-delete-confirm-title {
+  padding: 16px 20px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.session-delete-confirm-desc {
+  padding: 20px;
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.session-delete-confirm-actions {
+  padding: 16px 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.session-delete-cancel-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.session-delete-cancel-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--text-muted);
+}
+
+.session-delete-confirm-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius);
+  background: #EF4444;
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.session-delete-confirm-btn:hover {
+  background: #DC2626;
+}
+
+.session-delete-confirm-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .skill-settings-grid-menu-open {
   overflow: visible;
 }
@@ -4586,6 +4686,7 @@ body.widget-page #root {
   flex-direction: column;
   overflow: hidden;
   z-index: 10; /* 远低于window-controls的999999 */
+  border-radius: 0 14px 14px 0;
   -webkit-app-region: no-drag; /* 整个面板可点击 */
   animation: slideInRight 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -5138,7 +5239,7 @@ body.widget-page #root {
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 24px 240px 24px;
+  padding: 16px 24px 24px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -5264,16 +5365,12 @@ body.widget-page #root {
   animation: streaming-dot-pulse 1.5s infinite;
 }
 
-/* Bottom Input Container - 固定在窗口下方 */
+/* Bottom Input Container - 底部输入框（正常流布局，跟随父容器圆角裁剪） */
 .bottom-input-container {
-  position: fixed;
-  bottom: 0;
-  left: 280px;
-  right: 0;
   padding: 16px 24px;
   background: var(--bg-main);
   border-top: 1px solid var(--border-light);
-  z-index: 40;
+  flex-shrink: 0;
   animation: slideUp 0.3s ease;
 }
 
@@ -5299,11 +5396,6 @@ body.widget-page #root {
   background: rgba(59, 130, 246, 0.1);
   border: 2px dashed var(--primary);
   pointer-events: auto;
-}
-
-/* 工作区展开时，调整底部输入框宽度 */
-.bottom-input-container.workspace-open {
-  right: 400px;
 }
 
 /* 停止按钮 */
