@@ -250,9 +250,6 @@ const BottomInput: React.FC<BottomInputProps> = ({
       if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
     }
     setAttachments([])
-    if (textareaRef.current) {
-      textareaRef.current.style.height = '64px'
-    }
   }, [input, attachments, disabled, onSend, quotedSkills])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -269,9 +266,6 @@ const BottomInput: React.FC<BottomInputProps> = ({
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
-    const textarea = e.target
-    textarea.style.height = 'auto'
-    textarea.style.height = Math.max(64, Math.min(textarea.scrollHeight + 8, 200)) + 'px'
   }, [])
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -538,16 +532,16 @@ function getHeaderAgentLabel(agent: AgentInfo | undefined): string {
 }
 
 /**
- * 将 token 数量格式化为更易读的展示：
+ * todo 将 token 数量格式化为更易读的展示：
  * - >= 1000 使用 k 单位（保留 1 位小数）
  * - < 1000 保持整数
  */
-function formatTokensShort(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '0'
-  if (value < 1000) return String(Math.round(value))
-  const inK = value / 1000
-  return `${inK.toFixed(1)}k`
-}
+// function formatTokensShort(value: number): string {
+//   if (!Number.isFinite(value) || value <= 0) return '0'
+//   if (value < 1000) return String(Math.round(value))
+//   const inK = value / 1000
+//   return `${inK.toFixed(1)}k`
+// }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   messages,
@@ -567,8 +561,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   availableModels,
   currentModelKey,
   onSwitchModel,
-  contextUsageTotal,
-  contextWindow,
+  // contextUsageTotal,
+  // contextWindow,
   sidebarView,
   sessionTitle,
   welcomeTabs: propWelcomeTabs,
@@ -604,15 +598,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
   const hasStreamingMessage = messages.some((msg) => msg.status === 'streaming')
-  const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
+  // const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
   // 显示口径与自动压缩阈值体验保持一致：不提前四舍五入进位。
-  // 例如 49.6% 不应显示成 50%，否则用户会误以为"到 50% 还没触发自动压缩"。
-  const usagePercent = Math.floor(usageRate * 100)
-  const usageTotalLabel = formatTokensShort(contextUsageTotal)
-  const contextWindowLabel = formatTokensShort(contextWindow)
-  const ringRadius = 10
-  const ringCircumference = 2 * Math.PI * ringRadius
-  const ringOffset = ringCircumference * (1 - usageRate)
+  // todo 上下文例如 49.6% 不应显示成 50%，否则用户会误以为"到 50% 还没触发自动压缩"。
+  // const usagePercent = Math.floor(usageRate * 100)
+  // const usageTotalLabel = formatTokensShort(contextUsageTotal)
+  // const contextWindowLabel = formatTokensShort(contextWindow)
+  // const ringRadius = 10
+  // const ringCircumference = 2 * Math.PI * ringRadius
+  // const ringOffset = ringCircumference * (1 - usageRate)
 
   const showErrorWelcome = useCallback((msg: string) => {
     console.warn('[WelcomeInput]', msg)
