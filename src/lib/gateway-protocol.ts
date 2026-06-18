@@ -245,15 +245,18 @@ export class GatewayClient {
     const scopes = ['operator.admin', 'operator.write']
 
     // Build device auth if signDeviceAuth is available
+    // 即使没有 token（例如连接到 mode=none 的本地 gateway）也签名 device identity，
+    // 否则 gateway 会以 "device identity required" 拒绝 cli 模式的 operator 连接。
+    // token 传空字符串，与 gateway 端 buildDeviceAuthPayload 的 `token ?? ""` 一致。
     let device: Record<string, unknown> | undefined
-    if (this.opts.signDeviceAuth && this.opts.token) {
+    if (this.opts.signDeviceAuth) {
       try {
         device = await this.opts.signDeviceAuth({
           clientId,
           clientMode,
           role,
           scopes,
-          token: this.opts.token,
+          token: this.opts.token ?? '',
           nonce: this.connectNonce ?? undefined,
         })
       } catch (err) {

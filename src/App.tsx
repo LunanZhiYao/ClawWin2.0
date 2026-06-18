@@ -160,6 +160,48 @@ function sessionReducer(state: ChatSession[], action: SessionAction): ChatSessio
         if (s.id !== action.sessionId) return s
         const messages = [...s.messages]
         const idx = messages.findIndex((m) => m.id === action.message.id)
+        
+        // 对齐官方 UI terminalMessageReplacesStreamFallback 逻辑：
+        // 最终消息（status='done'）应该替换之前的流式消息（status='streaming'），
+        // 如果最终消息的文本与流式消息的文本相同，或者最终消息以流式消息的文本开头。
+        // 分段消息（id.endsWith('-seg-')) 不应该被删除。
+        if (action.message.status === 'done' && action.message.role === 'assistant') {
+          const terminalText = action.message.content?.trim() || ''
+          if (terminalText.length > 0) {
+            // 找到最后一条用户消息的索引，保留用户消息及其之前的所有消息
+            const lastUserIdx = messages.reduce((last, m, i) => 
+              m.role === 'user' ? i : last, -1)
+            
+            // 过滤掉被最终消息替换的流式消息
+            const retainedMessages = messages.filter((existing, index) => {
+              // 保留用户消息及其之前的所有消息
+              if (index <= lastUserIdx) return true
+              // 保留分段消息（id.endsWith('-seg-'))
+              if (existing.id.endsWith('-seg-')) return true
+              // 保留不同 ID 的消息（不替换）
+              if (existing.id === action.message.id) return false // 会被新消息替换
+              // 保留非流式消息（status !== 'streaming')
+              if (existing.status !== 'streaming') return true
+              // 检查是否应该被替换：最终消息以流式消息的文本开头
+              const existingText = existing.content?.trim() || ''
+              if (existingText.length > 0 && terminalText.startsWith(existingText)) {
+                return false // 被替换，删除
+              }
+              return true
+            })
+            
+            // 添加最终消息到末尾
+            const existingIdx = retainedMessages.findIndex((m) => m.id === action.message.id)
+            if (existingIdx >= 0) {
+              retainedMessages[existingIdx] = action.message
+            } else {
+              retainedMessages.push(action.message)
+            }
+            return { ...s, messages: retainedMessages, updatedAt: Date.now() }
+          }
+        }
+        
+        // 默认逻辑：直接替换或添加
         if (idx >= 0) {
           if (messages[idx].status === 'done' && action.message.status === 'streaming') return s
           messages[idx] = action.message

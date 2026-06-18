@@ -532,16 +532,16 @@ function getHeaderAgentLabel(agent: AgentInfo | undefined): string {
 }
 
 /**
- * todo 将 token 数量格式化为更易读的展示：
+ * 将 token 数量格式化为更易读的展示：
  * - >= 1000 使用 k 单位（保留 1 位小数）
  * - < 1000 保持整数
  */
-// function formatTokensShort(value: number): string {
-//   if (!Number.isFinite(value) || value <= 0) return '0'
-//   if (value < 1000) return String(Math.round(value))
-//   const inK = value / 1000
-//   return `${inK.toFixed(1)}k`
-// }
+function formatTokensShort(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value < 1000) return String(Math.round(value))
+  const inK = value / 1000
+  return `${inK.toFixed(1)}k`
+}
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   messages,
@@ -561,8 +561,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   availableModels,
   currentModelKey,
   onSwitchModel,
-  // contextUsageTotal,
-  // contextWindow,
+  contextUsageTotal,
+  contextWindow,
   sidebarView,
   sessionTitle,
   welcomeTabs: propWelcomeTabs,
@@ -598,15 +598,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const isReady = gatewayState === 'ready'
   const selectedAgent = agents.find((agent) => agent.id === (currentAgentId || defaultAgentId))
   const hasStreamingMessage = messages.some((msg) => msg.status === 'streaming')
-  // const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
-  // 显示口径与自动压缩阈值体验保持一致：不提前四舍五入进位。
-  // todo 上下文例如 49.6% 不应显示成 50%，否则用户会误以为"到 50% 还没触发自动压缩"。
-  // const usagePercent = Math.floor(usageRate * 100)
-  // const usageTotalLabel = formatTokensShort(contextUsageTotal)
-  // const contextWindowLabel = formatTokensShort(contextWindow)
-  // const ringRadius = 10
-  // const ringCircumference = 2 * Math.PI * ringRadius
-  // const ringOffset = ringCircumference * (1 - usageRate)
+  // 上下文使用率计算，对齐官方 UI context-notice.ts 的逻辑：
+  // - used / limit 得到比率
+  // - 使用 Math.round 而非 Math.floor，与官方一致
+  const usageRate = contextWindow > 0 ? Math.max(0, Math.min(1, contextUsageTotal / contextWindow)) : 0
+  const usagePercent = Math.min(Math.round(usageRate * 100), 100)
+  const usageTotalLabel = formatTokensShort(contextUsageTotal)
+  const contextWindowLabel = formatTokensShort(contextWindow)
+  const ringRadius = 10
+  const ringCircumference = 2 * Math.PI * ringRadius
+  const ringOffset = ringCircumference * (1 - usageRate)
 
   const showErrorWelcome = useCallback((msg: string) => {
     console.warn('[WelcomeInput]', msg)
@@ -1015,26 +1016,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
             </div>
           )}
-          {/*todo 上下文检测不对*/}
-          {/*<div*/}
-          {/*  className="chat-context-usage"*/}
-          {/*  title={`当前上下文使用率 ${usagePercent}%（${usageTotalLabel}/${contextWindowLabel}）`}*/}
-          {/*  aria-label={`当前上下文使用率 ${usagePercent}%，已用 ${usageTotalLabel}，总窗口 ${contextWindowLabel}`}*/}
-          {/*  style={{ display: messages.length === 0 ? 'none' : 'flex' }}*/}
-          {/*>*/}
-          {/*  <svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true">*/}
-          {/*    <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />*/}
-          {/*    <circle*/}
-          {/*      className="chat-context-usage-progress"*/}
-          {/*      cx="14"*/}
-          {/*      cy="14"*/}
-          {/*      r={ringRadius}*/}
-          {/*      strokeDasharray={ringCircumference}*/}
-          {/*      strokeDashoffset={ringOffset}*/}
-          {/*    />*/}
-          {/*  </svg>*/}
-          {/*  <span className="chat-context-label">{usagePercent}%</span>*/}
-          {/*</div>*/}
+          <div
+            className="chat-context-usage"
+            title={`当前上下文使用率 ${usagePercent}%（${usageTotalLabel}/${contextWindowLabel}）`}
+            aria-label={`当前上下文使用率 ${usagePercent}%，已用 ${usageTotalLabel}，总窗口 ${contextWindowLabel}`}
+            style={{ display: messages.length === 0 ? 'none' : 'flex' }}
+          >
+            <svg width="24" height="24" viewBox="0 0 28 28" aria-hidden="true">
+              <circle className="chat-context-usage-track" cx="14" cy="14" r={ringRadius} />
+              <circle
+                className="chat-context-usage-progress"
+                cx="14"
+                cy="14"
+                r={ringRadius}
+                strokeDasharray={ringCircumference}
+                strokeDashoffset={ringOffset}
+              />
+            </svg>
+            <span className="chat-context-label">{usagePercent}%</span>
+          </div>
           <button
             className="chat-action-btn"
             onClick={handleCompact}

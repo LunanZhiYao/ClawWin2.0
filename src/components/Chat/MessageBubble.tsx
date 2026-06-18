@@ -408,23 +408,43 @@ const TaskStatusSummary: React.FC<{ toolCalls: ChatToolCall[]; taskStatus?: Task
 
   if (toolCalls.length === 0 && !taskStatus) return null
 
-  const latestToolCall = toolCalls[toolCalls.length - 1]
-  const statusText = latestToolCall
-    ? `${latestToolCall.name} ${latestToolCall.status === 'done' ? '已完成' : latestToolCall.status === 'running' ? '运行中' : latestToolCall.status === 'error' ? '执行失败' : '等待中'}`
-    : taskStatus
-      ? taskStatus === 'completed' ? '任务已完成'
-        : taskStatus === 'running' ? '运行中'
-        : taskStatus === 'failed' ? '执行失败'
-        : taskStatus === 'compacting' ? '压缩上下文'
-        : taskStatus === 'auto_compacting' ? '优化上下文'
-        : '处理中'
-      : ''
+  // 对齐官方 UI chat-activity-group__summary 的 "Activity: N tools" 格式
+  // 多个工具调用时显示数量 + 名称预览；单个时显示名称 + 状态
+  const toolCount = toolCalls.length
+  const hasError = toolCalls.some((tc) => tc.status === 'error' || tc.isError)
+  const allDone = toolCount > 0 && toolCalls.every((tc) => tc.status === 'done')
 
-  const statusClass = latestToolCall
-    ? `status-${latestToolCall.status}`
-    : taskStatus
-      ? `status-${taskStatus}`
-      : ''
+  let statusText: string
+  let statusClass: string
+
+  if (toolCount > 0) {
+    // 去重工具名称用于预览
+    const toolLabels = [...new Set(toolCalls.map((tc) => tc.name))]
+    const preview = toolLabels.length <= 3
+      ? toolLabels.join(', ')
+      : `${toolLabels.slice(0, 2).join(', ')} +${toolLabels.length - 2} more`
+
+    if (toolCount === 1) {
+      const tc = toolCalls[0]
+      const stateLabel = tc.status === 'done' ? '已完成' : tc.status === 'running' ? '运行中' : tc.status === 'error' ? '执行失败' : '等待中'
+      statusText = `${tc.name} ${stateLabel}`
+    } else {
+      const stateLabel = hasError ? '部分失败' : allDone ? '已完成' : '运行中'
+      statusText = `Activity: ${toolCount} tools · ${preview} · ${stateLabel}`
+    }
+    statusClass = hasError ? 'status-error' : allDone ? 'status-done' : 'status-running'
+  } else if (taskStatus) {
+    statusText = taskStatus === 'completed' ? '任务已完成'
+      : taskStatus === 'running' ? '运行中'
+      : taskStatus === 'failed' ? '执行失败'
+      : taskStatus === 'compacting' ? '压缩上下文'
+      : taskStatus === 'auto_compacting' ? '优化上下文'
+      : '处理中'
+    statusClass = `status-${taskStatus}`
+  } else {
+    statusText = ''
+    statusClass = ''
+  }
 
   return (
     <button className={`task-status-summary-header ${statusClass}`} onClick={() => setIsExpanded(!isExpanded)}>

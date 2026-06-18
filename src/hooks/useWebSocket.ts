@@ -124,11 +124,20 @@ function resetActiveRunState(
   agentLifecycleRunIdRef: React.MutableRefObject<string | null>,
   phaseRef: React.MutableRefObject<string>,
   toolCallsBufferRef: React.MutableRefObject<ChatToolCall[]>,
+  committedSegmentRunIdsRef?: React.MutableRefObject<Set<string>>,
+  lastSegmentAccumulatedTextRef?: React.MutableRefObject<string | null>,
+  finalRunIdsRef?: React.MutableRefObject<Set<string>>,
 ) {
   activeRunIdRef.current = null
   agentLifecycleRunIdRef.current = null
   phaseRef.current = 'idle'
   toolCallsBufferRef.current = []
+  if (committedSegmentRunIdsRef) committedSegmentRunIdsRef.current.clear()
+  if (lastSegmentAccumulatedTextRef) lastSegmentAccumulatedTextRef.current = null
+  // 不清空 finalRunIdsRef，因为它用于跨事件处理的状态追踪
+  // 防止后续的 error 事件在 final 事件之后被错误处理
+  // 使用 void 操作符来避免 TypeScript 的未使用参数警告
+  void finalRunIdsRef
 }
 
 /** 从 sessionKey 中提取 sub-agent 标识，如 agent:main:subagent:xxx → subagent:xxx */
@@ -170,6 +179,61 @@ function extractText(message: unknown): string {
   if (typeof msg.text === 'string') return redactSensitiveText(msg.text)
 
   return ''
+}
+
+/**
+ * 解析 delta 事件的流式文本，对齐官方 UI resolveDeltaChatStreamText 逻辑。
+ *
+ * 网关 delta 事件可能携带两种文本：
+ * - `deltaText`：本轮增量文本（只包含本次新增的片段）
+ * - `message`（snapshot）：本轮截至目前的全量文本
+ *
+ * 关键规则：
+ * 1. 若有 `deltaText` 且 `replace=true`，直接用 `deltaText` 替换全量
+ * 2. 若有 `deltaText`，且 currentStream 已存在，则 `currentStream + deltaText`（增量拼接）
+ * 3. 若有 `deltaText`，且 currentStream 为空，优先用 snapshot（全量），回退 deltaText
+ * 4. 若无 `deltaText`，直接用 snapshot（全量），避免与 buffer 拼接导致重复
+ *
+ * 返回 null 表示本轮无文本。
+ */
+function resolveDeltaStreamText(
+  currentStream: string | null,
+  payload: Record<string, unknown>,
+): string | null {
+  const snapshot = payload.message == null ? null : extractText(payload.message)
+  const deltaText = typeof payload.deltaText === 'string' ? payload.deltaText : null
+  const replace = payload.replace === true
+
+  if (deltaText !== null) {
+    if (replace) return deltaText
+    if (currentStream === null || currentStream === '') {
+      return typeof snapshot === 'string' && snapshot.length > 0 ? snapshot : deltaText
+    }
+    // 若 snapshot 可用，校验 snapshot = currentStream + deltaText，不一致则回退 snapshot
+    if (typeof snapshot === 'string') {
+      const prefixLength = snapshot.length - deltaText.length
+      if (
+        prefixLength !== currentStream.length ||
+        snapshot.slice(0, prefixLength) !== currentStream
+      ) {
+        return snapshot
+      }
+    }
+    return `${currentStream}${deltaText}`
+  }
+  return typeof snapshot === 'string' && snapshot.length > 0 ? snapshot : null
+}
+
+/**
+ * 去除累积流式文本的前一个分段前缀，对齐官方 UI trimAccumulatedStreamPrefix。
+ * 网关 delta 累积的 chatStream 是全量文本，分段提交时需要去除前一个分段的前缀，
+ * 只显示本轮新增部分，避免每个分段都包含之前所有文本。
+ */
+function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
+  if (!previousText || !text.startsWith(previousText)) {
+    return text
+  }
+  return text.slice(previousText.length).trimStart()
 }
 
 /** 检测文本是否为上下文溢出相关消息 */
@@ -250,12 +314,23 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const idleCountRef = useRef<Map<string, number>>(new Map())
   const toolCallsBufferRef = useRef<ChatToolCall[]>([])
   const toolCallIdRef = useRef(0)
+  // 记录已提交过流式分段（segment）的 runId。
+  // 当工具调用开始时，会把已累积的流式文本作为独立消息提交（segment），
+  // 后续 final 只应显示最后一轮的文本，避免与 segment 重复。
+  const committedSegmentRunIdsRef = useRef<Set<string>>(new Set())
+  // 流式分段计数器，用于生成分段消息的唯一 ID
+  const streamSegmentCounterRef = useRef(0)
+  // 记录上一个已提交分段的累积文本（chatStream 全量值），
+  // 用于提交下一个分段时去除前缀，对齐官方 UI trimAccumulatedStreamPrefix。
+  const lastSegmentAccumulatedTextRef = useRef<string | null>(null)
   const activeRunIdRef = useRef<string | null>(null)
   const isAutoAbortRef = useRef(false)
   const isFrontendTimeoutRef = useRef(false)
   const directiveRunIdsRef = useRef<Set<string>>(new Set())
   // 记录每个会话最近一次已确认的 runId，供 abort 等非 chat 事件兜底关联
   const lastRunIdBySessionRef = useRef<Map<string, string>>(new Map())
+  // 记录已收到 final 事件的 runId，用于 error 事件处理时跳过已完成的任务
+  const finalRunIdsRef = useRef<Set<string>>(new Set())
   // agent lifecycle.start 分配的 runId（工具调用流式消息用此 ID）
   // 与 chat 事件的 runId 可能不同，需要在 final 时用此 ID 确保消息正确替换
   const agentLifecycleRunIdRef = useRef<string | null>(null)
@@ -572,6 +647,42 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           // 推送工具调用更新到消息气泡（不传文本，由 MessageBubble 显示动画占位）
           const runId = activeRunIdRef.current
           if (runId) {
+            // 工具调用开始前，把已累积的流式文本作为独立分段消息提交，
+            // 对齐官方 UI 的 chatStreamSegments 模式：工具调用前的文本
+            // 作为独立消息渲染在工具卡片上方，而非被工具调用覆盖丢失。
+            const accumulatedText = streamBufferRef.current.get(runId)
+            if (accumulatedText && accumulatedText.trim().length > 0) {
+              // 取消该 runId 的节流定时器，避免节流回调推送已过期的内容
+              const throttleTimer = streamThrottleRef.current.get(runId)
+              if (throttleTimer) {
+                clearTimeout(throttleTimer)
+                streamThrottleRef.current.delete(runId)
+              }
+              // 去除前一个分段的累积前缀，只显示本轮新增文本（对齐官方 UI trimAccumulatedStreamPrefix）
+              const visibleText = trimAccumulatedStreamPrefix(accumulatedText, lastSegmentAccumulatedTextRef.current)
+              // 更新上一个分段的累积文本为当前累积值
+              lastSegmentAccumulatedTextRef.current = accumulatedText
+              // 提交分段消息（独立 ID，status=done，不会被后续 streaming 更新覆盖）
+              if (visibleText.trim().length > 0) {
+                const segmentId = `${runId}-seg-${++streamSegmentCounterRef.current}`
+                onMessageStream.current?.({
+                  id: segmentId,
+                  role: 'assistant',
+                  content: visibleText,
+                  thinking: thinkingBufferRef.current.get(runId),
+                  timestamp: Date.now(),
+                  status: 'done',
+                  // 分段消息不设置 taskStatus，避免显示"任务已完成"提示
+                  agentId: agentIdFromEvent || runIdAgentIdMapRef.current.get(runId),
+                  sessionKey: agentSessionKey,
+                })
+              }
+              // 重置 buffer 为空字符串（保留 key 避免 isNew 重复递增 streamingCount）
+              streamBufferRef.current.set(runId, '')
+              lastPushedLenRef.current.set(runId, -1)
+              idleCountRef.current.delete(runId)
+              committedSegmentRunIdsRef.current.add(runId)
+            }
             onMessageStream.current?.({
               id: runId,
               role: 'assistant',
@@ -649,8 +760,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             clearTimeout(lifecycleStartTimeoutRef.current)
             lifecycleStartTimeoutRef.current = null
           }
-          toolCallsBufferRef.current = []
-          toolCallIdRef.current = 0
+          // 注意：不重置 toolCallsBufferRef，避免多次 lifecycle.start（子代理/多轮 agent 调用）
+          // 导致之前已收集的工具调用丢失。对齐官方 UI：工具调用在整个会话中累积显示。
+          // 只重置流式相关状态（分段、buffer 前缀记录）
+          committedSegmentRunIdsRef.current.clear()
+          lastSegmentAccumulatedTextRef.current = null
           phaseRef.current = 'thinking'
           // 用 agent 事件的 runId 提前设置 activeRunIdRef
           // 这样后续的 tool.start/end 事件能关联到正确的消息
@@ -790,32 +904,34 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     console.log('[ws] chat event:', { state, runId, hasMessage: !!payload.message })
 
     if (state === 'delta') {
-      // 流式增量更新
-      const text = extractText(payload.message)
+      // 流式增量更新 — 对齐官方 UI resolveDeltaChatStreamText 逻辑
+      // 使用 deltaText（增量）优先，避免 extractText(snapshot) + buffer 拼接导致文本重复
+      const currentBuffer = streamBufferRef.current.get(runId) ?? null
+      const resolvedText = resolveDeltaStreamText(currentBuffer, payload)
+      const text = resolvedText ?? ''
 
       // 提取推理/思考内容，累积到 thinkingBuffer
+      // 注意：thinking 也可能是全量 snapshot，需要同样的增量处理
       if (payload.message && typeof payload.message === 'object') {
         const msg = payload.message as Record<string, unknown>
         const thinking = (msg.reasoning_content as string) || (msg.thinking as string) || ''
         if (thinking) {
-          const accumulated = (thinkingBufferRef.current.get(runId) || '') + thinking
-          thinkingBufferRef.current.set(runId, accumulated)
+          // thinking 采用 snapshot 替换策略（网关通常发送全量 thinking）
+          thinkingBufferRef.current.set(runId, thinking)
         }
       }
 
       // 辅助：构建当前工具调用列表
       const currentToolCalls = toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined
 
-      // 核心规则：一旦本轮有工具调用（toolCallsBuffer 非空），
-      // 所有文本只累积不推送，等 final 一次性显示
-      const hasToolCalls = toolCallsBufferRef.current.length > 0
-
       const thinkingText = thinkingBufferRef.current.get(runId) || ''
       const hasThinking = thinkingText.length > 0
 
       if (text) {
         const isNew = !streamBufferRef.current.has(runId)
-        const accumulated = (streamBufferRef.current.get(runId) || '') + text
+        // resolvedText 已是全量文本（deltaText 增量拼接或 snapshot 全量），
+        // 直接设置 buffer，不再做 buffer + text 拼接（避免重复）
+        const accumulated = text
         streamBufferRef.current.set(runId, accumulated)
 
         if (isNew) {
@@ -841,11 +957,6 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         }
 
         if (contextOverflowRunIdsRef.current.has(runId)) {
-          return
-        }
-
-        // 有工具调用时，文本只累积不推送 — 等 final 一次性出现
-        if (hasToolCalls) {
           return
         }
 
@@ -898,13 +1009,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           return
         }
 
-        // Agent 生命周期内（思考/工具调用阶段），文本只累积不推送，等 final 一次显示
-        // 避免 final 前闪现残留流式文本
-        if (phaseRef.current !== 'idle') {
-          return
-        }
-
-        // 无工具调用：正常流式推送
+        // 正常流式推送（含工具调用后的文本，对齐官方 UI 的 chatStream 模式）
         if (!streamThrottleRef.current.has(runId)) {
           // 首次 delta 立即推送（让气泡立刻出现）
           const msg: ChatMessage = {
@@ -923,13 +1028,6 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           streamThrottleRef.current.set(runId, setTimeout(function flush() {
             const latest = streamBufferRef.current.get(runId)
             if (latest != null) {
-              // 如果中途出现了工具调用，停止流式推送
-              if (toolCallsBufferRef.current.length > 0) {
-                if (streamBufferRef.current.has(runId)) {
-                  streamThrottleRef.current.set(runId, setTimeout(flush, 120))
-                }
-                return
-              }
               const lastLen = lastPushedLenRef.current.get(runId) ?? -1
               if (latest.length !== lastLen) {
                 // 内容有变化，推送并重置空转计数
@@ -980,7 +1078,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                     sessionKey,
                   }
                   onMessageStream.current?.(m)
-                  resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
+                  resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
                   return
                 }
               }
@@ -1067,7 +1165,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                     sessionKey,
                   }
                   onMessageStream.current?.(m)
-                  resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
+                  resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
                   return
                 }
               }
@@ -1088,7 +1186,42 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
 
       const extractedText = extractText(payload.message)
       const bufferedText = streamBufferRef.current.get(runId)
-      const rawText = extractedText || bufferedText || ''
+      const hasCommittedSegments = committedSegmentRunIdsRef.current.has(runId)
+
+      // 对齐官方 UI 的 final 处理逻辑（chat.ts:1297-1303 + stream-reconciliation.ts）：
+      // - final 消息优先使用 payload.message 的完整文本（extractedText）
+      // - 若有分段且 extractedText 有效，final 只显示超出最后一个分段的新增部分（去除前缀），
+      //   避免与分段重复（对齐官方 UI terminalMessageReplacesStreamFallback 去重）
+      // - 若 extractedText 为空，才把剩余 buffer 提交为独立分段
+      // 这样可避免工具调用失败时丢失 agent 的文本回复（payload.message 仍包含完整回复）
+      let finalText: string
+      if (hasCommittedSegments && extractedText && extractedText.trim().length > 0) {
+        // 有分段且 extractedText 有效：去除最后一个分段的前缀，只显示新增部分
+        finalText = trimAccumulatedStreamPrefix(extractedText, lastSegmentAccumulatedTextRef.current)
+      } else if (hasCommittedSegments && bufferedText && bufferedText.trim().length > 0) {
+        // 有分段但 extractedText 为空：提交剩余 buffer 为独立分段，final 不携带文本
+        const visibleText = trimAccumulatedStreamPrefix(bufferedText, lastSegmentAccumulatedTextRef.current)
+        if (visibleText.trim().length > 0) {
+          const segmentId = `${runId}-seg-${++streamSegmentCounterRef.current}`
+          onMessageStream.current?.({
+            id: segmentId,
+            role: 'assistant',
+            content: visibleText,
+            thinking: '',
+            timestamp: Date.now(),
+            status: 'done',
+            // 分段消息不设置 taskStatus，避免显示"任务已完成"提示
+            agentId: chatAgentId,
+            sessionKey,
+          })
+        }
+        finalText = ''
+      } else {
+        // 无分段：直接使用 extractedText 或 bufferedText
+        finalText = extractedText || bufferedText || ''
+      }
+
+      const rawText = finalText
       const isOverflowDetected = contextOverflowRunIdsRef.current.has(runId) || isContextOverflowText(rawText)
       const isCompactResponse = !rawText && lastSentMessageRef.current.trim().startsWith('/compact')
       if (isCompactResponse) {
@@ -1109,7 +1242,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 空内容不创建消息，避免空白气泡（但有工具调用时仍然推送）
       // 例外：如果是对 /compact 命令的响应，则创建压缩完成消息
       if (!text && !(toolCallsBufferRef.current.length > 0) && !isCompactResponse) {
-        resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
+        resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
         return
       }
 
@@ -1126,6 +1259,14 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         compactMessageIdRef.current = null
       }
 
+      // taskStatus 决策：
+      // - 工具调用失败但 agent 有回复 → 'completed'（不显示"执行失败了"提示）
+      // - 任务完全失败（无 agent 回复且无工具调用）→ 'failed'（显示"执行失败了"提示）
+      // - 正常完成 → 'completed'
+      const hasAgentReply = text && text.trim().length > 0
+      const hasToolCalls = toolCallsBufferRef.current.length > 0
+      const taskStatus: 'completed' | 'failed' = hasAgentReply || hasToolCalls ? 'completed' : 'failed'
+
       const msg: ChatMessage = {
         id: msgId,
         role: 'assistant',
@@ -1134,9 +1275,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         sessionKey,
         timestamp: Date.now(),
         status: 'done',
-        taskStatus: 'completed',
+        taskStatus,
         agentId: chatAgentId,
       }
+      // 记录已收到 final 事件的 runId，用于后续 error 事件处理时跳过
+      finalRunIdsRef.current.add(runId)
       onMessageStream.current?.(msg)
       // 埋点：本轮助手最终文本已确定
       emitTelemetry({
@@ -1148,7 +1291,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         status: 'final',
         content: msg.content,
       })
-      resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
+      resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
 
       // 提取 usage 供自动压缩判断（兼容不同字段命名/层级）
       const usage = extractUsage(payload)
@@ -1167,23 +1310,91 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         onContextOverflow.current?.(sessionKey)
       }
     } else if (state === 'error') {
-      setBackendStatus('')
+      // 对齐官方 UI：error 事件在顶部弹窗提示错误，不影响最终消息展示。
+      // error 事件的 payload.message 通常是错误文本（如 "⚠️ 🛠️ ... failed"），
+      // 不作为 agent 回复显示。后续 final 事件会显示 agent 的完整回复。
+      // 只有当没有后续 final 事件时（无工具调用且无分段），才显示错误信息作为最后手段。
       const rawErrorMsg = (payload.errorMessage as string) || '发生错误'
       const errorMessage = translateError(rawErrorMsg)
+      setBackendStatus(`错误：${errorMessage}`)
+
+      // 如果该 runId 已经收到 final 事件，则跳过 error 事件的消息推送
+      // 避免工具执行失败的错误消息覆盖 agent 的正常回复
+      if (finalRunIdsRef.current.has(runId)) {
+        console.log('[ws] error event skipped: runId already finalized', { runId, sessionKey })
+        cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
+        // 清理 finalRunIdsRef 中的 runId，防止无限增长
+        finalRunIdsRef.current.delete(runId)
+        return
+      }
       const isErrorOverflow = isContextOverflowText(rawErrorMsg)
       if (isErrorOverflow) {
         console.log('[溢出] error 阶段检测到上下文溢出:', { runId, sessionKey, errorMessage: rawErrorMsg.slice(0, 100) })
       }
+
+      // error 事件的 payload.message 通常是错误文本，不作为 agent 回复显示
+      // 只使用 bufferedText 提交剩余分段（如果有）
+      const bufferedText = streamBufferRef.current.get(runId)
+      const hasCommittedSegments = committedSegmentRunIdsRef.current.has(runId)
+
+      // 若已提交过流式分段，把剩余 buffer 也提交为独立分段（与 final 一致）
+      if (hasCommittedSegments && bufferedText && bufferedText.trim().length > 0) {
+        // 去除前一个分段的累积前缀，只显示本轮新增文本
+        const visibleText = trimAccumulatedStreamPrefix(bufferedText, lastSegmentAccumulatedTextRef.current)
+        if (visibleText.trim().length > 0) {
+          const segmentId = `${runId}-seg-${++streamSegmentCounterRef.current}`
+          onMessageStream.current?.({
+            id: segmentId,
+            role: 'assistant',
+            content: visibleText,
+            thinking: '',
+            timestamp: Date.now(),
+            status: 'done',
+            agentId: chatAgentId,
+            sessionKey,
+          })
+        }
+      }
+
+      // 决定最终消息内容：
+      // - error 事件的 payload.message 通常是错误文本（如 "⚠️ 🛠️ ... failed"），不应作为 agent 回复显示
+      // - 对齐官方 UI：error 事件只显示工具调用（如果有），不显示错误文本作为消息内容
+      // - 后续 final 事件会显示 agent 的完整回复
+      // - 只有当没有工具调用且没有分段时，才显示错误信息作为最后手段
+      // - 特殊处理：工具执行失败的警告（errorMessage 以 "⚠️ 🛠️" 开头）不显示"执行失败了"提示
+      let text: string
+      let msgStatus: 'done' | 'error'
+      let msgTaskStatus: 'completed' | 'failed'
+      const hasToolCalls = toolCallsBufferRef.current.length > 0
+      const isToolExecutionWarning = rawErrorMsg.startsWith('⚠️ 🛠️') || rawErrorMsg.includes('failed')
+      if (isErrorOverflow) {
+        text = CONTEXT_OVERFLOW_FRIENDLY_MSG
+        msgStatus = 'done'
+        msgTaskStatus = 'completed'
+      } else if (hasCommittedSegments || hasToolCalls || isToolExecutionWarning) {
+        // 有分段、工具调用或工具执行警告时，error 消息只显示工具调用，不携带错误文本
+        // 后续 final 事件会显示 agent 的完整回复
+        // taskStatus='completed'（不显示"执行失败了"提示）
+        text = ''
+        msgStatus = 'done'
+        msgTaskStatus = 'completed'
+      } else {
+        // 无工具调用且无分段且非工具执行警告：显示错误信息作为最后手段
+        text = errorMessage
+        msgStatus = 'error'
+        msgTaskStatus = 'failed'
+      }
+
       cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
 
       const msg: ChatMessage = {
         id: runId,
         role: 'assistant',
-        content: isErrorOverflow ? CONTEXT_OVERFLOW_FRIENDLY_MSG : errorMessage,
+        content: text,
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
-        status: isErrorOverflow ? 'done' : 'error',
-        taskStatus: isErrorOverflow ? 'completed' : 'failed',
+        status: msgStatus,
+        taskStatus: msgTaskStatus,
         agentId: chatAgentId,
         sessionKey,
       }
@@ -1194,10 +1405,18 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         user_id: userId ?? null,
         session_id: sessionKey || null,
         run_id: runId,
-        status: isErrorOverflow ? 'final' : 'error',
+        status: msgStatus === 'done' ? 'final' : 'error',
         content: msg.content,
       })
-      resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
+      // 注意：不调用 resetActiveRunState，避免重置 toolCallsBufferRef，
+      // 后续 final 事件需要 toolCallsBufferRef 来显示工具调用。
+      // 保留 agentLifecycleRunIdRef，以便后续 final 事件能正确替换 error 创建的消息。
+      // 对齐官方 UI：error 后 final 仍会处理，显示 agent 完整回复 + 工具调用。
+      activeRunIdRef.current = null
+      // 保留 agentLifecycleRunIdRef，final 处理器会用它作为消息 ID
+      // phaseRef.current = 'idle' // 保留 phase，避免 final 处理器误判状态
+      committedSegmentRunIdsRef.current.clear()
+      lastSegmentAccumulatedTextRef.current = null
 
       if (isErrorOverflow) {
         console.log('[溢出] error 阶段触发 onContextOverflow 回调:', sessionKey)
@@ -1237,7 +1456,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         status: 'aborted',
         content: msg.content,
       })
-      resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
+      resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
     } else if (state === 'terminated') {
       setBackendStatus('')
       const buffered = redactSensitiveText(streamBufferRef.current.get(runId) || '')
@@ -1278,7 +1497,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         status: isTerminateOverflow ? 'final' : 'terminated',
         content: msg.content,
       })
-      resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef)
+      resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
     }
   }, [])
 
@@ -1490,6 +1709,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       streamBufferRef.current.clear()
       thinkingBufferRef.current.clear()
       toolCallsBufferRef.current = []
+      committedSegmentRunIdsRef.current.clear()
+      lastSegmentAccumulatedTextRef.current = null
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
@@ -1515,6 +1736,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       streamBufferRef.current.clear()
       thinkingBufferRef.current.clear()
       toolCallsBufferRef.current = []
+      committedSegmentRunIdsRef.current.clear()
+      lastSegmentAccumulatedTextRef.current = null
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
