@@ -1037,6 +1037,15 @@ function App() {
 
     setSessionUsageTotalMap((prev) => ({ ...prev, [sessionId]: currentUsageTotal }))
 
+    // 对齐官方 UI：从 sessions.list 更新 hasActiveRun 状态
+    // 用于停止按钮显示逻辑（即使前端 streamingCount=0，只要 hasActiveRun=true 也显示停止按钮）
+    if (usage.hasActiveRun !== undefined) {
+      const currentSession = sessionsRef.current.find((s) => s.id === sessionId)
+      if (currentSession && currentSession.hasActiveRun !== usage.hasActiveRun) {
+        dispatch({ type: 'UPDATE', id: sessionId, updates: { hasActiveRun: usage.hasActiveRun } })
+      }
+    }
+
     // contextWindow 更新逻辑：
     // 1. 优先使用后端返回的 contextWindow
     // 2. 如果后端没有返回，则使用全局配置的 contextWindow
@@ -1137,6 +1146,16 @@ function App() {
     },
     []
   )
+
+  // 对齐官方 UI：run 结束时立即清除 hasActiveRun，避免等待 sessions.list 轮询延迟
+  ws.onRunEnd.current = useCallback((sessionKey?: string) => {
+    if (!sessionKey) return
+    const sessionId = sessionKey.includes(':') ? sessionKey.split(':').pop()! : sessionKey
+    const currentSession = sessionsRef.current.find((s) => s.id === sessionId)
+    if (currentSession && currentSession.hasActiveRun === true) {
+      dispatch({ type: 'UPDATE', id: sessionId, updates: { hasActiveRun: false } })
+    }
+  }, [])
 
   // 兜底路径：若已出现上下文溢出错误，立即尝试自动压缩一次
   ws.onContextOverflow.current = useCallback((sessionId?: string) => {
@@ -1853,6 +1872,7 @@ function App() {
                 gatewayPort={gateway.port}
                 onStop={handleStop}
                 isStreaming={ws.isStreaming}
+                hasActiveRun={activeSession?.hasActiveRun === true}
                 agents={ws.agents}
                 currentAgentId={activeSession?.agentId}
                 defaultAgentId={ws.defaultAgentId}

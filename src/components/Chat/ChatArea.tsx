@@ -12,6 +12,8 @@ interface BottomInputProps {
   placeholder?: string
   isWaiting?: boolean
   isStreaming?: boolean
+  /** 对齐官方 UI hasAbortableSessionRun：session 是否有活跃运行（从 sessions.list 获取） */
+  hasActiveRun?: boolean
   onStop?: () => void
   workspaceOpen?: boolean  // 工作区是否展开
   externalInput?: string  // 外部注入的输入内容（如重发）
@@ -40,6 +42,7 @@ const BottomInput: React.FC<BottomInputProps> = ({
   placeholder = '请输入任务，交给我来帮你完成',
   isWaiting = false,
   isStreaming = false,
+  hasActiveRun = false,
   onStop,
   workspaceOpen = false,  // 工作区是否展开
   externalInput,
@@ -474,7 +477,7 @@ const BottomInput: React.FC<BottomInputProps> = ({
                 </div>
               )}
             </div>
-            {(isStreaming || isWaiting) ? (
+            {(isStreaming || isWaiting || hasActiveRun) ? (
               <button className="btn-stop" onClick={async () => { if (isStopping || !onStop) return; setIsStopping(true); try { await onStop() } catch (err) { console.error('stop error:', err) } finally { setIsStopping(false) } }} disabled={isStopping} title={isStopping ? '正在停止...' : '停止回复'}>
                 <span style={{ display: 'block', width: 16, height: 16, backgroundColor: 'white', borderRadius: 2 }} />
               </button>
@@ -501,6 +504,8 @@ interface ChatAreaProps {
   backendStatus?: string
   isWaiting?: boolean
   isStreaming?: boolean
+  /** 对齐官方 UI hasAbortableSessionRun：session 是否有活跃运行（从 sessions.list 获取） */
+  hasActiveRun?: boolean
   onStop: () => void
   gatewayPort?: number
   agents: AgentInfo[]
@@ -551,6 +556,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   backendStatus,
   isWaiting = false,
   isStreaming = false,
+  hasActiveRun = false,
   onStop,
   // gatewayPort = 18888,
   agents,
@@ -1330,12 +1336,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           placeholder={!isReady ? '等待网关服务就绪...' : isWaiting ? 'AI 正在思考，可继续输入...' : isStreaming ? 'AI 正在回复，可继续输入...' : '输入消息...'}
           isWaiting={isWaiting}
           isStreaming={isStreaming}
+          hasActiveRun={hasActiveRun}
           onStop={onStop}
           workspaceOpen={sidebarView === 'workspace'}
           externalInput={retryInput ?? undefined}
           onExternalInputConsumed={() => setRetryInput(null)}
           containerRef={inputContainerRef}
-          activityStatus={isReady && backendStatus && (isStreaming || isWaiting) ? backendStatus : ''}
+          activityStatus={isReady && backendStatus && (isStreaming || isWaiting || hasActiveRun) ? backendStatus : ''}
           externalAttachment={externalAttachment}
           onExternalAttachmentConsumed={onExternalAttachmentConsumed}
         />

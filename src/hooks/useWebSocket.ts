@@ -24,6 +24,8 @@ interface UseWebSocketReturn {
   backendHealthy: boolean
   onMessageStream: React.MutableRefObject<((msg: ChatMessage) => void) | null>
   onFinalUsage: React.MutableRefObject<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>
+  /** 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟 */
+  onRunEnd: React.MutableRefObject<((sessionKey?: string) => void) | null>
   onSessionUsageUpdate: React.MutableRefObject<
     | ((usage: { totalTokens?: number; contextTokens?: number; sessionKey?: string }) => void)
     | null
@@ -34,7 +36,7 @@ interface UseWebSocketReturn {
   onBackendDisconnected: React.MutableRefObject<((reason: string) => void) | null>
   patchSessionModel: (sessionKey: string, model: string | null, agentId?: string) => Promise<void>
   sendModelDirective: (sessionKey: string, modelKey: string, agentId?: string) => Promise<void>
-  getSessionTokenUsage: (sessionKey: string, agentId?: string) => Promise<{ input: number; output: number; contextWindow?: number } | null>
+  getSessionTokenUsage: (sessionKey: string, agentId?: string) => Promise<{ input: number; output: number; contextWindow?: number; hasActiveRun?: boolean } | null>
   reconnect: () => void
   refreshAgents: () => void
   client: GatewayClient | null
@@ -342,6 +344,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const lifecycleStartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 自动压缩：暴露给 App.tsx 的回调
   const onFinalUsage = useRef<((usage: { input: number; output: number; sessionKey?: string }) => void) | null>(null)
+  /** 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟 */
+  const onRunEnd = useRef<((sessionKey?: string) => void) | null>(null)
   const onSessionUsageUpdate = useRef<
     | ((usage: { totalTokens?: number; contextTokens?: number; sessionKey?: string }) => void)
     | null
@@ -1298,6 +1302,9 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 只要提取到 usage 就立刻回传给 App，避免首轮因为字段差异导致占用率一直停在 0。
       if (usage) onFinalUsage.current?.({ ...usage, sessionKey })
 
+      // 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟
+      onRunEnd.current?.(sessionKey)
+
       // 如果是 /compact 命令的响应，触发 onCompactionEnd 回调
       // 这样即使网关不支持 compaction 事件，也能正确处理压缩完成后的恢复逻辑
       if (isCompactResponse) {
@@ -1422,6 +1429,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         console.log('[溢出] error 阶段触发 onContextOverflow 回调:', sessionKey)
         onContextOverflow.current?.(sessionKey)
       }
+      // 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟
+      onRunEnd.current?.(sessionKey)
     } else if (state === 'aborted') {
       setBackendStatus('')
       let text: string
@@ -1457,6 +1466,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         content: msg.content,
       })
       resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
+      // 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟
+      onRunEnd.current?.(sessionKey)
     } else if (state === 'terminated') {
       setBackendStatus('')
       const buffered = redactSensitiveText(streamBufferRef.current.get(runId) || '')
@@ -1498,6 +1509,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         content: msg.content,
       })
       resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
+      // 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟
+      onRunEnd.current?.(sessionKey)
     }
   }, [])
 
@@ -1704,7 +1717,18 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       },
     })
     try {
-      await client.request('chat.abort', { sessionKey: builtSessionKey })
+      // 对齐官方 UI abortChatRun：必须传递 runId 参数，否则网关无法定位要中断的 run
+      const abortParams: Record<string, unknown> = {
+        sessionKey: builtSessionKey,
+      }
+      if (runIdForAbort) {
+        abortParams.runId = runIdForAbort
+      }
+      // 对齐官方 UI：global session 时需要传递 agentId
+      if (agentId && agentId !== 'main') {
+        abortParams.agentId = agentId
+      }
+      await client.request('chat.abort', abortParams)
       setStreamingCount(0)
       streamBufferRef.current.clear()
       thinkingBufferRef.current.clear()
@@ -1930,7 +1954,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         ?? payload?.defaults?.contextWindow
         ?? payload?.defaults?.contextTokens
       )
-      return { input: normalizedInput, output, contextWindow: contextWindow > 0 ? contextWindow : undefined }
+      // 对齐官方 UI：从 sessions.list 返回的 hasActiveRun 字段判断会话是否有活跃运行
+      // 用于停止按钮的显示逻辑（即使前端 streamingCount=0，只要 session.hasActiveRun=true 也显示停止按钮）
+      const hasActiveRun = hit.hasActiveRun === true
+      return { input: normalizedInput, output, contextWindow: contextWindow > 0 ? contextWindow : undefined, hasActiveRun }
     } catch (err) {
       console.warn('[ws] getSessionTokenUsage failed:', err)
       return null
@@ -1941,5 +1968,5 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     clientRef.current?.clearOfflineQueue()
   }, [])
 
-  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onSessionUsageUpdate, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current, clearOfflineQueue }
+  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onRunEnd, onSessionUsageUpdate, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current, clearOfflineQueue }
 }

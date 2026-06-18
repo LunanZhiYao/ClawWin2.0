@@ -307,6 +307,8 @@ export interface ChatSession {
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
+  /** 对齐官方 UI GatewaySessionRow.hasActiveRun，标识会话是否有活跃运行 */
+  hasActiveRun?: boolean
 }
 
 export interface AgentInfo {
