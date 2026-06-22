@@ -297,6 +297,8 @@ export interface ChatMessage {
   status?: 'sending' | 'queued' | 'streaming' | 'done' | 'error'
   taskStatus?: TaskStatus
   agentId?: string
+  /** 错误提示信息，用于在状态图标中显示警告，不显示在正文 */
+  errorHint?: string
 }
 
 export interface ChatSession {

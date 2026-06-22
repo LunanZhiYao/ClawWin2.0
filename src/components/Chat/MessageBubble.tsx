@@ -325,7 +325,18 @@ function ToolCallBlock({ toolCall }: { toolCall: ChatToolCall }) {
 }
 
 // 任务状态图标组件
-const TaskStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
+const TaskStatusIcon: React.FC<{ status: TaskStatus; errorHint?: string }> = ({ status, errorHint }) => {
+  // 如果有错误提示，显示警告图标
+  if (errorHint) {
+    return (
+      <svg className="task-status-icon task-status-icon-warning" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <title>{errorHint}</title>
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+    )
+  }
   if (status === 'completed') {
     return (
       <svg className="task-status-icon task-status-icon-success" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -356,7 +367,7 @@ const TaskStatusIcon: React.FC<{ status: TaskStatus }> = ({ status }) => {
 }
 
 // 任务状态提示组件
-const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: boolean }> = ({ taskStatus, showWithContent }) => {
+const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: boolean; errorHint?: string }> = ({ taskStatus, showWithContent, errorHint }) => {
   const statusTextMap: Record<TaskStatus, string> = {
     starting: '🤔 让我想想',
     calling_tool: '正在调用工具',
@@ -392,8 +403,8 @@ const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: bool
   if (isFinalStatus && taskStatus) {
     return (
       <div className="message-tool-waiting-hint hint-final">
-        <TaskStatusIcon status={taskStatus} />
-        <span>{statusTextMap[taskStatus]}</span>
+        <TaskStatusIcon status={taskStatus} errorHint={errorHint} />
+        <span>{errorHint || statusTextMap[taskStatus]}</span>
       </div>
     )
   }
@@ -577,7 +588,7 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
         {!isUser && isStreaming && !displayContent && !reasoningText && (
           message.taskStatus && !['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus) ? (
             <div className="message-content message-content-assistant">
-              <TaskStatusHint taskStatus={message.taskStatus} showWithContent={false} />
+              <TaskStatusHint taskStatus={message.taskStatus} showWithContent={false} errorHint={message.errorHint} />
             </div>
           ) : !message.taskStatus ? (
             <div className="message-content message-content-assistant">
@@ -591,7 +602,7 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
         )}
         {/* 最终状态：无论是否有内容都显示 */}
         {!isUser && ['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus || '') && (
-          <TaskStatusHint taskStatus={message.taskStatus} showWithContent={true} />
+          <TaskStatusHint taskStatus={message.taskStatus} showWithContent={true} errorHint={message.errorHint} />
         )}
         {(displayContent || hasAttachments) && (
           <div className={`message-content ${isError ? 'message-error-content' : ''}${hasAttachments ? ' has-attachments' : ''}${!isUser ? ' message-content-assistant' : ''}`}>
@@ -725,6 +736,7 @@ export const MessageBubble = React.memo(MessageBubbleInner, (prev, next) =>
   && prev.message.status === next.message.status
   && prev.message.thinking === next.message.thinking
   && prev.message.taskStatus === next.message.taskStatus
+  && prev.message.errorHint === next.message.errorHint
   && prev.onCopy === next.onCopy
   && prev.onRetry === next.onRetry
   && prev.message.agentId === next.message.agentId

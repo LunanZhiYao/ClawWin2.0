@@ -559,19 +559,23 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const agentRunId = p.runId as string | undefined
       const agentIdFromEvent = (p.agentId as string | undefined) || extractSubAgentId(p.sessionKey as string | undefined)
       const agentSessionKey = normalizeSessionKey(p.sessionKey as string | undefined)
+      // 检查是否是 heartbeat 任务
+      const isHeartbeat = p.isHeartbeat as boolean | undefined
 
       // 识别后台任务（memory 插件的 L1/L2/L3 提取任务等）
       const isBackgroundTask = agentRunId?.startsWith('memory-') ||
         agentIdFromEvent?.startsWith('memory-') ||
         agentRunId?.includes('-extraction-run-') ||
         agentRunId?.includes('-scene-run-') ||
-        agentRunId?.includes('-persona-run-')
+        agentRunId?.includes('-persona-run-') ||
+        isHeartbeat === true
 
       if (isBackgroundTask) {
         // 后台任务：只在状态栏显示进度，不作为主对话消息处理
         if (stream === 'lifecycle') {
           if (phase === 'start') {
-            const taskType = agentRunId?.includes('l1-extraction') ? 'L1 记忆提取' :
+            const taskType = isHeartbeat ? '心跳检查' :
+              agentRunId?.includes('l1-extraction') ? 'L1 记忆提取' :
               agentRunId?.includes('scene') ? 'L2 场景归纳' :
               agentRunId?.includes('persona') ? 'L3 用户画像' : '后台任务'
             setBackendStatus(`[${taskType}] 运行中...`)
@@ -585,7 +589,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             setBackendStatus(`[L1 提取] ${text.slice(0, 60)}...`)
           }
         }
-        console.log('[ws] agent event: background task', { agentRunId, stream, phase, dataKeys: Object.keys(data) })
+        console.log('[ws] agent event: background task', { agentRunId, stream, phase, isHeartbeat, dataKeys: Object.keys(data) })
         return
       }
 
@@ -858,13 +862,30 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
 
     if (!evt.payload || typeof evt.payload !== 'object') return
     const payload = evt.payload as Record<string, unknown>
+
+    // 过滤后台任务的 chat 事件（heartbeat、memory 插件等），不作为主对话消息处理
+    const chatIsHeartbeat = payload.isHeartbeat as boolean | undefined
+    const chatRunId = payload.runId as string | undefined
+    const chatSessionKey = payload.sessionKey as string | undefined
+    const isBackgroundChatTask = chatIsHeartbeat === true ||
+      chatRunId?.startsWith('memory-') ||
+      chatRunId?.includes('-extraction-run-') ||
+      chatRunId?.includes('-scene-run-') ||
+      chatRunId?.includes('-persona-run-') ||
+      chatSessionKey?.includes('memory-') ||
+      chatSessionKey?.includes('extraction-session')
+
+    if (isBackgroundChatTask) {
+      console.log('[ws] chat event: background task, skipping', { runId: chatRunId, sessionKey: chatSessionKey, state: payload.state, isHeartbeat: chatIsHeartbeat })
+      return
+    }
+
     const state = payload.state as string | undefined
-    const chatRunId = (payload.runId as string) || generateId()
     // 优先使用 agent lifecycle 的 runId（与工具调用流式消息一致），
     // 解决 agent 事件 runId 与 chat 事件 runId 不一致导致工具调用卡在 "running" 的问题
     const runId = (toolCallsBufferRef.current.length > 0 && agentLifecycleRunIdRef.current)
       ? agentLifecycleRunIdRef.current
-      : chatRunId
+      : (chatRunId || generateId())
     const rawSessionKey = payload.sessionKey as string | undefined
     const sessionKey = normalizeSessionKey(rawSessionKey)
     const chatAgentId = (payload.agentId as string | undefined)
@@ -875,7 +896,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     }
 
     // 过滤指令消息的响应（如 /model 切换命令），不显示在聊天中
-    if (directiveRunIdsRef.current.has(chatRunId)) {
+    if (chatRunId && directiveRunIdsRef.current.has(chatRunId)) {
       console.log('[ws] suppressing directive response:', { chatRunId, state })
       if (state === 'final' || state === 'error' || state === 'aborted' || state === 'terminated') {
         directiveRunIdsRef.current.delete(chatRunId)
@@ -1404,6 +1425,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         taskStatus: msgTaskStatus,
         agentId: chatAgentId,
         sessionKey,
+        // 将工具执行错误作为状态提醒，不显示在正文
+        errorHint: (hasToolCalls || isToolExecutionWarning) && !isErrorOverflow ? errorMessage : undefined,
       }
       onMessageStream.current?.(msg)
       emitTelemetry({

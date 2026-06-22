@@ -35,6 +35,15 @@ declare const window: Window & { electronAPI: ElectronAPI }
 
 // const SETUP_STEPS: SetupStep[] = [ 'workspace', 'gateway', 'complete']
 
+/** 检测消息是否来自后台任务（memory 插件的 L1/L2/L3 提取任务等） */
+function isBackgroundTaskMessage(msg: ChatMessage): boolean {
+  return msg.id.startsWith('memory-') ||
+    msg.id.includes('-extraction-run-') ||
+    msg.id.includes('-scene-run-') ||
+    msg.id.includes('-persona-run-') ||
+    Boolean(msg.sessionKey && msg.sessionKey.includes('explicit:memory-'))
+}
+
 const isWidgetRoute = () => {
   return window.location.hash === '#/widget'
 }
@@ -877,7 +886,8 @@ function App() {
           }, 900)
           usageSyncTimerBySessionRef.current.set(sid, timer)
           // 超时重试场景下不触发小工具完成提示
-          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'retrying') {
+          // 过滤后台任务（memory 插件的 L1/L2/L3 提取任务等），避免后台任务输出显示在小工具弹窗
+          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'retrying' && !isBackgroundTaskMessage(msg)) {
             widgetTaskCompleteRef.current(true, msg.content || '任务已完成')
           }
         } else if (msg.status === 'error') {
@@ -896,7 +906,10 @@ function App() {
         })
       }
 
-      dispatch({ type: 'UPSERT_MESSAGE', sessionId: sid, message: msg })
+      // 过滤后台任务消息，不存储到 Redux store（避免后台任务输出污染聊天历史）
+      if (!isBackgroundTaskMessage(msg)) {
+        dispatch({ type: 'UPSERT_MESSAGE', sessionId: sid, message: msg })
+      }
     },
     [markUserMessageComplete, stopWaiting, stopTimeoutTimer]
   )
