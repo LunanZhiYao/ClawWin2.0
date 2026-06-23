@@ -18,6 +18,7 @@
   --text-dark-secondary: #4B5563;
   --primary: #3B82F6;
   --primary-hover: #2563EB;
+  --primary-light: #EFF6FF;
   --accent: #10B981;
   --accent-hover: #059669;
   --accent-glow: rgba(59, 130, 246, 0.3);
@@ -2246,6 +2247,78 @@ body.widget-page #root {
   word-break: break-word;
 }
 
+/* 消息附件样式 */
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-attachments.multi {
+  gap: 12px;
+}
+
+.message-attachment-img {
+  max-width: 400px;
+  max-height: 300px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.message-attachment-img:hover {
+  transform: scale(1.02);
+}
+
+.message-inline-screenshot {
+  max-width: 400px;
+  max-height: 300px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+  margin: 8px 0;
+  display: block;
+}
+
+.message-inline-screenshot:hover {
+  transform: scale(1.02);
+}
+
+.message-attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  max-width: 300px;
+}
+
+.message-attachment-file:hover {
+  background: var(--bg-hover);
+}
+
+.message-file-icon {
+  color: var(--text-secondary);
+}
+
+.message-file-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 打字动画 */
 .typing-dots {
   display: inline-flex;
@@ -2399,6 +2472,7 @@ body.widget-page #root {
 
 /* Input Area (底部输入框) */
 .input-area {
+  position: relative;
   padding: 16px 24px 24px;
   background: white;
   border-top: 1px solid var(--border);
@@ -5535,6 +5609,230 @@ body.widget-page #root {
 
 .skill-tag-remove:hover {
   opacity: 1;
+}
+
+/* 输入框容器 */
+.input-container {
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 8px 12px;
+  transition: border-color 0.2s ease;
+}
+
+.input-container:focus-within {
+  border-color: var(--primary);
+}
+
+/* 输入行 - 横向排列按钮和输入框 */
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 附件按钮 */
+.input-attachment-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  transition: all 0.15s ease;
+}
+
+.input-attachment-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.input-attachment-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 技能引用按钮容器 */
+.input-skill-ref {
+  position: relative;
+}
+
+.input-skill-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  transition: all 0.15s ease;
+}
+
+.input-skill-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--primary);
+}
+
+.input-skill-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 技能选择弹出框 */
+.skill-picker-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 8px;
+  width: 280px;
+  max-height: 320px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.skill-picker-header {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.skill-picker-search {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.skill-picker-search:focus {
+  border-color: var(--primary);
+}
+
+.skill-picker-list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.skill-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.skill-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.skill-picker-item.selected {
+  background: var(--primary-light);
+}
+
+.skill-picker-emoji {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.skill-picker-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.skill-picker-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.skill-picker-check {
+  color: var(--primary);
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.skill-picker-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* 发送按钮 */
+.btn-send {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  border: none;
+  background: var(--primary);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  font-size: 18px;
+}
+
+.btn-send:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.btn-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 拖拽遮罩 */
+.input-drag-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(59, 130, 246, 0.1);
+  border: 2px dashed var(--primary);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 10;
+}
+
+/* 错误提示 */
+.input-error-toast {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 8px;
+  padding: 8px 16px;
+  background: var(--error);
+  color: white;
+  border-radius: var(--radius);
+  font-size: 13px;
+  z-index: 20;
+  cursor: pointer;
 }
 
 /* ============================================

@@ -141,6 +141,7 @@ const electronAPI = {
       reasoning?: boolean
       contextWindow?: number
       maxTokens?: number
+      input?: string[]
     }): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('config:saveModelConfig', params),
     getChannels: (): Promise<Record<string, Record<string, string>>> => ipcRenderer.invoke('config:getChannels'),
     saveChannels: (channels: Record<string, Record<string, string>>): Promise<{ ok: boolean; error?: string }> =>

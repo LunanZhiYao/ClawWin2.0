@@ -350,6 +350,7 @@ export interface SetupConfig {
   reasoning?: boolean
   contextWindow?: number
   maxTokens?: number
+  input?: string[]
   workspace?: string
   gatewayPort?: number
   gatewayToken?: string

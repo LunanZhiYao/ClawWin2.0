@@ -70,6 +70,7 @@ export interface SetupConfig {
   reasoning?: boolean
   contextWindow?: number
   maxTokens?: number
+  input?: string[]
   workspace?: string
   gatewayPort?: number
   gatewayToken?: string
@@ -445,7 +446,7 @@ export function writeSetupConfig(config: Record<string, unknown>): { ok: boolean
                   id: setup.modelId,
                   name: setup.modelName,
                   reasoning: setup.reasoning ?? false,
-                  input: ['text','image'],
+                  input: setup.input ?? ['text', 'image'],
                   contextWindow: setup.contextWindow ?? 262000,
                   maxTokens: setup.maxTokens ?? 131000,
                 },

@@ -1,8 +1,7 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react'
-// todo import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import type { ChatAttachment } from '../../types'
-// todo import type { SkillInfo } from '../../types'
-// import { SKILL_CN } from '../../constants/skillCn'
+import type { SkillInfo } from '../../types'
+import { SKILL_CN } from '../../constants/skillCn'
 
 const MAX_ATTACHMENTS = 5
 
@@ -63,10 +62,10 @@ export const InputArea: React.FC<InputAreaProps> = ({
   const dragCounterRef = useRef(0)
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // todo Skill quote state
-  // const [showSkillPicker, setShowSkillPicker] = useState(false)
-  // const [enabledSkills, setEnabledSkills] = useState<SkillInfo[]>([])
-  // const [skillSearch, setSkillSearch] = useState('')
+  // Skill quote state
+  const [showSkillPicker, setShowSkillPicker] = useState(false)
+  const [enabledSkills, setEnabledSkills] = useState<SkillInfo[]>([])
+  const [skillSearch, setSkillSearch] = useState('')
   const [quotedSkills, setQuotedSkills] = useState<string[]>([])
   const skillBtnRef = useRef<HTMLDivElement>(null)
 
@@ -87,53 +86,53 @@ export const InputArea: React.FC<InputAreaProps> = ({
     errorTimerRef.current = setTimeout(() => setError(null), 3000)
   }, [])
 
-  // todo Skill picker: load on first open, toggle visibility
-  // const handleSkillBtnClick = useCallback(async () => {
-  //   if (showSkillPicker) {
-  //     setShowSkillPicker(false)
-  //     return
-  //   }
-  //   if (enabledSkills.length === 0) {
-  //     try {
-  //       const list = await window.electronAPI.skills.list()
-  //       setEnabledSkills(list.filter((s: SkillInfo) => s.enabled && s.status === 'ready'))
-  //     } catch { /* ignore */ }
-  //   }
-  //   setSkillSearch('')
-  //   setShowSkillPicker(true)
-  // }, [showSkillPicker, enabledSkills.length])
-  //
-  // const handleQuoteSkill = useCallback((skillName: string) => {
-  //   setQuotedSkills(prev =>
-  //     prev.includes(skillName) ? prev.filter(n => n !== skillName) : [...prev, skillName]
-  //   )
-  // }, [])
+  // Skill picker: load on first open, toggle visibility
+  const handleSkillBtnClick = useCallback(async () => {
+    if (showSkillPicker) {
+      setShowSkillPicker(false)
+      return
+    }
+    if (enabledSkills.length === 0) {
+      try {
+        const list = await window.electronAPI.skills.list()
+        setEnabledSkills(list.filter((s: SkillInfo) => s.enabled && s.status === 'ready'))
+      } catch { /* ignore */ }
+    }
+    setSkillSearch('')
+    setShowSkillPicker(true)
+  }, [showSkillPicker, enabledSkills.length])
 
-  // const handleRemoveQuotedSkill = useCallback((skillName: string) => {
-  //   setQuotedSkills(prev => prev.filter(n => n !== skillName))
-  // }, [])
+  const handleQuoteSkill = useCallback((skillName: string) => {
+    setQuotedSkills(prev =>
+      prev.includes(skillName) ? prev.filter(n => n !== skillName) : [...prev, skillName]
+    )
+  }, [])
 
-  // const filteredSkills = useMemo(() => {
-  //   if (!skillSearch) return enabledSkills
-  //   const q = skillSearch.toLowerCase()
-  //   return enabledSkills.filter(s =>
-  //     s.name.toLowerCase().includes(q) ||
-  //     (SKILL_CN[s.name] ?? '').toLowerCase().includes(q) ||
-  //     (s.description ?? '').toLowerCase().includes(q)
-  //   )
-  // }, [enabledSkills, skillSearch])
+  const handleRemoveQuotedSkill = useCallback((skillName: string) => {
+    setQuotedSkills(prev => prev.filter(n => n !== skillName))
+  }, [])
+
+  const filteredSkills = useMemo(() => {
+    if (!skillSearch) return enabledSkills
+    const q = skillSearch.toLowerCase()
+    return enabledSkills.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      (SKILL_CN[s.name] ?? '').toLowerCase().includes(q) ||
+      (s.description ?? '').toLowerCase().includes(q)
+    )
+  }, [enabledSkills, skillSearch])
 
   // Close skill picker on outside click
-  // useEffect(() => {
-  //   if (!showSkillPicker) return
-  //   const handler = (e: MouseEvent) => {
-  //     if (skillBtnRef.current && !skillBtnRef.current.contains(e.target as Node)) {
-  //       setShowSkillPicker(false)
-  //     }
-  //   }
-  //   document.addEventListener('mousedown', handler)
-  //   return () => document.removeEventListener('mousedown', handler)
-  // }, [showSkillPicker])
+  useEffect(() => {
+    if (!showSkillPicker) return
+    const handler = (e: MouseEvent) => {
+      if (skillBtnRef.current && !skillBtnRef.current.contains(e.target as Node)) {
+        setShowSkillPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showSkillPicker])
 
   // Read a file as base64 string
   const readFileAsBase64 = (file: File): Promise<string> => {
@@ -252,7 +251,7 @@ export const InputArea: React.FC<InputAreaProps> = ({
 
     // Prepend quoted skill names
     if (quotedSkills.length > 0) {
-      const prefix = quotedSkills.map(s => `@${s}`).join(' ')
+      const prefix = quotedSkills.map(s => `/${s}`).join(' ')
       content = content ? `${prefix} ${content}` : prefix
     }
 
@@ -468,17 +467,17 @@ export const InputArea: React.FC<InputAreaProps> = ({
 
       {/* Input container */}
       <div className="input-container">
-        {/* todo Quoted skills strip */}
-        {/*{quotedSkills.length > 0 && (*/}
-        {/*  <div className="skill-tags-strip">*/}
-        {/*    {quotedSkills.map(name => (*/}
-        {/*      <span key={name} className="skill-tag-chip">*/}
-        {/*        @{name}*/}
-        {/*        <span className="skill-tag-remove" onClick={() => handleRemoveQuotedSkill(name)}>&times;</span>*/}
-        {/*      </span>*/}
-        {/*    ))}*/}
-        {/*  </div>*/}
-        {/*)}*/}
+        {/* Quoted skills strip */}
+        {quotedSkills.length > 0 && (
+          <div className="skill-tags-strip">
+            {quotedSkills.map(name => (
+              <span key={name} className="skill-tag-chip">
+                /{name}
+                <span className="skill-tag-remove" onClick={() => handleRemoveQuotedSkill(name)}>&times;</span>
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Preview strip */}
         {attachments.length > 0 && (
@@ -573,52 +572,51 @@ export const InputArea: React.FC<InputAreaProps> = ({
 
           {/* Skill quote button + popup */}
           <div className="input-skill-ref" ref={skillBtnRef}>
-             {/*todo 技能引用*/}
-            {/*<button*/}
-            {/*  className="input-skill-btn"*/}
-            {/*  onClick={handleSkillBtnClick}*/}
-            {/*  disabled={disabled}*/}
-            {/*  title="引用技能"*/}
-            {/*>*/}
-            {/*  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">*/}
-            {/*    <circle cx="12" cy="12" r="4" />*/}
-            {/*    <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />*/}
-            {/*  </svg>*/}
-            {/*</button>*/}
-            {/*{showSkillPicker && (*/}
-            {/*  <div className="skill-picker-popup">*/}
-            {/*    <div className="skill-picker-header">*/}
-            {/*      <input*/}
-            {/*        type="text"*/}
-            {/*        className="skill-picker-search"*/}
-            {/*        placeholder="搜索技能..."*/}
-            {/*        value={skillSearch}*/}
-            {/*        onChange={e => setSkillSearch(e.target.value)}*/}
-            {/*        autoFocus*/}
-            {/*      />*/}
-            {/*    </div>*/}
-            {/*    <div className="skill-picker-list">*/}
-            {/*      {filteredSkills.length === 0 ? (*/}
-            {/*        <div className="skill-picker-empty">*/}
-            {/*          {skillSearch ? '没有匹配的技能' : '暂无已启用技能'}*/}
-            {/*        </div>*/}
-            {/*      ) : (*/}
-            {/*        filteredSkills.map(skill => (*/}
-            {/*          <div*/}
-            {/*            key={skill.name}*/}
-            {/*            className={`skill-picker-item${quotedSkills.includes(skill.name) ? ' selected' : ''}`}*/}
-            {/*            onClick={() => handleQuoteSkill(skill.name)}*/}
-            {/*          >*/}
-            {/*            <span className="skill-picker-emoji">{skill.emoji || '🧩'}</span>*/}
-            {/*            <span className="skill-picker-name">{skill.name}</span>*/}
-            {/*            <span className="skill-picker-desc">{SKILL_CN[skill.name] || skill.description}</span>*/}
-            {/*            {quotedSkills.includes(skill.name) && <span className="skill-picker-check">✓</span>}*/}
-            {/*          </div>*/}
-            {/*        ))*/}
-            {/*      )}*/}
-            {/*    </div>*/}
-            {/*  </div>*/}
-            {/*)}*/}
+            <button
+              className="input-skill-btn"
+              onClick={handleSkillBtnClick}
+              disabled={disabled}
+              title="引用技能"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
+              </svg>
+            </button>
+            {showSkillPicker && (
+              <div className="skill-picker-popup">
+                <div className="skill-picker-header">
+                  <input
+                    type="text"
+                    className="skill-picker-search"
+                    placeholder="搜索技能..."
+                    value={skillSearch}
+                    onChange={e => setSkillSearch(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <div className="skill-picker-list">
+                  {filteredSkills.length === 0 ? (
+                    <div className="skill-picker-empty">
+                      {skillSearch ? '没有匹配的技能' : '暂无已启用技能'}
+                    </div>
+                  ) : (
+                    filteredSkills.map(skill => (
+                      <div
+                        key={skill.name}
+                        className={`skill-picker-item${quotedSkills.includes(skill.name) ? ' selected' : ''}`}
+                        onClick={() => handleQuoteSkill(skill.name)}
+                      >
+                        <span className="skill-picker-emoji">{skill.emoji || '🧩'}</span>
+                        <span className="skill-picker-name">{skill.name}</span>
+                        <span className="skill-picker-desc">{SKILL_CN[skill.name] || skill.description}</span>
+                        {quotedSkills.includes(skill.name) && <span className="skill-picker-check">✓</span>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Hidden file input — accept all file types */}

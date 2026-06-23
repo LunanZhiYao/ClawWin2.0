@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react'
 import { MessageBubble } from './MessageBubble'
-import type { ChatMessage, ChatAttachment, AgentInfo, AvailableModel, SkillInfo } from '../../types'
+import type { GroupMeta } from './MessageBubble'
+import type { ChatMessage, ChatToolCall, ChatAttachment, AgentInfo, AvailableModel, SkillInfo, TaskStatus } from '../../types'
 import { type WelcomeTab } from '../../api/welcome'
 import logoSrc from '../../../assets/logo.png'
 import { SKILL_CN } from '../../constants/skillCn'
@@ -231,7 +232,7 @@ const BottomInput: React.FC<BottomInputProps> = ({
 
     // Prepend quoted skill names
     if (quotedSkills.length > 0) {
-      const prefix = quotedSkills.map(s => `@${s}`).join(' ')
+      const prefix = quotedSkills.map(s => `/${s}`).join(' ')
       content = content ? `${prefix} ${content}` : prefix
     }
 
@@ -368,7 +369,7 @@ const BottomInput: React.FC<BottomInputProps> = ({
           <div className="skill-tags-strip">
             {quotedSkills.map(name => (
               <span key={name} className="skill-tag-chip">
-                @{name}
+                /{name}
                 <span className="skill-tag-remove" onClick={() => handleRemoveQuotedSkill(name)}>&times;</span>
               </span>
             ))}
@@ -441,18 +442,18 @@ const BottomInput: React.FC<BottomInputProps> = ({
                   <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
                 </svg>
               </button>
-              {/*todo 技能引用*/}
-              {/*<button*/}
-              {/*  className="attach-btn"*/}
-              {/*  title="引用技能"*/}
-              {/*  onClick={() => setShowSkillPicker(v => !v)}*/}
-              {/*  disabled={disabled}*/}
-              {/*>*/}
-              {/*  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">*/}
-              {/*    <circle cx="12" cy="12" r="4"></circle>*/}
-              {/*    <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>*/}
-              {/*  </svg>*/}
-              {/*</button>*/}
+              {/* 技能引用 */}
+              <button
+                className="attach-btn"
+                title="引用技能"
+                onClick={() => setShowSkillPicker(v => !v)}
+                disabled={disabled}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
+                </svg>
+              </button>
               {showSkillPicker && (
                 <div ref={skillPickerRef} className="skill-picker-dropdown">
                   {skillsLoading ? (
@@ -546,6 +547,82 @@ function formatTokensShort(value: number): string {
   if (value < 1000) return String(Math.round(value))
   const inK = value / 1000
   return `${inK.toFixed(1)}k`
+}
+
+/**
+ * 将已过滤的消息分组：连续的同角色 assistant 消息被标记组位置，
+ * 组首展示 task-status-summary-header，组尾展示 hint-final。
+ * 聚合整组的 toolCalls、taskStatus、errorHint 用于摘要。
+ */
+function buildGroupMetas(msgs: ChatMessage[]): (ChatMessage & { groupMeta?: GroupMeta })[] {
+  const metaMap = new Map<string, GroupMeta>()
+
+  // 找出所有 assistant 组：连续 assistant 消息（排除子代理）归为一组
+  let i = 0
+  while (i < msgs.length) {
+    if (msgs[i].role !== 'assistant') {
+      i++
+      continue
+    }
+
+    // 开始一个 assistant 组
+    const start = i
+    while (i < msgs.length && msgs[i].role === 'assistant') {
+      i++
+    }
+    const end = i - 1 // inclusive
+
+    if (start === end) {
+      // 单条消息
+      const msg = msgs[start]
+      metaMap.set(msg.id, {
+        position: 'single',
+        effectiveToolCalls: msg.toolCalls || [],
+        effectiveTaskStatus: msg.taskStatus,
+        effectiveErrorHint: msg.errorHint,
+      })
+    } else {
+      // 多段消息：聚合整组的工具调用、最新任务状态
+      const allToolCalls: ChatToolCall[] = []
+      let latestTaskStatus: TaskStatus | undefined
+      let latestErrorHint: string | undefined
+
+      for (let j = start; j <= end; j++) {
+        const m = msgs[j]
+        if (m.toolCalls) allToolCalls.push(...m.toolCalls)
+
+        // 取最新的任务状态（包括 calling_tool/running 等过程状态），
+        // 不能只取最终状态：否则组内前一条已完成、后一条仍在调用工具时，
+        // 汇总条会错误显示"任务已完成"，最终提示也会提前出现在仍在流式的末条上。
+        // 最终提示是否展示由 MessageBubble 里的 finalStatuses 判断兜底。
+        if (m.taskStatus) {
+          latestTaskStatus = m.taskStatus
+        }
+        if (m.errorHint) {
+          latestErrorHint = m.errorHint
+        }
+      }
+
+      for (let j = start; j <= end; j++) {
+        let position: 'first' | 'middle' | 'last'
+        if (j === start) position = 'first'
+        else if (j === end) position = 'last'
+        else position = 'middle'
+
+        metaMap.set(msgs[j].id, {
+          position,
+          effectiveToolCalls: allToolCalls,
+          effectiveTaskStatus: latestTaskStatus,
+          effectiveErrorHint: latestErrorHint,
+        })
+      }
+    }
+  }
+
+  return msgs.map((msg) => ({
+    ...msg,
+    groupMeta: metaMap.get(msg.id),
+  }))
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -702,7 +779,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     // Prepend quoted skill names
     if (welcomeQuotedSkills.length > 0) {
-      const prefix = welcomeQuotedSkills.map(s => `@${s}`).join(' ')
+      const prefix = welcomeQuotedSkills.map(s => `/${s}`).join(' ')
       content = content ? `${prefix} ${content}` : prefix
     }
 
@@ -1099,7 +1176,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <div className="skill-tags-strip">
                 {welcomeQuotedSkills.map(name => (
                   <span key={name} className="skill-tag-chip">
-                    @{name}
+                    /{name}
                     <span className="skill-tag-remove" onClick={() => handleRemoveWelcomeQuotedSkill(name)}>&times;</span>
                   </span>
                 ))}
@@ -1168,17 +1245,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"></path>
                     </svg>
                   </button>
-                   {/*todo 技能引用*/}
-                  {/*<button*/}
-                  {/*  className="attach-btn"*/}
-                  {/*  title="引用技能"*/}
-                  {/*  onClick={() => setShowWelcomeSkillPicker(v => !v)}*/}
-                  {/*>*/}
-                  {/*  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">*/}
-                  {/*    <circle cx="12" cy="12" r="4"></circle>*/}
-                  {/*    <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>*/}
-                  {/*  </svg>*/}
-                  {/*</button>*/}
+                  {/* 技能引用 */}
+                  <button
+                    className="attach-btn"
+                    title="引用技能"
+                    onClick={() => setShowWelcomeSkillPicker(v => !v)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="4"></circle>
+                      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path>
+                    </svg>
+                  </button>
                   {showWelcomeSkillPicker && (
                     <div ref={welcomeSkillPickerRef} className="skill-picker-dropdown skill-picker-dropdown-below">
                       {welcomeSkillsLoading ? (
@@ -1257,17 +1334,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       ) : (
         <div className="chat-messages-wrapper">
           <div className="chat-messages" ref={scrollRef} onScroll={handleScroll}>
-            {messages
-              .filter((msg) => msg.content || msg.thinking || msg.toolCalls?.length || msg.status === 'streaming' || msg.status === 'queued' || msg.status === 'error' || msg.attachments?.length)
-              .map((msg) => (
+            {(() => {
+              // 构建分组元数据并在过滤后的消息上注入 groupMeta
+              const visibleMessages = messages.filter((msg) => msg.content || msg.thinking || msg.toolCalls?.length || msg.status === 'streaming' || msg.status === 'queued' || msg.status === 'error' || msg.attachments?.length)
+              const groupMessages = buildGroupMetas(visibleMessages)
+              return groupMessages.map((msg) => (
                 <MessageBubble
                   key={msg.id}
                   message={msg}
                   onCopy={() => handleCopy(msg.content)}
                   onRetry={msg.role === 'user' ? () => setRetryInput(msg.content) : undefined}
                   currentAgentId={currentAgentId}
+                  groupMeta={msg.groupMeta}
                 />
-              ))}
+              ))
+            })()}
             {isWaiting && !isStreaming && !hasStreamingMessage && (
               <div className="message-row assistant">
                 <div className="message-avatar ai">

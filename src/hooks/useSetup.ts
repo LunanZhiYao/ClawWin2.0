@@ -175,7 +175,7 @@ async function openclawSavedToSetupPartial(
       {
         baseUrl?: string
         api?: string
-        models?: Array<{ id: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }>
+        models?: Array<{ id: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; input?: string[] }>
       }
     > | undefined
     const provCfg = providers?.[merged.provider]
@@ -187,6 +187,7 @@ async function openclawSavedToSetupPartial(
         if (typeof mm.reasoning === 'boolean') merged.reasoning = mm.reasoning
         if (typeof mm.contextWindow === 'number') merged.contextWindow = mm.contextWindow
         if (typeof mm.maxTokens === 'number') merged.maxTokens = mm.maxTokens
+        if (Array.isArray(mm.input) && mm.input.length > 0) merged.input = mm.input
       }
     }
     const key = await window.electronAPI.config.getApiKey(`${merged.provider}:default`)
@@ -311,6 +312,7 @@ export function useSetup(): UseSetupReturn {
         reasoning: cfg.reasoning,
         contextWindow: cfg.contextWindow,
         maxTokens: cfg.maxTokens,
+        input: cfg.input,
         workspace: cfg.workspace,
         gatewayPort: cfg.gatewayPort,
         gatewayToken: cfg.gatewayToken,

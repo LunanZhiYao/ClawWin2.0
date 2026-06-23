@@ -247,6 +247,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webSecurity: false, // 允许加载本地 file:// 协议图片和文件
       devTools: allowDevTools,
     },
     show: false,
@@ -364,6 +365,7 @@ function createWidgetWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webSecurity: false, // 允许加载本地 file:// 协议图片和文件
     },
   })
 
@@ -695,6 +697,7 @@ function setupIPC() {
           preload: path.join(__dirname, 'screenshot-preload.js'),
           contextIsolation: true,
           nodeIntegration: false,
+          webSecurity: false, // 允许加载本地 file:// 协议图片和文件
           // 与主窗口一致：安装版默认不可调试图层窗口
           devTools: getAllowDevTools(),
         },
@@ -929,6 +932,7 @@ function setupIPC() {
     reasoning?: boolean
     contextWindow?: number
     maxTokens?: number
+    input?: string[]
   }) => {
     try {
       const configPath = getOpenclawConfigPath()
@@ -971,7 +975,7 @@ function setupIPC() {
         id: params.modelId,
         name: params.modelName,
         reasoning: params.reasoning ?? false,
-        input: ['text', 'image'],
+        input: params.input ?? ['text', 'image'],
         contextWindow: params.contextWindow ?? 200000,
       }
       if (params.maxTokens) newModel.maxTokens = params.maxTokens

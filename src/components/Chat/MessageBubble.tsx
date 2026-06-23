@@ -5,6 +5,20 @@ import rehypeHighlight from 'rehype-highlight'
 import type { ChatMessage, ChatToolCall, TaskStatus } from '../../types'
 import logoSrc from '../../../assets/logo.png'
 
+/**
+ * 多段式会话内消息的组位置信息。
+ * - position: 'single' | 'first' | 'middle' | 'last'
+ * - effectiveToolCalls: 该组所有消息的工具调用聚合
+ * - effectiveTaskStatus: 该组最终的任务状态
+ * - effectiveErrorHint: 该组最终的错误提示
+ */
+export interface GroupMeta {
+  position: 'single' | 'first' | 'middle' | 'last'
+  effectiveToolCalls: ChatToolCall[]
+  effectiveTaskStatus?: TaskStatus
+  effectiveErrorHint?: string
+}
+
 function formatMessageTime(timestamp: number): string {
   const date = new Date(timestamp)
   const y = date.getFullYear()
@@ -419,11 +433,19 @@ const TaskStatusSummary: React.FC<{ toolCalls: ChatToolCall[]; taskStatus?: Task
 
   if (toolCalls.length === 0 && !taskStatus) return null
 
+  // 最终状态列表
+  const finalStatuses: TaskStatus[] = ['completed', 'failed', 'interrupted', 'user_aborted']
+  const isTaskFinal = taskStatus ? finalStatuses.includes(taskStatus) : false
+
   // 对齐官方 UI chat-activity-group__summary 的 "Activity: N tools" 格式
   // 多个工具调用时显示数量 + 名称预览；单个时显示名称 + 状态
   const toolCount = toolCalls.length
   const hasError = toolCalls.some((tc) => tc.status === 'error' || tc.isError)
-  const allDone = toolCount > 0 && toolCalls.every((tc) => tc.status === 'done')
+  const allToolsDone = toolCount > 0 && toolCalls.every((tc) => tc.status === 'done')
+
+  // 关键修复：即使所有工具都完成，如果整体任务状态不是最终状态，仍应显示"运行中"
+  // 这处理了多段回复场景：中间消息的工具调用已完成，但任务还在进行（如生成回复内容）
+  const allDone = allToolsDone && isTaskFinal
 
   let statusText: string
   let statusClass: string
@@ -437,21 +459,46 @@ const TaskStatusSummary: React.FC<{ toolCalls: ChatToolCall[]; taskStatus?: Task
 
     if (toolCount === 1) {
       const tc = toolCalls[0]
-      const stateLabel = tc.status === 'done' ? '已完成' : tc.status === 'running' ? '运行中' : tc.status === 'error' ? '执行失败' : '等待中'
+      // 单个工具：如果任务未结束，即使工具完成也显示"运行中"
+      const stateLabel = tc.status === 'error' ? '执行失败'
+        : tc.status === 'running' ? '运行中'
+        : isTaskFinal ? '已完成' : '运行中'
       statusText = `${tc.name} ${stateLabel}`
     } else {
+      // 多个工具：如果任务未结束，即使所有工具完成也显示"运行中"
       const stateLabel = hasError ? '部分失败' : allDone ? '已完成' : '运行中'
       statusText = `Activity: ${toolCount} tools · ${preview} · ${stateLabel}`
     }
     statusClass = hasError ? 'status-error' : allDone ? 'status-done' : 'status-running'
   } else if (taskStatus) {
-    statusText = taskStatus === 'completed' ? '任务已完成'
-      : taskStatus === 'running' ? '运行中'
-      : taskStatus === 'failed' ? '执行失败'
-      : taskStatus === 'compacting' ? '压缩上下文'
-      : taskStatus === 'auto_compacting' ? '优化上下文'
-      : '处理中'
-    statusClass = `status-${taskStatus}`
+    // 过程状态统一映射到 status-running（蓝点 + 脉冲），最终状态映射到对应颜色
+    const finalStatusText = {
+      completed: '任务已完成',
+      failed: '执行失败',
+      interrupted: '任务已中断',
+      user_aborted: '任务已手动中断',
+    } as const
+    const processStatusText: Partial<Record<TaskStatus, string>> = {
+      starting: '正在思考',
+      calling_tool: '正在调用工具',
+      executing: '执行指令中',
+      using_skill: '正在使用技能',
+      running: '运行中',
+      waiting: '处理中，请稍候',
+      waiting_input: '等待输入',
+      pending: '等待中',
+      queued: '排队中',
+      compacting: '压缩上下文',
+      auto_compacting: '优化上下文',
+      retrying: '正在重试',
+    }
+    const isFinal = taskStatus in finalStatusText
+    statusText = isFinal
+      ? finalStatusText[taskStatus as keyof typeof finalStatusText]
+      : (processStatusText[taskStatus] || '处理中')
+    statusClass = taskStatus === 'completed' ? 'status-completed'
+      : taskStatus === 'failed' || taskStatus === 'interrupted' || taskStatus === 'user_aborted' ? 'status-error'
+      : 'status-running'
   } else {
     statusText = ''
     statusClass = ''
@@ -487,6 +534,8 @@ interface MessageBubbleProps {
   onCopy?: () => void
   onRetry?: () => void
   currentAgentId?: string
+  /** 多段式会话的组内位置信息。不传则每个消息独立渲染（旧行为）。 */
+  groupMeta?: GroupMeta
 }
 
 const GREEK_LETTERS = ['α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω']
@@ -513,13 +562,24 @@ function isSubAgent(agentId: string | undefined, currentAgentId: string | undefi
   return true
 }
 
-const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onRetry, currentAgentId }) => {
+const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onRetry, currentAgentId, groupMeta }) => {
   const isUser = message.role === 'user'
   const isQueued = message.status === 'queued'
   const isStreaming = message.status === 'streaming'
   const isError = message.status === 'error'
   const messageIsSubAgent = isSubAgent(message.agentId, currentAgentId)
   const subAgentInfo = messageIsSubAgent ? getSubAgentInfo(message.agentId!) : null
+
+  // 组位置判定
+  const showSummaryHeader = !groupMeta || groupMeta.position === 'first' || groupMeta.position === 'single'
+  const showFinalHint = !groupMeta || groupMeta.position === 'last' || groupMeta.position === 'single'
+
+  // 汇总条和展开详情都使用聚合数据（整组）
+  const summaryToolCalls = groupMeta ? groupMeta.effectiveToolCalls : undefined
+  const summaryTaskStatus = groupMeta ? groupMeta.effectiveTaskStatus : message.taskStatus
+  // 最终状态提示也使用聚合数据
+  const finalTaskStatus = groupMeta ? groupMeta.effectiveTaskStatus : message.taskStatus
+  const finalErrorHint = groupMeta ? groupMeta.effectiveErrorHint : message.errorHint
 
   const wasStreamingRef = useRef(false)
   const [justFinished, setJustFinished] = useState(false)
@@ -546,10 +606,32 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
   const toolCalls = !isUser
     ? (message.toolCalls?.length ? message.toolCalls : legacySections.toolCalls)
     : []
+  // 展开详情使用聚合 toolCalls（组内首条消息自身可能没有 toolCalls）
+  const expandedToolCalls = summaryToolCalls || toolCalls
   const displayContent = message.content
   const hasInlineImages = !isUser && !isStreaming && displayContent
     ? parseContentWithImages(displayContent).some((segment) => segment.type === 'image')
     : false
+
+  // 判断是否有实际内容需要显示
+  // 最新消息（last）应始终显示活跃状态提示（包括 typing dots），保持在最下方
+  // 单条消息（single）如果有活跃状态提示也应显示
+  const finalStatuses: TaskStatus[] = ['completed', 'failed', 'interrupted', 'user_aborted']
+  const effectiveStatus = groupMeta?.effectiveTaskStatus
+  // 最新消息有活跃状态提示（非最终状态）或 typing dots（无状态）
+  const hasActiveHint = groupMeta?.position === 'last' && (!effectiveStatus || !finalStatuses.includes(effectiveStatus))
+  // 单条消息的活跃状态提示（isStreaming 且无内容）
+  const hasSingleActiveHint = (!groupMeta || groupMeta.position === 'single') && isStreaming && !displayContent && !reasoningText
+  const hasActualContent = isUser
+    || displayContent
+    || hasAttachments
+    || reasoningText
+    || (showSummaryHeader && (expandedToolCalls.length > 0 || summaryTaskStatus))
+    || hasActiveHint
+    || hasSingleActiveHint
+    || (showFinalHint && finalTaskStatus && finalStatuses.includes(finalTaskStatus))
+
+  if (!hasActualContent) return null
 
   return (
     <div className={`message-row ${isUser ? 'user' : 'assistant'}`}>
@@ -565,17 +647,17 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
       <div className={`message-column${isUser ? ' user-message' : ''}`}>
         <div className="message-header">
           {!isUser && <span className="message-nickname">{messageIsSubAgent ? subAgentInfo!.name : '千易'}</span>}
-          {!isUser && (toolCalls.length > 0 || message.taskStatus) && (
+          {!isUser && showSummaryHeader && (toolCalls.length > 0 || message.taskStatus || !!summaryToolCalls?.length || !!summaryTaskStatus) && (
             <TaskStatusSummary
-              toolCalls={toolCalls}
-              taskStatus={message.taskStatus}
+              toolCalls={summaryToolCalls || toolCalls}
+              taskStatus={summaryTaskStatus}
               expanded={taskStatusExpanded}
               onExpandedChange={setTaskStatusExpanded}
             />
           )}
         </div>
-        {taskStatusExpanded && toolCalls.length > 0 && (
-          <TaskStatusExpanded toolCalls={toolCalls} />
+        {taskStatusExpanded && expandedToolCalls.length > 0 && (
+          <TaskStatusExpanded toolCalls={expandedToolCalls} />
         )}
         <div className={`message-bubble ${isUser ? 'message-user' : 'message-assistant'} ${isStreaming ? 'message-bubble-streaming' : ''} ${isError ? 'message-error-bubble' : ''} ${isQueued ? 'message-queued' : ''}`}>
           <div className="message-body">
@@ -585,24 +667,61 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
         )}
 
         {/* Phase 3: 文本内容 / 任务状态主内容展示 */}
-        {!isUser && isStreaming && !displayContent && !reasoningText && (
-          message.taskStatus && !['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus) ? (
-            <div className="message-content message-content-assistant">
-              <TaskStatusHint taskStatus={message.taskStatus} showWithContent={false} errorHint={message.errorHint} />
-            </div>
-          ) : !message.taskStatus ? (
-            <div className="message-content message-content-assistant">
-              <div className="typing-dots">
-                <span className="typing-dot" />
-                <span className="typing-dot" />
-                <span className="typing-dot" />
+        {/* 多段组内：活跃状态提示在最新消息（last）展示，使用组聚合的 effectiveTaskStatus */}
+        {/* 非最新消息不展示活跃提示（已在最新消息展示） */}
+        {!isUser && (() => {
+          const finalStatuses: TaskStatus[] = ['completed', 'failed', 'interrupted', 'user_aborted']
+
+          // 多段组：最新消息展示组的活跃状态
+          if (groupMeta && groupMeta.position !== 'single') {
+            if (groupMeta.position !== 'last') return null
+            const effectiveStatus = groupMeta.effectiveTaskStatus
+            if (effectiveStatus && !finalStatuses.includes(effectiveStatus)) {
+              return (
+                <div className="message-content message-content-assistant">
+                  <TaskStatusHint taskStatus={effectiveStatus} showWithContent={false} errorHint={groupMeta.effectiveErrorHint} />
+                </div>
+              )
+            }
+            if (!effectiveStatus) {
+              return (
+                <div className="message-content message-content-assistant">
+                  <div className="typing-dots">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </div>
+                </div>
+              )
+            }
+            return null
+          }
+
+          // 单条/无组：原始行为
+          if (!isStreaming || displayContent || reasoningText) return null
+          if (message.taskStatus && !finalStatuses.includes(message.taskStatus)) {
+            return (
+              <div className="message-content message-content-assistant">
+                <TaskStatusHint taskStatus={message.taskStatus} showWithContent={false} errorHint={message.errorHint} />
               </div>
-            </div>
-          ) : null
-        )}
-        {/* 最终状态：无论是否有内容都显示 */}
-        {!isUser && ['completed', 'failed', 'interrupted', 'user_aborted'].includes(message.taskStatus || '') && (
-          <TaskStatusHint taskStatus={message.taskStatus} showWithContent={true} errorHint={message.errorHint} />
+            )
+          }
+          if (!message.taskStatus) {
+            return (
+              <div className="message-content message-content-assistant">
+                <div className="typing-dots">
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                </div>
+              </div>
+            )
+          }
+          return null
+        })()}
+        {/* 最终状态：无论是否有内容都显示，但只在组最后一条展示 */}
+        {!isUser && showFinalHint && ['completed', 'failed', 'interrupted', 'user_aborted'].includes(finalTaskStatus || '') && (
+          <TaskStatusHint taskStatus={finalTaskStatus} showWithContent={true} errorHint={finalErrorHint} />
         )}
         {(displayContent || hasAttachments) && (
           <div className={`message-content ${isError ? 'message-error-content' : ''}${hasAttachments ? ' has-attachments' : ''}${!isUser ? ' message-content-assistant' : ''}`}>
@@ -742,4 +861,8 @@ export const MessageBubble = React.memo(MessageBubbleInner, (prev, next) =>
   && prev.message.agentId === next.message.agentId
   && prev.currentAgentId === next.currentAgentId
   && toolCallsEqual(prev.message.toolCalls, next.message.toolCalls)
+  && prev.groupMeta?.position === next.groupMeta?.position
+  && toolCallsEqual(prev.groupMeta?.effectiveToolCalls, next.groupMeta?.effectiveToolCalls)
+  && prev.groupMeta?.effectiveTaskStatus === next.groupMeta?.effectiveTaskStatus
+  && prev.groupMeta?.effectiveErrorHint === next.groupMeta?.effectiveErrorHint
 )
