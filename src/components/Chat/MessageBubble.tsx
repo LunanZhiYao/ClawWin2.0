@@ -39,12 +39,26 @@ function isImageFile(mimeType?: string, fileName?: string): boolean {
 }
 
 function filePathToUrl(filePath: string): string {
-  const normalized = filePath.replace(/\\/g, '/')
-  const encoded = normalized.split('/').map((seg) => encodeURIComponent(seg)).join('/')
-  if (/^[a-zA-Z]:\//.test(normalized)) {
-    return `file:///${encoded.replace('%3A', ':')}`
+  if (!filePath || !filePath.trim()) {
+    console.warn('[filePathToUrl] empty filePath')
+    return ''
   }
-  return `file://${encoded}`
+  const normalized = filePath.replace(/\\/g, '/')
+  // Windows 绝对路径: C:/path 或 C:\path
+  if (/^[a-zA-Z]:[\/\\]/.test(filePath)) {
+    const driveLetter = normalized[0].toUpperCase()
+    const pathPart = normalized.slice(2) // 去掉 "C:"
+    const encodedPath = pathPart.split('/').map((seg) => encodeURIComponent(seg)).join('/')
+    return `file:///${driveLetter}:${encodedPath}`
+  }
+  // Unix/Linux 绝对路径: /path
+  if (normalized.startsWith('/')) {
+    const encoded = normalized.split('/').map((seg) => encodeURIComponent(seg)).join('/')
+    return `file://${encoded}`
+  }
+  // 相对路径或其他：不转换，返回空避免无效 URL
+  console.warn('[filePathToUrl] unsupported path format:', filePath)
+  return ''
 }
 
 function stripLegacyTag(line: string): string {
@@ -396,7 +410,7 @@ const TaskStatusHint: React.FC<{ taskStatus?: TaskStatus; showWithContent?: bool
     auto_compacting: '✨ 让我先整理一下内容~',
     completed: '任务已完成',
     retrying: '遇到点小问题，正在重试',
-    interrupted: '信息流异常，已暂停任务',
+    interrupted: '信息流正在加载，请稍等',
     failed: '执行失败了，要不要重试一下？',
     user_aborted: '任务已手动中断',
 }
@@ -731,11 +745,20 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
                   const image = isImageFile(attachment.mimeType, attachment.fileName)
 
                   if (image) {
-                    const imgSrc = attachment.content && attachment.mimeType
-                      ? `data:${attachment.mimeType};base64,${attachment.content}`
-                      : attachment.content
-                        ? `data:image/png;base64,${attachment.content}`
-                        : filePathToUrl(attachment.filePath)
+                    // 优先使用 base64 内容，其次使用文件路径
+                    let imgSrc = ''
+                    if (attachment.content && attachment.mimeType) {
+                      imgSrc = `data:${attachment.mimeType};base64,${attachment.content}`
+                    } else if (attachment.content) {
+                      imgSrc = `data:image/png;base64,${attachment.content}`
+                    } else {
+                      imgSrc = filePathToUrl(attachment.filePath)
+                    }
+                    // 如果没有有效的 src，不渲染图片
+                    if (!imgSrc) {
+                      console.warn('[MessageBubble] no valid imgSrc for attachment:', attachment.fileName)
+                      return null
+                    }
                     return (
                       <img
                         key={index}
@@ -773,10 +796,16 @@ const MessageBubbleInner: React.FC<MessageBubbleProps> = ({ message, onCopy, onR
                   hasInlineImages && !isStreaming ? (
                     parseContentWithImages(displayContent).map((segment, index) => {
                       if (segment.type === 'image') {
+                        const imgSrc = filePathToUrl(segment.value)
+                        // 如果没有有效的 src，不渲染图片
+                        if (!imgSrc) {
+                          console.warn('[MessageBubble] no valid imgSrc for inline image:', segment.value)
+                          return null
+                        }
                         return (
                           <img
                             key={`inline-img-${index}`}
-                            src={filePathToUrl(segment.value)}
+                            src={imgSrc}
                             alt="screenshot"
                             className="message-inline-screenshot"
                             onClick={() => handleFileClick(segment.value)}
