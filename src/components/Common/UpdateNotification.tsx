@@ -4,7 +4,6 @@ import type { UpdateInfo, DownloadProgress } from '../../types'
 interface UpdateNotificationProps {
   info: UpdateInfo
   onClose: () => void
-  onBackground?: () => void
   /** 从后台恢复时，直接进入指定阶段 */
   initialStage?: 'prompt' | 'done'
 }
@@ -20,7 +19,7 @@ function formatSpeed(bytesPerSec: number): string {
   return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`
 }
 
-export function UpdateNotification({ info, onClose, onBackground, initialStage }: UpdateNotificationProps) {
+export function UpdateNotification({ info, onClose, initialStage }: UpdateNotificationProps) {
   const [stage, setStage] = useState<'prompt' | 'downloading' | 'done' | 'error'>(initialStage ?? 'prompt')
   const [progress, setProgress] = useState<DownloadProgress>({ percent: 0, transferredBytes: 0, totalBytes: 0 })
   const [speed, setSpeed] = useState(0)
@@ -92,23 +91,13 @@ export function UpdateNotification({ info, onClose, onBackground, initialStage }
     }
   }
 
-  const handleCancel = async () => {
-    try { await window.electronAPI.app.cancelDownload() } catch { /* ignore */ }
-    onClose()
-  }
-
   const handleInstall = async () => {
     try {
       await window.electronAPI.app.installUpdate()
     } catch {
-      setErrorMsg('启动安装程序失败，请到临时目录手动运行安装包')
+      setErrorMsg('启动安装程序失败，请到下载目录手动运行安装包')
       setStage('error')
     }
-  }
-
-  const handleBackgroundDownload = () => {
-    // 保持下载继续，只关闭弹窗
-    onBackground?.()
   }
 
   return (
@@ -162,12 +151,6 @@ export function UpdateNotification({ info, onClose, onBackground, initialStage }
                 {speed > 0 && ` — ${formatSpeed(speed)}`}
               </p>
             </div>
-            <div className="update-dialog-actions">
-              <button className="btn-secondary" onClick={handleCancel}>取消下载</button>
-              {onBackground && (
-                <button className="btn-secondary" onClick={handleBackgroundDownload}>后台下载</button>
-              )}
-            </div>
           </>
         )}
 
@@ -178,7 +161,7 @@ export function UpdateNotification({ info, onClose, onBackground, initialStage }
               <p className="update-hint-text">安装过程中应用将自动关闭</p>
             </div>
             <div className="update-dialog-actions">
-              <button className="btn-secondary" onClick={onClose}>稍后安装</button>
+              <button className="btn-secondary" onClick={() => window.electronAPI.shell.openPath('')}>打开下载目录</button>
               <button className="btn-update" onClick={handleInstall}>立即安装</button>
             </div>
           </>

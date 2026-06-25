@@ -2232,17 +2232,6 @@ function App() {
           info={updateInfo}
           initialStage={bgDownloadDone ? 'done' : 'prompt'}
           onClose={() => { setUpdateDialogVisible(false); setUpdateInfo(null); setBgDownloadDone(false) }}
-          onBackground={() => {
-            setUpdateDialogVisible(false)
-            // 下载继续在后台进行，监听完成事件
-            const unsub = window.electronAPI.app.onDownloadProgress((p: { percent: number; transferredBytes: number; totalBytes: number }) => {
-              if (p.percent >= 100) {
-                unsub()
-                setBgDownloadDone(true)
-                setUpdateDialogVisible(true)
-              }
-            })
-          }}
         />
       )}
 

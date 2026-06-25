@@ -540,8 +540,10 @@ function setupIPC() {
   // Open path in file explorer or with default app
   ipcMain.handle('shell:openPath', (_event, folderPath: string) => {
     try {
-      // Expand ~ to home directory on all platforms
-      const resolved = folderPath.replace(/^~/, os.homedir())
+      // 空路径 → 打开系统下载目录
+      const resolved = folderPath
+        ? folderPath.replace(/^~/, os.homedir())
+        : app.getPath('downloads')
       // Only mkdir for paths that don't exist and look like directories (no extension)
       if (!fs.existsSync(resolved)) {
         const hasExt = /\.[^/\\]+$/.test(resolved)
