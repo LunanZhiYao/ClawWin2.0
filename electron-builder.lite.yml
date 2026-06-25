@@ -1,0 +1,41 @@
+appId: cn.openclaw.desktop
+productName: "鲁南千易"
+copyright: Copyright © 2026 鲁南制药集团股份有限公司
+directories:
+  output: release
+  buildResources: assets
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - electron/screenshot.html
+
+# 精简(覆盖升级)安装包：不打包 bundled/ 下的 node、openclaw、agent-browser
+# 这些目录体积大且极少变化，覆盖安装时通过 installer-upgrade.nsh 备份/还原保留
+extraResources:
+  - from: assets/icon.ico
+    to: assets/icon.ico
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/icon.ico
+  artifactName: "LunanQianyi-Upgrade-${version}.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerHeaderIcon: assets/icon.ico
+  language: "2052"
+  include: installer/installer-upgrade.nsh
+  perMachine: false
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "鲁南千易"
+  runAfterFinish: true
+  allowElevation: false
