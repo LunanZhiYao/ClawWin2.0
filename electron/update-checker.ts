@@ -10,6 +10,8 @@ const MAX_REDIRECTS = 5
 const CONNECT_TIMEOUT = 10_000
 const DATA_TIMEOUT = 30_000
 
+export type UpdateType = 'full' | 'lite'
+
 export interface UpdateInfo {
   version: string
   releaseNotes: string
@@ -17,6 +19,8 @@ export interface UpdateInfo {
   fileName: string
   /** 服务端强制更新（must_* 或 force_update） */
   forceUpdate?: boolean
+  /** 更新包类型：full=完整包(含 bundled)，lite=轻量包(仅程序文件) */
+  updateType?: UpdateType
 }
 
 export interface DownloadProgress {
@@ -115,20 +119,12 @@ function isForceFlag(v: unknown): boolean {
 }
 
 function pickExeUrl(exe64: unknown, exe32: unknown): string {
-  const a = typeof exe64 === 'string' ? exe64.trim() : ''
-  const b = typeof exe32 === 'string' ? exe32.trim() : ''
+  const clean = (v: unknown) => typeof v === 'string' ? v.trim().replace(/`/g, '').trim() : ''
+  const a = clean(exe64)
+  const b = clean(exe32)
   if (a) return a
   if (b) return b
   return ''
-}
-
-function fileNameFromDownloadUrl(downloadUrl: string): string {
-  try {
-    const base = path.basename(new URL(downloadUrl).pathname)
-    return base || 'ClawWin-Update.exe'
-  } catch {
-    return 'ClawWin-Update.exe'
-  }
 }
 
 function matchVersionOk(matchVersion: unknown, currentVersion: string): boolean {
@@ -156,14 +152,16 @@ function buildUpdateFromPayload(
   remark: unknown,
   downloadUrl: string,
   force: boolean,
+  updateType: UpdateType,
 ): UpdateInfo {
   const url = normalizeDownloadUrl(downloadUrl)
   return {
     version,
     releaseNotes: typeof remark === 'string' ? remark : '',
     downloadUrl: url,
-    fileName: fileNameFromDownloadUrl(url),
+    fileName: `LunanQianyi-${updateType === 'full' ? 'Setup' : 'Upgrade'}-${version}.exe`,
     forceUpdate: force,
+    updateType,
   }
 }
 
@@ -214,20 +212,21 @@ export async function checkForUpdate(accessToken: string | null): Promise<Update
 
   const mustVer = typeof d.must_version_code === 'string' ? d.must_version_code.trim() : ''
   const ver = typeof d.version_code === 'string' ? d.version_code.trim() : ''
+  const mustExeUrl = pickExeUrl(d.must_exe_path, d.must_exe_path_32)
   const exeUrl = pickExeUrl(d.exe_path, d.exe_path_32)
 
-  // 如果当前版本低于 must_version_code，强制更新到最新版本（version_code）
+  // 1. 当前版本低于必升级版本 → 强制更新，用 must_exe_path（完整包）
   if (mustVer && isNewer(mustVer, currentVersion)) {
-    if (ver && exeUrl) {
-      console.log('[update] force update to latest:', ver, '(must threshold:', mustVer, ')')
-      return buildUpdateFromPayload(ver, d.remark, exeUrl, true)
+    if (mustExeUrl) {
+      console.log('[update] force update (full) to must version:', mustVer)
+      return buildUpdateFromPayload(mustVer, d.must_remark, mustExeUrl, true, 'full')
     }
   }
 
-  // 否则如果有非强制更新，提示更新至最新版本
+  // 2. 已达必升级版本，且有更新版本 → 可选更新，用 exe_path（轻量包）
   if (ver && exeUrl && isNewer(ver, currentVersion)) {
-    console.log('[update] optional update:', ver)
-    return buildUpdateFromPayload(ver, d.remark, exeUrl, isForceFlag(d.force_update))
+    console.log('[update] optional update (lite):', ver)
+    return buildUpdateFromPayload(ver, d.remark, exeUrl, isForceFlag(d.force_update), 'lite')
   }
 
   return null
@@ -244,7 +243,9 @@ export async function downloadUpdate(
   cancelled = false
   activeReq = null
 
-  const destPath = path.join(app.getPath('temp'), fileName)
+  // 下载到系统下载目录，方便用户找到安装包
+  const downloadDir = app.getPath('downloads')
+  const destPath = path.join(downloadDir, fileName)
   const url = normalizeDownloadUrl(downloadUrl)
 
   // 断点续传：读取已下载的字节数

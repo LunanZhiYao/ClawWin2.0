@@ -129,6 +129,8 @@ export function UpdateNotification({ info, onClose, onBackground, initialStage }
               <p className="update-version">
                 v{info.version}
                 {currentVersion && <span className="update-current-version">当前 v{currentVersion}</span>}
+                {info.updateType === 'lite' && <span className="update-type-badge lite">轻量更新</span>}
+                {info.updateType === 'full' && <span className="update-type-badge full">完整更新</span>}
               </p>
               {info.releaseNotes && (
                 <div className="update-notes">

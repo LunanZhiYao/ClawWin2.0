@@ -168,6 +168,8 @@ interface ElectronAuth {
   clearRuntimeAccessToken: () => Promise<{ ok: boolean; error?: string }>
 }
 
+export type UpdateType = 'full' | 'lite'
+
 export interface UpdateInfo {
   version: string
   releaseNotes: string
@@ -175,6 +177,8 @@ export interface UpdateInfo {
   fileName: string
   /** 服务端强制更新 */
   forceUpdate?: boolean
+  /** 更新包类型：full=完整包(含 bundled)，lite=轻量包(仅程序文件) */
+  updateType?: UpdateType
 }
 
 export interface DownloadProgress {
