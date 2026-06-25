@@ -170,7 +170,11 @@ const BottomInput: React.FC<BottomInputProps> = ({
         previewUrl = URL.createObjectURL(file)
         content = await new Promise<string>((resolve) => {
           const reader = new FileReader()
-          reader.onload = () => resolve(reader.result as string)
+          reader.onload = () => {
+            const result = reader.result as string
+            // 剥离 data URL 前缀，只保留纯 base64，避免与 MessageBubble 拼接时产生双重前缀
+            resolve(result.split(',')[1] || '')
+          }
           reader.readAsDataURL(file)
         })
       }
@@ -720,7 +724,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         previewUrl = URL.createObjectURL(file)
         content = await new Promise<string>((resolve) => {
           const reader = new FileReader()
-          reader.onload = () => resolve(reader.result as string)
+          reader.onload = () => {
+            const result = reader.result as string
+            // 剥离 data URL 前缀，只保留纯 base64，避免与 MessageBubble 拼接时产生双重前缀
+            resolve(result.split(',')[1] || '')
+          }
           reader.readAsDataURL(file)
         })
       }
