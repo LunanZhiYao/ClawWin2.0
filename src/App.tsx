@@ -405,6 +405,9 @@ function App() {
   const sendContinueSilentlyRef = useRef<(() => void) | null>(null)
   const isStreamingRef = useRef(false)
   const isRecoveringRef = useRef(false)
+  // 工具执行失败后自动继续的重试计数（per session），防止死循环
+  const toolFailureRetryCountRef = useRef<Map<string, number>>(new Map())
+  const MAX_TOOL_FAILURE_RETRIES = 3
 
   const startTimeoutTimer = useCallback(() => {
     if (timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current)
@@ -871,9 +874,16 @@ function App() {
 
       // 仅在终态消息时停止 waiting，避免工具调用阶段停止按钮/加载态提前消失
       if (msg.status === 'done' || msg.status === 'error') {
-        stopWaiting()
-        stopTimeoutTimer()
-        void refreshSessionUsageRef.current(sid, msg.status === 'done')
+        // taskStatus='interrupted'（LLM 超时/网关中断）时：不停止超时定时器，
+        // 让超时重试机制介入自动发"继续"。否则定时器被清掉，超时重试永远不触发。
+        const isInterrupted = msg.taskStatus === 'interrupted'
+        if (isInterrupted) {
+          console.log('[app] onMessageStream: taskStatus=interrupted, keeping timeout timer alive for auto-retry', { sid, msgId: msg.id })
+        } else {
+          stopWaiting()
+          stopTimeoutTimer()
+        }
+        void refreshSessionUsageRef.current(sid, msg.status === 'done' && !isInterrupted)
         if (msg.status === 'done') {
           const prevTimer = usageSyncTimerBySessionRef.current.get(sid)
           if (prevTimer) {
@@ -887,7 +897,8 @@ function App() {
           usageSyncTimerBySessionRef.current.set(sid, timer)
           // 超时重试场景下不触发小工具完成提示
           // 过滤后台任务（memory 插件的 L1/L2/L3 提取任务等），避免后台任务输出显示在小工具弹窗
-          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'retrying' && !isBackgroundTaskMessage(msg)) {
+          // interrupted（LLM 超时/中断）也不触发完成提示，因为任务还没完成
+          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'retrying' && msg.taskStatus !== 'interrupted' && !isBackgroundTaskMessage(msg)) {
             widgetTaskCompleteRef.current(true, msg.content || '任务已完成')
           }
         } else if (msg.status === 'error') {
@@ -1170,6 +1181,28 @@ function App() {
     }
   }, [])
 
+  // 工具执行失败后自动发"继续"，让 agent 看到错误结果并换方式重试
+  ws.onToolFailure.current = useCallback((sessionKey?: string, errorMessage?: string) => {
+    if (!sessionKey) return
+    const sessionId = sessionKey.includes(':') ? sessionKey.split(':').pop()! : sessionKey
+    const count = toolFailureRetryCountRef.current.get(sessionId) ?? 0
+    if (count >= MAX_TOOL_FAILURE_RETRIES) {
+      console.log('[app] tool failure retry limit reached, stop auto-continue', { sessionId, count })
+      return
+    }
+    toolFailureRetryCountRef.current.set(sessionId, count + 1)
+    console.log('[app] tool failure: auto-continue', { sessionId, retryCount: count + 1, errorMessage: errorMessage?.slice(0, 100) })
+    // 延迟 1.5 秒发"继续"，给网关清理上一轮 run 的时间
+    setTimeout(() => {
+      const session = sessionsRef.current?.find((s) => s.id === sessionId)
+      if (!session) return
+      if (!ws.connected || gateway.state !== 'ready') return
+      void ws.sendMessage(sessionId, '继续', undefined, session.agentId, session.modelOverride).then((ack) => {
+        registerRunBinding(ack, sessionId, undefined)
+      })
+    }, 1500)
+  }, [ws, gateway.state, registerRunBinding])
+
   // 兜底路径：若已出现上下文溢出错误，立即尝试自动压缩一次
   ws.onContextOverflow.current = useCallback((sessionId?: string) => {
     const sid = sessionId || activeSessionIdRef.current
@@ -1431,6 +1464,9 @@ function App() {
       const sendSession = sessionsRef.current.find((s) => s.id === activeSessionId)
       const isFirstMessage = sendSession?.messages.length === 0
       dispatch({ type: 'SEND_USER_MESSAGE', sessionId: activeSessionId, message: userMsg, title: isFirstMessage ? title : undefined })
+
+      // 用户手动发新消息时重置工具失败重试计数
+      toolFailureRetryCountRef.current.delete(activeSessionId)
 
       // 只在空闲时才显示等待指示器，避免空白气泡
       if (!isAiBusy) {

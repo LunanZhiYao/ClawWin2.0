@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { GatewayClient, type GatewayEventFrame, type GatewayHelloOk } from '../lib/gateway-protocol'
-import type { ChatMessage, ChatAttachment, ChatToolCall, AgentInfo } from '../types'
+import type { ChatMessage, ChatAttachment, ChatToolCall, AgentInfo, TaskStatus } from '../types'
 import { sendTelemetryEvent, type TelemetryAttachmentMeta } from '../api/telemetry'
 
 interface UseWebSocketOptions {
@@ -34,6 +34,8 @@ interface UseWebSocketReturn {
   onCompactionEnd: React.MutableRefObject<((sessionKey?: string) => void) | null>
   onStreamStart: React.MutableRefObject<(() => void) | null>
   onBackendDisconnected: React.MutableRefObject<((reason: string) => void) | null>
+  /** 工具执行失败（final 之后到达的 error）时触发，App 可据此自动发"继续"让 agent 换方式 */
+  onToolFailure: React.MutableRefObject<((sessionKey?: string, errorMessage?: string) => void) | null>
   patchSessionModel: (sessionKey: string, model: string | null, agentId?: string) => Promise<void>
   sendModelDirective: (sessionKey: string, modelKey: string, agentId?: string) => Promise<void>
   getSessionTokenUsage: (sessionKey: string, agentId?: string) => Promise<{ input: number; output: number; contextWindow?: number; hasActiveRun?: boolean } | null>
@@ -301,6 +303,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const clientRef = useRef<GatewayClient | null>(null)
   const onMessageStream = useRef<((msg: ChatMessage) => void) | null>(null)
   const onBackendDisconnected = useRef<((reason: string) => void) | null>(null)
+  const onToolFailure = useRef<((sessionKey?: string, errorMessage?: string) => void) | null>(null)
   const healthCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastHealthCheckRef = useRef<number>(Date.now())
   const HEALTH_CHECK_INTERVAL = 30000
@@ -718,6 +721,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           for (const key of ['result', 'output', 'content', 'text', 'response', 'stdout']) {
             const val = data[key]
             if (typeof val === 'string' && val) { result = redactSensitiveText(val); break }
+          }
+          if (isError) {
+            // agent 在 run 内工具失败，会自行决定换方式重试（OpenClaw 模型自主模式）
+            console.log('[ws] ★ 工具执行失败，agent 将自行决定下一步（换方式/重试/放弃）:', { name, sessionKey: agentSessionKey, error: (data.error as string)?.slice(0, 120) || result?.slice(0, 120) })
+            setBackendStatus(`⚠️ ${name} 执行失败，等待 agent 决定下一步...`)
           }
           // 更新最后一个 running 状态的工具调用
           const buf = toolCallsBufferRef.current
@@ -1285,12 +1293,15 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       }
 
       // taskStatus 决策：
-      // - 工具调用失败但 agent 有回复 → 'completed'（不显示"执行失败了"提示）
-      // - 任务完全失败（无 agent 回复且无工具调用）→ 'failed'（显示"执行失败了"提示）
-      // - 正常完成 → 'completed'
+      // - stopReason='aborted'（LLM 超时/网关中断）→ 'interrupted'（不显示"已完成"）
+      // - 有 agent 回复或工具调用 → 'completed'
+      // - 完全失败（无回复且无工具调用）→ 'failed'
+      const stopReason = payload.stopReason as string | undefined
       const hasAgentReply = text && text.trim().length > 0
       const hasToolCalls = toolCallsBufferRef.current.length > 0
-      const taskStatus: 'completed' | 'failed' = hasAgentReply || hasToolCalls ? 'completed' : 'failed'
+      const taskStatus: TaskStatus = stopReason === 'aborted'
+        ? 'interrupted'
+        : (hasAgentReply || hasToolCalls ? 'completed' : 'failed')
 
       const msg: ChatMessage = {
         id: msgId,
@@ -1349,9 +1360,18 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 如果该 runId 已经收到 final 事件，则跳过 error 事件的消息推送
       // 避免工具执行失败的错误消息覆盖 agent 的正常回复
       if (finalRunIdsRef.current.has(runId)) {
-        console.log('[ws] error event skipped: runId already finalized', { runId, sessionKey })
+        const isContextOverflow = isContextOverflowText(rawErrorMsg)
+        if (isContextOverflow) {
+          // 上下文溢出：不自动继续（继续会更糟），仅提示
+          console.log('[ws] context overflow after final, not auto-continuing', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120) })
+          setBackendStatus(`上下文溢出，请压缩或清理会话：${errorMessage}`)
+        } else {
+          // 其他错误（工具失败、LLM 超时、provider 错误等）：不吞错，通知 App 自动继续
+          console.log('[ws] ★ post-final error (not swallowed), notifying App to auto-continue', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120) })
+          setBackendStatus(`⚠️ ${errorMessage}，正在尝试继续...`)
+          onToolFailure.current?.(sessionKey, rawErrorMsg)
+        }
         cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
-        // 清理 finalRunIdsRef 中的 runId，防止无限增长
         finalRunIdsRef.current.delete(runId)
         return
       }
@@ -1991,5 +2011,5 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     clientRef.current?.clearOfflineQueue()
   }, [])
 
-  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onRunEnd, onSessionUsageUpdate, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current, clearOfflineQueue }
+  return { connected, hello, agents, defaultAgentId, sendMessage, abortSession, isStreaming, backendStatus, backendHealthy, onMessageStream, onFinalUsage, onRunEnd, onSessionUsageUpdate, onContextOverflow, onCompactionEnd, onStreamStart, onBackendDisconnected, onToolFailure, patchSessionModel, sendModelDirective, getSessionTokenUsage, reconnect, refreshAgents, client: clientRef.current, clearOfflineQueue }
 }
