@@ -113,14 +113,16 @@ function cleanupStreamBuffers(
   idleCountRef: React.MutableRefObject<Map<string, number>>,
   streamBufferRef: React.MutableRefObject<Map<string, string>>,
   thinkingBufferRef: React.MutableRefObject<Map<string, string>>,
-  setStreamingCount: React.Dispatch<React.SetStateAction<number>>,
+  setStreamingCount: (updater: number | ((prev: number) => number)) => void,
 ) {
   const timer = streamThrottleRef.current.get(runId)
   if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
   lastPushedLenRef.current.delete(runId)
   idleCountRef.current.delete(runId)
   thinkingBufferRef.current.delete(runId)
-  if (streamBufferRef.current.delete(runId)) setStreamingCount((c) => Math.max(0, c - 1))
+  const hadStream = streamBufferRef.current.delete(runId)
+  const hadThinking = thinkingBufferRef.current.delete(runId)
+  if (hadStream || hadThinking) setStreamingCount((c: number) => Math.max(0, c - 1))
 }
 
 function resetActiveRunState(
@@ -298,6 +300,14 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const [defaultAgentId, setDefaultAgentId] = useState('main')
   const [streamingCount, setStreamingCount] = useState(0)
   const isStreaming = streamingCount > 0
+  const streamingCountRef = useRef(0)
+  const syncStreamingCount = useCallback((updater: number | ((prev: number) => number)) => {
+    setStreamingCount((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      streamingCountRef.current = Math.max(0, next)
+      return streamingCountRef.current
+    })
+  }, [])
   const [backendStatus, setBackendStatus] = useState('')
   const [backendHealthy, setBackendHealthy] = useState(true)
   const clientRef = useRef<GatewayClient | null>(null)
@@ -511,7 +521,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       onClose: (info) => {
         console.log('[ws] connection closed:', info.code, info.reason)
         setConnected(false)
-        setStreamingCount(0)
+        syncStreamingCount(0)
         setBackendHealthy(false)
         const reason = info.reason || `连接关闭 (code: ${info.code})`
         onBackendDisconnected.current?.(reason)
@@ -528,7 +538,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     const healthCheckTimer = setInterval(() => {
       const now = Date.now()
       const timeSinceLastCheck = now - lastHealthCheckRef.current
-      if (timeSinceLastCheck > HEALTH_CHECK_TIMEOUT && streamingCount > 0) {
+      if (timeSinceLastCheck > HEALTH_CHECK_TIMEOUT && streamingCountRef.current > 0) {
         console.warn('[ws] backend health check timeout, marking unhealthy')
         setBackendHealthy(false)
         onBackendDisconnected.current?.('后端响应超时，可能已中断')
@@ -789,7 +799,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             agentLifecycleRunIdRef.current = agentRunId
           }
           // 通知 App 层 agent 活动已开始，清除等待动画
-          setStreamingCount((c) => c + 1)
+          syncStreamingCount((c) => c + 1)
           onStreamStart.current?.()
           setBackendStatus('思考中...')
           if (agentRunId) {
@@ -815,7 +825,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           phaseRef.current = 'idle'
           setBackendStatus('')
           // agent 活动结束时减少 streamingCount
-          setStreamingCount((c) => Math.max(0, c - 1))
+          syncStreamingCount((c) => Math.max(0, c - 1))
         }
       } else if (stream === 'compaction') {
         if (phase === 'start') {
@@ -823,7 +833,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           setBackendStatus('正在压缩上下文...')
           const runId = agentRunId || activeRunIdRef.current || generateId()
           activeRunIdRef.current = runId
-          setStreamingCount((c) => c + 1)
+          syncStreamingCount((c) => c + 1)
           console.log('[ws] compaction.start: runId=', runId, 'agentRunId=', agentRunId, 'activeRunIdRef=', runId)
           onMessageStream.current?.({
             id: runId,
@@ -843,7 +853,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           const runId = agentRunId || activeRunIdRef.current
           console.log('[ws] compaction.end: runId=', runId, 'activeRunIdRef=', activeRunIdRef.current)
           if (runId) {
-            setStreamingCount((c) => Math.max(0, c - 1))
+            syncStreamingCount((c) => Math.max(0, c - 1))
             onMessageStream.current?.({
               id: runId,
               role: 'assistant',
@@ -968,7 +978,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         streamBufferRef.current.set(runId, accumulated)
 
         if (isNew) {
-          setStreamingCount((c) => c + 1)
+          syncStreamingCount((c) => c + 1)
           activeRunIdRef.current = runId
         }
 
@@ -1098,7 +1108,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                       has_tool_calls: toolCallsBufferRef.current.length > 0,
                     },
                   })
-                  cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
+                  cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
                   const m: ChatMessage = {
                     id: runId,
                     role: 'assistant',
@@ -1131,7 +1141,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         // 只有思维内容，还没有正文，也推送消息让气泡出现
         const isNew = !streamThrottleRef.current.has(runId)
         if (isNew) {
-          setStreamingCount((c) => c + 1)
+          syncStreamingCount((c) => c + 1)
           activeRunIdRef.current = runId
           // 推送一个只有 thinking 的消息
           const thinkingText = thinkingBufferRef.current.get(runId) || ''
@@ -1184,7 +1194,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                       thinking_length: thinkingNow.length,
                     },
                   })
-                  cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
+                  cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
                   const m: ChatMessage = {
                     id: runId,
                     role: 'assistant',
@@ -1270,7 +1280,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 修复: 当只有 thinking delta (无 text delta) 时，streamBuffer 未设置
       // 但 streamingCount 已在 thinking 分支中递增，需要同步递减
       // 同时确保 /compact 命令响应也能正确减少 streamingCount
-      if (hadStream || hadTimer || isCompactResponse) setStreamingCount((c) => Math.max(0, c - 1))
+      if (hadStream || hadTimer || isCompactResponse) syncStreamingCount((c) => Math.max(0, c - 1))
 
       // 空内容不创建消息，避免空白气泡（但有工具调用时仍然推送）
       // 例外：如果是对 /compact 命令的响应，则创建压缩完成消息
@@ -1371,7 +1381,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           setBackendStatus(`⚠️ ${errorMessage}，正在尝试继续...`)
           onToolFailure.current?.(sessionKey, rawErrorMsg)
         }
-        cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
+        cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
         finalRunIdsRef.current.delete(runId)
         return
       }
@@ -1433,7 +1443,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         msgTaskStatus = 'failed'
       }
 
-      cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
+      cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
 
       const msg: ChatMessage = {
         id: runId,
@@ -1463,28 +1473,37 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 保留 agentLifecycleRunIdRef，以便后续 final 事件能正确替换 error 创建的消息。
       // 对齐官方 UI：error 后 final 仍会处理，显示 agent 完整回复 + 工具调用。
       activeRunIdRef.current = null
-      // 保留 agentLifecycleRunIdRef，final 处理器会用它作为消息 ID
-      // phaseRef.current = 'idle' // 保留 phase，避免 final 处理器误判状态
-      committedSegmentRunIdsRef.current.clear()
-      lastSegmentAccumulatedTextRef.current = null
+      // W13: do NOT clear committedSegmentRunIdsRef/lastSegmentAccumulatedTextRef here
+      // so that subsequent final event can correctly deduplicate segment text
 
       if (isErrorOverflow) {
         console.log('[溢出] error 阶段触发 onContextOverflow 回调:', sessionKey)
         onContextOverflow.current?.(sessionKey)
       }
-      // 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟
-      onRunEnd.current?.(sessionKey)
+      // W7: do not call onRunEnd in error handler, final event will do it
     } else if (state === 'aborted') {
+      // W8: skip if already finalized
+      if (finalRunIdsRef.current.has(runId)) {
+        console.log('[ws] aborted event skipped: runId already finalized', { runId, sessionKey })
+        cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
+        finalRunIdsRef.current.delete(runId)
+        return
+      }
       setBackendStatus('')
+      // W5: read and reset abort flags to prevent cross-run leakage
+      const wasFrontendTimeout = isFrontendTimeoutRef.current
+      const wasAutoAbort = isAutoAbortRef.current
+      isFrontendTimeoutRef.current = false
+      isAutoAbortRef.current = false
       let text: string
-      if (isFrontendTimeoutRef.current) {
+      if (wasFrontendTimeout) {
         text = '抱歉让你久等了，我接着完成'
-      } else if (isAutoAbortRef.current) {
+      } else if (wasAutoAbort) {
         text = redactSensitiveText(streamBufferRef.current.get(runId) || '')
       } else {
         text = `${redactSensitiveText(streamBufferRef.current.get(runId) || '')}任务已中断`
       }
-      cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
+      cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
 
       const msg: ChatMessage = {
         id: runId,
@@ -1493,7 +1512,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
         timestamp: Date.now(),
         status: 'done',
-        taskStatus: isFrontendTimeoutRef.current ? 'retrying' : 'user_aborted',
+        taskStatus: wasFrontendTimeout ? 'retrying' : 'user_aborted',
         agentId: chatAgentId,
         sessionKey,
       }
@@ -1512,9 +1531,16 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 对齐官方 UI：run 结束时立即通知 App 清除 hasActiveRun，避免等待 sessions.list 轮询延迟
       onRunEnd.current?.(sessionKey)
     } else if (state === 'terminated') {
+      // W8: skip if already finalized
+      if (finalRunIdsRef.current.has(runId)) {
+        console.log('[ws] terminated event skipped: runId already finalized', { runId, sessionKey })
+        cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
+        finalRunIdsRef.current.delete(runId)
+        return
+      }
       setBackendStatus('')
       const buffered = redactSensitiveText(streamBufferRef.current.get(runId) || '')
-      cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, setStreamingCount)
+      cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
 
       const terminateReason = String(payload.errorMessage ?? payload.reason ?? '').toLowerCase()
       const isTerminateOverflow = isContextOverflowText(terminateReason) || isContextOverflowText(buffered)
@@ -1634,7 +1660,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     // 特殊处理 /compact 命令：立即创建"正在压缩..."的消息气泡
     if (content.trim().startsWith('/compact')) {
       console.log('[溢出] 发送 /compact 命令，创建压缩进度消息气泡')
-      setStreamingCount((c) => c + 1)
+      syncStreamingCount((c) => c + 1)
       compactMessageIdRef.current = idempotencyKey
       const compactMsg: ChatMessage = {
         id: idempotencyKey,
@@ -1772,7 +1798,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         abortParams.agentId = agentId
       }
       await client.request('chat.abort', abortParams)
-      setStreamingCount(0)
+      syncStreamingCount(0)
       streamBufferRef.current.clear()
       thinkingBufferRef.current.clear()
       toolCallsBufferRef.current = []
@@ -1799,7 +1825,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       console.error('[ws] chat.abort failed:', err)
       // 监听场景：chat.abort 请求执行失败
       const errorMessage = err instanceof Error ? err.message : String(err)
-      setStreamingCount(0)
+      syncStreamingCount(0)
       streamBufferRef.current.clear()
       thinkingBufferRef.current.clear()
       toolCallsBufferRef.current = []

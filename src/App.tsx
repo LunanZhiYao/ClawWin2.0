@@ -404,10 +404,11 @@ function App() {
   const DEFAULT_TIMEOUT = 10 * 60 * 1000
   const sendContinueSilentlyRef = useRef<(() => void) | null>(null)
   const isStreamingRef = useRef(false)
+  // A3 fix: isRecoveringRef now acts as a real mutex for auto-continue
   const isRecoveringRef = useRef(false)
-  // 工具执行失败后自动继续的重试计数（per session），防止死循环
-  const toolFailureRetryCountRef = useRef<Map<string, number>>(new Map())
-  const MAX_TOOL_FAILURE_RETRIES = 3
+  // 工具执行失败/LLM超时后自动继续的重试计数（per session），防止死循环
+  const autoRetryCountRef = useRef<Map<string, number>>(new Map())
+  const MAX_AUTO_RETRIES = 3
 
   const startTimeoutTimer = useCallback(() => {
     if (timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current)
@@ -416,7 +417,19 @@ function App() {
     timeoutTimerRef.current = setTimeout(async () => {
       console.log('[app] timeout triggered after', actualTimeout, 'ms')
       const sid = activeSessionIdRef.current
-      if (sid && isStreamingRef.current) {
+      if (!sid) return
+      // A4 fix: check retry limit to prevent infinite loop
+      const retryCount = autoRetryCountRef.current.get(sid) ?? 0
+      if (retryCount >= MAX_AUTO_RETRIES) {
+        console.log('[app] timeout: max retries reached, stop auto-continue', { sid, retryCount })
+        return
+      }
+      // A3 fix: check isRecoveringRef mutex
+      if (isRecoveringRef.current) {
+        console.log('[app] timeout: already recovering, skip')
+        return
+      }
+      if (isStreamingRef.current) {
         const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
         console.log('[app] timeout: session=', session?.id, 'agentId=', session?.agentId, 'isStreaming=', isStreamingRef.current)
         try {
@@ -425,7 +438,8 @@ function App() {
           console.warn('[app] timeout abort failed:', err)
         }
         dispatch({ type: 'MARK_STREAMING_AS', sessionId: sid, taskStatus: 'retrying' })
-        console.log('[app] timeout: sending 继续 in 500ms')
+        autoRetryCountRef.current.set(sid, retryCount + 1)
+        console.log('[app] timeout: sending 继续 in 500ms, retryCount=', retryCount + 1)
         setTimeout(() => {
           console.log('[app] timeout: executing sendContinueSilently')
           sendContinueSilentlyRef.current?.()
@@ -455,6 +469,11 @@ function App() {
     if (waitingTimerRef.current) {
       clearTimeout(waitingTimerRef.current)
       waitingTimerRef.current = null
+    }
+    // A1 fix: also stop timeout timer to prevent race conditions
+    if (timeoutTimerRef.current) {
+      clearTimeout(timeoutTimerRef.current)
+      timeoutTimerRef.current = null
     }
   }, [])
 
@@ -874,14 +893,39 @@ function App() {
 
       // 仅在终态消息时停止 waiting，避免工具调用阶段停止按钮/加载态提前消失
       if (msg.status === 'done' || msg.status === 'error') {
-        // taskStatus='interrupted'（LLM 超时/网关中断）时：不停止超时定时器，
-        // 让超时重试机制介入自动发"继续"。否则定时器被清掉，超时重试永远不触发。
         const isInterrupted = msg.taskStatus === 'interrupted'
         if (isInterrupted) {
-          console.log('[app] onMessageStream: taskStatus=interrupted, keeping timeout timer alive for auto-retry', { sid, msgId: msg.id })
+          // A2 fix: interrupted 时直接启动延迟自动继续，不再依赖保留旧定时器
+          console.log('[app] onMessageStream: taskStatus=interrupted, scheduling auto-continue', { sid, msgId: msg.id })
+          stopWaiting()
+          const retryCount = autoRetryCountRef.current.get(sid) ?? 0
+          if (retryCount >= MAX_AUTO_RETRIES) {
+            console.log('[app] interrupted: max retries reached, stop', { sid, retryCount })
+          } else if (isRecoveringRef.current) {
+            console.log('[app] interrupted: already recovering, skip', { sid })
+          } else {
+            autoRetryCountRef.current.set(sid, retryCount + 1)
+            isRecoveringRef.current = true
+            const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
+            const agentId = session?.agentId
+            setTimeout(() => {
+              if (!ws.connected || gateway.state !== 'ready') { isRecoveringRef.current = false; return }
+              void ws.sendMessage(sid, '继续', undefined, agentId, session?.modelOverride).then((ack) => {
+                if (ack) {
+                  registerRunBinding(ack, sid, undefined)
+                  startWaiting()
+                }
+                isRecoveringRef.current = false
+              }).catch(() => { isRecoveringRef.current = false })
+            }, 1500)
+          }
         } else {
           stopWaiting()
-          stopTimeoutTimer()
+        }
+        // A3/A10 fix: successful completion resets retry count + isRecoveringRef
+        if (msg.taskStatus === 'completed' || msg.taskStatus === 'user_aborted') {
+          isRecoveringRef.current = false
+          autoRetryCountRef.current.delete(sid)
         }
         void refreshSessionUsageRef.current(sid, msg.status === 'done' && !isInterrupted)
         if (msg.status === 'done') {
@@ -895,10 +939,8 @@ function App() {
             void refreshSessionUsageRef.current(sid, true)
           }, 900)
           usageSyncTimerBySessionRef.current.set(sid, timer)
-          // 超时重试场景下不触发小工具完成提示
-          // 过滤后台任务（memory 插件的 L1/L2/L3 提取任务等），避免后台任务输出显示在小工具弹窗
-          // interrupted（LLM 超时/中断）也不触发完成提示，因为任务还没完成
-          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'retrying' && msg.taskStatus !== 'interrupted' && !isBackgroundTaskMessage(msg)) {
+          // A9 fix: only 'completed' triggers success widget notification
+          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus === 'completed' && !isBackgroundTaskMessage(msg)) {
             widgetTaskCompleteRef.current(true, msg.content || '任务已完成')
           }
         } else if (msg.status === 'error') {
@@ -1181,27 +1223,34 @@ function App() {
     }
   }, [])
 
-  // 工具执行失败后自动发"继续"，让 agent 看到错误结果并换方式重试
+  // A5/A7 fix: post-final error (tool failure/LLM timeout) auto-continue — unified with timeout path
   ws.onToolFailure.current = useCallback((sessionKey?: string, errorMessage?: string) => {
     if (!sessionKey) return
     const sessionId = sessionKey.includes(':') ? sessionKey.split(':').pop()! : sessionKey
-    const count = toolFailureRetryCountRef.current.get(sessionId) ?? 0
-    if (count >= MAX_TOOL_FAILURE_RETRIES) {
-      console.log('[app] tool failure retry limit reached, stop auto-continue', { sessionId, count })
+    // A7 fix: use shared counter + isRecoveringRef mutex
+    const count = autoRetryCountRef.current.get(sessionId) ?? 0
+    if (count >= MAX_AUTO_RETRIES) {
+      console.log('[app] post-final error: max retries reached, stop', { sessionId, count })
       return
     }
-    toolFailureRetryCountRef.current.set(sessionId, count + 1)
-    console.log('[app] tool failure: auto-continue', { sessionId, retryCount: count + 1, errorMessage: errorMessage?.slice(0, 100) })
-    // 延迟 1.5 秒发"继续"，给网关清理上一轮 run 的时间
+    if (isRecoveringRef.current) {
+      console.log('[app] post-final error: already recovering, skip', { sessionId })
+      return
+    }
+    autoRetryCountRef.current.set(sessionId, count + 1)
+    isRecoveringRef.current = true
+    console.log('[app] post-final error: auto-continue', { sessionId, retryCount: count + 1, errorMessage: errorMessage?.slice(0, 100) })
     setTimeout(() => {
       const session = sessionsRef.current?.find((s) => s.id === sessionId)
-      if (!session) return
-      if (!ws.connected || gateway.state !== 'ready') return
+      if (!session || !ws.connected || gateway.state !== 'ready') { isRecoveringRef.current = false; return }
       void ws.sendMessage(sessionId, '继续', undefined, session.agentId, session.modelOverride).then((ack) => {
         registerRunBinding(ack, sessionId, undefined)
-      })
+        // A5 fix: start timeout timer for the recovery run
+        startWaiting()
+        isRecoveringRef.current = false
+      }).catch(() => { isRecoveringRef.current = false })
     }, 1500)
-  }, [ws, gateway.state, registerRunBinding])
+  }, [ws, gateway.state, registerRunBinding, startWaiting])
 
   // 兜底路径：若已出现上下文溢出错误，立即尝试自动压缩一次
   ws.onContextOverflow.current = useCallback((sessionId?: string) => {
@@ -1466,7 +1515,7 @@ function App() {
       dispatch({ type: 'SEND_USER_MESSAGE', sessionId: activeSessionId, message: userMsg, title: isFirstMessage ? title : undefined })
 
       // 用户手动发新消息时重置工具失败重试计数
-      toolFailureRetryCountRef.current.delete(activeSessionId)
+      autoRetryCountRef.current.delete(activeSessionId)
 
       // 只在空闲时才显示等待指示器，避免空白气泡
       if (!isAiBusy) {
@@ -1515,10 +1564,13 @@ function App() {
     }
     const session = sessionsRef.current?.find((s) => s.id === sid)
     console.log('[app] sendContinueSilently: sessionId=', sid)
+    // A3 fix: set isRecoveringRef as mutex before sending
+    isRecoveringRef.current = true
     startWaiting()
     void ws.sendMessage(sid, '继续', undefined, session?.agentId, session?.modelOverride).then((ack) => {
       registerRunBinding(ack, sid, undefined)
-    })
+      isRecoveringRef.current = false
+    }).catch(() => { isRecoveringRef.current = false })
   }, [ws, gateway.state, startWaiting, registerRunBinding])
   sendContinueSilentlyRef.current = sendContinueSilently
 
