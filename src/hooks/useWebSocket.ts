@@ -132,7 +132,7 @@ function resetActiveRunState(
   toolCallsBufferRef: React.MutableRefObject<ChatToolCall[]>,
   committedSegmentRunIdsRef?: React.MutableRefObject<Set<string>>,
   lastSegmentAccumulatedTextRef?: React.MutableRefObject<string | null>,
-  finalRunIdsRef?: React.MutableRefObject<Set<string>>,
+  finalRunIdsRef?: React.MutableRefObject<Map<string, string>>,
 ) {
   activeRunIdRef.current = null
   agentLifecycleRunIdRef.current = null
@@ -140,9 +140,7 @@ function resetActiveRunState(
   toolCallsBufferRef.current = []
   if (committedSegmentRunIdsRef) committedSegmentRunIdsRef.current.clear()
   if (lastSegmentAccumulatedTextRef) lastSegmentAccumulatedTextRef.current = null
-  // 不清空 finalRunIdsRef，因为它用于跨事件处理的状态追踪
-  // 防止后续的 error 事件在 final 事件之后被错误处理
-  // 使用 void 操作符来避免 TypeScript 的未使用参数警告
+  // finalRunIdsRef is cleared in lifecycle.start and abortSession, not here
   void finalRunIdsRef
 }
 
@@ -309,6 +307,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     })
   }, [])
   const [backendStatus, setBackendStatus] = useState('')
+  // 跟踪当前是否处于错误状态，防止后台任务 lifecycle 事件覆盖错误提示
+  const hasErrorRef = useRef(false)
+  // 跟踪 post-final error 的重试次数（per session），用于生成俏皮提示文案
+  const postFinalErrorCountRef = useRef<Map<string, number>>(new Map())
   const [backendHealthy, setBackendHealthy] = useState(true)
   const clientRef = useRef<GatewayClient | null>(null)
   const onMessageStream = useRef<((msg: ChatMessage) => void) | null>(null)
@@ -344,8 +346,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const directiveRunIdsRef = useRef<Set<string>>(new Set())
   // 记录每个会话最近一次已确认的 runId，供 abort 等非 chat 事件兜底关联
   const lastRunIdBySessionRef = useRef<Map<string, string>>(new Map())
-  // 记录已收到 final 事件的 runId，用于 error 事件处理时跳过已完成的任务
-  const finalRunIdsRef = useRef<Set<string>>(new Set())
+  // 记录已收到 final 事件的 runId + taskStatus，用于 error 事件处理时判断是否应跳过
+  const finalRunIdsRef = useRef<Map<string, string>>(new Map())
   // agent lifecycle.start 分配的 runId（工具调用流式消息用此 ID）
   // 与 chat 事件的 runId 可能不同，需要在 final 时用此 ID 确保消息正确替换
   const agentLifecycleRunIdRef = useRef<string | null>(null)
@@ -557,6 +559,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   // reconnectKey 变化时会销毁旧 client 并创建新的，模拟完整重启
   }, [url, token, enabled, reconnectKey])
 
+  // W16 fix: use userIdRef to avoid stale closure in handleEvent
+  const userIdRef = useRef(userId)
+  userIdRef.current = userId
+
   const handleEvent = useCallback((evt: GatewayEventFrame) => {
     console.log('[ws] event received:', evt.event, JSON.stringify(evt.payload).slice(0, 2000))
 
@@ -585,21 +591,28 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
 
       if (isBackgroundTask) {
         // 后台任务：只在状态栏显示进度，不作为主对话消息处理
+        // 错误状态下不覆盖状态栏，避免清除工具失败等错误提示
         if (stream === 'lifecycle') {
           if (phase === 'start') {
-            const taskType = isHeartbeat ? '心跳检查' :
-              agentRunId?.includes('l1-extraction') ? 'L1 记忆提取' :
-              agentRunId?.includes('scene') ? 'L2 场景归纳' :
-              agentRunId?.includes('persona') ? 'L3 用户画像' : '后台任务'
-            setBackendStatus(`[${taskType}] 运行中...`)
+            if (!hasErrorRef.current) {
+              const taskType = isHeartbeat ? '心跳检查' :
+                agentRunId?.includes('l1-extraction') ? 'L1 记忆提取' :
+                agentRunId?.includes('scene') ? 'L2 场景归纳' :
+                agentRunId?.includes('persona') ? 'L3 用户画像' : '后台任务'
+              setBackendStatus(`[${taskType}] 运行中...`)
+            }
           } else if (phase === 'end') {
-            setBackendStatus('')
+            if (!hasErrorRef.current) {
+              setBackendStatus('')
+            }
           }
         } else if (stream === 'assistant') {
           // L1 提取输出 JSON，显示简短预览
-          const text = (data.text as string) || ''
-          if (text && text.length < 200) {
-            setBackendStatus(`[L1 提取] ${text.slice(0, 60)}...`)
+          if (!hasErrorRef.current) {
+            const text = (data.text as string) || ''
+            if (text && text.length < 200) {
+              setBackendStatus(`[L1 提取] ${text.slice(0, 60)}...`)
+            }
           }
         }
         console.log('[ws] agent event: background task', { agentRunId, stream, phase, isHeartbeat, dataKeys: Object.keys(data) })
@@ -791,6 +804,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           // 只重置流式相关状态（分段、buffer 前缀记录）
           committedSegmentRunIdsRef.current.clear()
           lastSegmentAccumulatedTextRef.current = null
+          // W4 fix: clear finalRunIdsRef when a new run starts, preventing stale entries
+          finalRunIdsRef.current.clear()
           phaseRef.current = 'thinking'
           // 用 agent 事件的 runId 提前设置 activeRunIdRef
           // 这样后续的 tool.start/end 事件能关联到正确的消息
@@ -801,6 +816,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           // 通知 App 层 agent 活动已开始，清除等待动画
           syncStreamingCount((c) => c + 1)
           onStreamStart.current?.()
+          hasErrorRef.current = false
           setBackendStatus('思考中...')
           if (agentRunId) {
             onMessageStream.current?.({
@@ -866,7 +882,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
               agentId: agentIdFromEvent || runIdAgentIdMapRef.current.get(runId),
               sessionKey: agentSessionKey,
             })
-            activeRunIdRef.current = null
+            // W14 fix: only clear activeRunIdRef if it's still the compaction run
+            // otherwise a new chat run may have already taken over
+            if (activeRunIdRef.current === runId) {
+              activeRunIdRef.current = null
+            }
           }
           console.log('[溢出] 触发 onCompactionEnd 回调:', normalizeSessionKey(p.sessionKey as string | undefined))
           onCompactionEnd.current?.(normalizeSessionKey(p.sessionKey as string | undefined))
@@ -1093,36 +1113,43 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                 const idle = (idleCountRef.current.get(runId) ?? 0) + 1
                 idleCountRef.current.set(runId, idle)
                 // 超过 50 次空转（~6 秒）视为 final 丢失，自动停止
+                // 但如果 lifecycle 还在进行中且有过工具调用，说明 agent 在思考下一步，不触发兜底
                 if (idle > 50) {
-                  // 监听场景：正文流长时间无增量，触发「流式超时兜底」
-                  emitTelemetry({
-                    event_name: 'stream_idle_fallback_triggered',
-                    event_time: new Date().toISOString(),
-                    user_id: userId ?? null,
-                    session_id: sessionKey || null,
-                    run_id: runId,
-                    status: 'text_stream',
-                    payload: {
-                      idle_count: idle,
-                      latest_length: latest.length,
-                      has_tool_calls: toolCallsBufferRef.current.length > 0,
-                    },
-                  })
-                  cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
-                  const m: ChatMessage = {
-                    id: runId,
-                    role: 'assistant',
-                    content: latest,
-                    toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
-                    timestamp: Date.now(),
-                    status: 'done',
-                    taskStatus: 'interrupted',
-                    agentId: chatAgentId,
-                    sessionKey,
+                  if (agentLifecycleRunIdRef.current === runId && toolCallsBufferRef.current.length > 0) {
+                    // run 还在进行中（lifecycle 未 end），agent 调用过工具后正在思考，
+                    // 此时 streamBuffer 无增量是正常的，重置 idle 计数继续等待
+                    idleCountRef.current.set(runId, 0)
+                  } else {
+                    // 监听场景：正文流长时间无增量，触发「流式超时兜底」
+                    emitTelemetry({
+                      event_name: 'stream_idle_fallback_triggered',
+                      event_time: new Date().toISOString(),
+                      user_id: userIdRef.current ?? null,
+                      session_id: sessionKey || null,
+                      run_id: runId,
+                      status: 'text_stream',
+                      payload: {
+                        idle_count: idle,
+                        latest_length: latest.length,
+                        has_tool_calls: toolCallsBufferRef.current.length > 0,
+                      },
+                    })
+                    cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
+                    const m: ChatMessage = {
+                      id: runId,
+                      role: 'assistant',
+                      content: latest,
+                      toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
+                      timestamp: Date.now(),
+                      status: 'done',
+                      taskStatus: 'interrupted',
+                      agentId: chatAgentId,
+                      sessionKey,
+                    }
+                    onMessageStream.current?.(m)
+                    resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
+                    return
                   }
-                  onMessageStream.current?.(m)
-                  resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
-                  return
                 }
               }
             }
@@ -1181,35 +1208,40 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                 const idle = (idleCountRef.current.get(runId) ?? 0) + 1
                 idleCountRef.current.set(runId, idle)
                 if (idle > 50) {
-                  // 监听场景：仅 thinking 流长时间无变化，触发「流式超时兜底」
-                  emitTelemetry({
-                    event_name: 'stream_idle_fallback_triggered',
-                    event_time: new Date().toISOString(),
-                    user_id: userId ?? null,
-                    session_id: sessionKey || null,
-                    run_id: runId,
-                    status: 'thinking_stream',
-                    payload: {
-                      idle_count: idle,
-                      thinking_length: thinkingNow.length,
-                    },
-                  })
-                  cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
-                  const m: ChatMessage = {
-                    id: runId,
-                    role: 'assistant',
-                    content: '',
-                    thinking: thinkingNow,
-                    toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
-                    timestamp: Date.now(),
-                    status: 'done',
-                    taskStatus: 'interrupted',
-                    agentId: chatAgentId,
-                    sessionKey,
+                  // lifecycle 还在进行中且有过工具调用，agent 在思考，不触发兜底
+                  if (agentLifecycleRunIdRef.current === runId && toolCallsBufferRef.current.length > 0) {
+                    idleCountRef.current.set(runId, 0)
+                  } else {
+                    // 监听场景：仅 thinking 流长时间无变化，触发「流式超时兜底」
+                    emitTelemetry({
+                      event_name: 'stream_idle_fallback_triggered',
+                      event_time: new Date().toISOString(),
+                      user_id: userIdRef.current ?? null,
+                      session_id: sessionKey || null,
+                      run_id: runId,
+                      status: 'thinking_stream',
+                      payload: {
+                        idle_count: idle,
+                        thinking_length: thinkingNow.length,
+                      },
+                    })
+                    cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
+                    const m: ChatMessage = {
+                      id: runId,
+                      role: 'assistant',
+                      content: '',
+                      thinking: thinkingNow,
+                      toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
+                      timestamp: Date.now(),
+                      status: 'done',
+                      taskStatus: 'interrupted',
+                      agentId: chatAgentId,
+                      sessionKey,
+                    }
+                    onMessageStream.current?.(m)
+                    resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
+                    return
                   }
-                  onMessageStream.current?.(m)
-                  resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
-                  return
                 }
               }
               streamThrottleRef.current.set(runId, setTimeout(flushThinking, 120))
@@ -1220,6 +1252,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     } else if (state === 'final') {
       // 最终完整响应 — 清除节流 timer 并立即推送
       setBackendStatus('')
+      hasErrorRef.current = false
       const timer = streamThrottleRef.current.get(runId)
       const hadTimer = !!timer
       if (timer) { clearTimeout(timer); streamThrottleRef.current.delete(runId) }
@@ -1309,9 +1342,19 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const stopReason = payload.stopReason as string | undefined
       const hasAgentReply = text && text.trim().length > 0
       const hasToolCalls = toolCallsBufferRef.current.length > 0
-      const taskStatus: TaskStatus = stopReason === 'aborted'
+      // Check if any tool call in this run failed
+      const hasFailedTool = toolCallsBufferRef.current.some((tc) => tc.isError)
+      // W15 fix: handle more stopReason values
+      // If a tool failed and the agent didn't provide substantive follow-up text,
+      // treat as interrupted so auto-continue can kick in
+      const toolFailedWithoutRecovery = hasFailedTool && (!hasAgentReply || text.trim().length < 50)
+      const taskStatus: TaskStatus = stopReason === 'aborted' || stopReason === 'length'
         ? 'interrupted'
-        : (hasAgentReply || hasToolCalls ? 'completed' : 'failed')
+        : stopReason === 'error'
+          ? 'failed'
+          : toolFailedWithoutRecovery
+            ? 'interrupted'
+            : (hasAgentReply || hasToolCalls ? 'completed' : 'failed')
 
       const msg: ChatMessage = {
         id: msgId,
@@ -1324,14 +1367,18 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         taskStatus,
         agentId: chatAgentId,
       }
-      // 记录已收到 final 事件的 runId，用于后续 error 事件处理时跳过
-      finalRunIdsRef.current.add(runId)
+      // 记录已收到 final 事件的 runId + taskStatus，用于后续 error 事件处理
+      finalRunIdsRef.current.set(runId, taskStatus)
+      // 任务成功完成时重置 post-final error 重试计数
+      if (taskStatus === 'completed') {
+        postFinalErrorCountRef.current.delete(sessionKey || runId)
+      }
       onMessageStream.current?.(msg)
       // 埋点：本轮助手最终文本已确定
       emitTelemetry({
         event_name: 'assistant_message_rendered',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: sessionKey || null,
         run_id: runId,
         status: 'final',
@@ -1365,20 +1412,56 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 只有当没有后续 final 事件时（无工具调用且无分段），才显示错误信息作为最后手段。
       const rawErrorMsg = (payload.errorMessage as string) || '发生错误'
       const errorMessage = translateError(rawErrorMsg)
+      hasErrorRef.current = true
       setBackendStatus(`错误：${errorMessage}`)
 
       // 如果该 runId 已经收到 final 事件，则跳过 error 事件的消息推送
       // 避免工具执行失败的错误消息覆盖 agent 的正常回复
       if (finalRunIdsRef.current.has(runId)) {
+        const finalTaskStatus = finalRunIdsRef.current.get(runId)
         const isContextOverflow = isContextOverflowText(rawErrorMsg)
         if (isContextOverflow) {
-          // 上下文溢出：不自动继续（继续会更糟），仅提示
           console.log('[ws] context overflow after final, not auto-continuing', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120) })
           setBackendStatus(`上下文溢出，请压缩或清理会话：${errorMessage}`)
+        } else if (finalTaskStatus === 'completed') {
+          // final 已标记为 completed（agent 在 run 内已自行处理工具失败并成功），
+          // 这个 post-final error 是之前工具失败的延迟通知，不需要自动继续
+          console.log('[ws] post-final error but final was completed, agent already recovered, skipping', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120), finalTaskStatus })
+          hasErrorRef.current = false
+          setBackendStatus('')
         } else {
-          // 其他错误（工具失败、LLM 超时、provider 错误等）：不吞错，通知 App 自动继续
-          console.log('[ws] ★ post-final error (not swallowed), notifying App to auto-continue', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120) })
-          setBackendStatus(`⚠️ ${errorMessage}，正在尝试继续...`)
+          // final 的 taskStatus 不是 completed（如 interrupted/failed），说明任务确实没完成
+          console.log('[ws] ★ post-final error, notifying App to auto-continue', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120), finalTaskStatus })
+          // 根据重试次数生成俏皮提示文案
+          const errorKey = sessionKey || runId
+          const retryCount = (postFinalErrorCountRef.current.get(errorKey) ?? 0) + 1
+          postFinalErrorCountRef.current.set(errorKey, retryCount)
+          const playfulPrefix = retryCount === 1
+            ? '哎呀，工具返回了个错误：'
+            : retryCount === 2
+              ? '这种方式也不行：'
+              : retryCount === 3
+                ? '工具又又又报错了 😮‍💨'
+                : '工具还是不行 😭'
+          const playfulSuffix = retryCount === 1
+            ? '让我来换一种方式尝试继续...'
+            : retryCount === 2
+              ? '再想想别的办法...'
+              : retryCount === 3
+                ? '最后一次尝试了...'
+                : '试了三次还是不行，可能需要你手动介入了 🙏'
+          // 将错误提示作为独立消息推送到会话气泡中，避免被状态栏事件覆盖
+          onMessageStream.current?.({
+            id: `${runId}-err`,
+            role: 'assistant',
+            content: `${playfulPrefix}\n${errorMessage}\n${playfulSuffix}`,
+            thinking: '',
+            timestamp: Date.now(),
+            status: 'done',
+            taskStatus: 'retrying',
+            agentId: chatAgentId,
+            sessionKey,
+          })
           onToolFailure.current?.(sessionKey, rawErrorMsg)
         }
         cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
@@ -1462,7 +1545,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       emitTelemetry({
         event_name: 'assistant_message_rendered',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: sessionKey || null,
         run_id: runId,
         status: msgStatus === 'done' ? 'final' : 'error',
@@ -1521,7 +1604,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       emitTelemetry({
         event_name: 'assistant_message_rendered',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: sessionKey || null,
         run_id: runId,
         status: 'aborted',
@@ -1571,7 +1654,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       emitTelemetry({
         event_name: 'assistant_message_rendered',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: sessionKey || null,
         run_id: runId,
         status: isTerminateOverflow ? 'final' : 'terminated',
@@ -1680,7 +1763,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       emitTelemetry({
         event_name: 'user_message_sent',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: builtSessionKey,
         content,
         attachments: buildAttachmentMeta(attachments),
@@ -1699,7 +1782,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       emitTelemetry({
         event_name: 'chat_send_ack',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: builtSessionKey,
         run_id: ack?.runId || null,
         status: ack?.status || 'accepted',
@@ -1775,7 +1858,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
     emitTelemetry({
       event_name: 'chat_abort_requested',
       event_time: new Date().toISOString(),
-      user_id: userId ?? null,
+      user_id: userIdRef.current ?? null,
       session_id: builtSessionKey,
       run_id: runIdForAbort,
       status: 'requested',
@@ -1811,7 +1894,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       emitTelemetry({
         event_name: 'chat_abort_result',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: builtSessionKey,
         run_id: runIdForAbort,
         status: 'success',
@@ -1838,7 +1921,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       emitTelemetry({
         event_name: 'chat_abort_result',
         event_time: new Date().toISOString(),
-        user_id: userId ?? null,
+        user_id: userIdRef.current ?? null,
         session_id: builtSessionKey,
         run_id: runIdForAbort,
         status: 'failed',

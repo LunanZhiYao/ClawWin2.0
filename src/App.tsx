@@ -396,6 +396,8 @@ function App() {
   const registerRunBinding = useCallback((ack: { runId?: string; sessionKey: string } | null, sessionId: string, userMessageId?: string) => {
     if (!ack?.runId) return
     runIdSessionMapRef.current.set(ack.runId, sessionId)
+    // A6 fix: track the latest active runId to isolate stale aborted messages
+    lastActiveRunIdRef.current = ack.runId
     if (userMessageId) {
       runIdUserMessageMapRef.current.set(ack.runId, userMessageId)
     }
@@ -406,6 +408,13 @@ function App() {
   const isStreamingRef = useRef(false)
   // A3 fix: isRecoveringRef now acts as a real mutex for auto-continue
   const isRecoveringRef = useRef(false)
+  // 修复闭包过期：onMessageStream 的 useCallback 依赖不含 ws/gateway，
+  // setTimeout 中读取 ws.connected / gateway.state 会拿到初始值 false，
+  // 导致 interrupted 分支的重试永不执行。用 ref 同步最新值。
+  const wsConnectedRef = useRef(false)
+  const gatewayReadyRef = useRef(false)
+  // A6 fix: track latest active runId to ignore stale aborted messages
+  const lastActiveRunIdRef = useRef<string | null>(null)
   // 工具执行失败/LLM超时后自动继续的重试计数（per session），防止死循环
   const autoRetryCountRef = useRef<Map<string, number>>(new Map())
   const MAX_AUTO_RETRIES = 3
@@ -489,6 +498,9 @@ function App() {
   abortSessionRef.current = ws.abortSession
   isStreamingRef.current = ws.isStreaming
   clearOfflineQueueRef.current = ws.clearOfflineQueue
+  // 同步 ws/gateway 状态到 ref，供 onMessageStream 闭包安全读取
+  wsConnectedRef.current = ws.connected
+  gatewayReadyRef.current = gateway.state === 'ready'
   const activeAgentId = useMemo(() => {
     const current = sessions.find((s) => s.id === activeSessionId)
     return current?.agentId || ws.defaultAgentId || 'main'
@@ -893,8 +905,12 @@ function App() {
 
       // 仅在终态消息时停止 waiting，避免工具调用阶段停止按钮/加载态提前消失
       if (msg.status === 'done' || msg.status === 'error') {
-        const isInterrupted = msg.taskStatus === 'interrupted'
-        if (isInterrupted) {
+        // A6 fix: if this is a stale message from a previous run, don't touch timer state
+        const isStaleRun = lastActiveRunIdRef.current && msg.id !== lastActiveRunIdRef.current
+        if (isStaleRun && (msg.taskStatus === 'retrying' || msg.taskStatus === 'user_aborted')) {
+          console.log('[app] onMessageStream: stale run message, ignoring timer state', { sid, msgId: msg.id, activeRunId: lastActiveRunIdRef.current })
+        } else
+        if (msg.taskStatus === 'interrupted') {
           // A2 fix: interrupted 时直接启动延迟自动继续，不再依赖保留旧定时器
           console.log('[app] onMessageStream: taskStatus=interrupted, scheduling auto-continue', { sid, msgId: msg.id })
           stopWaiting()
@@ -909,7 +925,7 @@ function App() {
             const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
             const agentId = session?.agentId
             setTimeout(() => {
-              if (!ws.connected || gateway.state !== 'ready') { isRecoveringRef.current = false; return }
+              if (!wsConnectedRef.current || !gatewayReadyRef.current) { isRecoveringRef.current = false; return }
               void ws.sendMessage(sid, '继续', undefined, agentId, session?.modelOverride).then((ack) => {
                 if (ack) {
                   registerRunBinding(ack, sid, undefined)
@@ -927,7 +943,7 @@ function App() {
           isRecoveringRef.current = false
           autoRetryCountRef.current.delete(sid)
         }
-        void refreshSessionUsageRef.current(sid, msg.status === 'done' && !isInterrupted)
+        void refreshSessionUsageRef.current(sid, msg.status === 'done' && msg.taskStatus !== 'interrupted')
         if (msg.status === 'done') {
           const prevTimer = usageSyncTimerBySessionRef.current.get(sid)
           if (prevTimer) {
