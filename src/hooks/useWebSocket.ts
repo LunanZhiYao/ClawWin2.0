@@ -1456,8 +1456,16 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           console.log('[ws] post-final error but final was completed, agent already recovered, skipping', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120), finalTaskStatus })
           hasErrorRef.current = false
           setBackendStatus('')
+        } else if (finalTaskStatus === 'interrupted') {
+          // final 已标记为 interrupted（如 LLM 超时 stopReason=aborted），
+          // App.tsx 的 interrupted 路径已经会触发 auto-continue。
+          // post-final error 不再调用 onToolFailure，避免同一次超时触发两次重试。
+          console.log('[ws] post-final error but final was interrupted, auto-continue already handled by interrupted path, skipping', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120), finalTaskStatus })
+          hasErrorRef.current = false
+          setBackendStatus('')
         } else {
-          // final 的 taskStatus 不是 completed（如 interrupted/failed），说明任务确实没完成
+          // final 的 taskStatus 是 failed（非 interrupted、非 completed），说明任务确实没完成，
+          // 且 interrupted 路径不会处理 failed，需要 onToolFailure 兜底触发 auto-continue
           console.log('[ws] ★ post-final error, notifying App to auto-continue', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120), finalTaskStatus })
           // 根据重试次数生成俏皮提示文案
           const errorKey = sessionKey || runId
