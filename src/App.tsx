@@ -919,8 +919,11 @@ function App() {
             console.log('[app] interrupted: max retries reached, stop', { sid, retryCount })
           } else if (isRecoveringRef.current) {
             console.log('[app] interrupted: already recovering, skip', { sid })
-          } else if (isStreamingRef.current) {
-            // 旧 run 还在进行中（流式超时兜底误触发），跳过重试避免"继续"排队
+          } else if (ws.streamingCountRef.current > 0) {
+            // 旧 run 还在进行中（流式超时兜底误触发），跳过重试避免"继续"排队。
+            // 用同步 ref 而非 isStreamingRef(state)：onMessageStream 在 useWebSocket
+            // 内同步调用，此时 React 可能尚未重渲染，isStreamingRef.current 仍是旧值，
+            // 会误判为"还在 streaming"而跳过本应触发的 auto-continue（导致聊天卡住）。
             console.log('[app] interrupted: run still streaming, skip auto-continue', { sid })
           } else {
             autoRetryCountRef.current.set(sid, retryCount + 1)

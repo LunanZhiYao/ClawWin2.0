@@ -300,11 +300,14 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const isStreaming = streamingCount > 0
   const streamingCountRef = useRef(0)
   const syncStreamingCount = useCallback((updater: number | ((prev: number) => number)) => {
-    setStreamingCount((prev) => {
-      const next = typeof updater === 'function' ? updater(prev) : updater
-      streamingCountRef.current = Math.max(0, next)
-      return streamingCountRef.current
-    })
+    // 立即同步更新 ref，不依赖 setStreamingCount updater 的执行时机。
+    // React 18 批处理下 setState 的 updater 可能延迟执行，若 ref 在 updater 内更新，
+    // 会导致同步回调（如 onMessageStream → auto-continue）读到陈旧的 streaming 状态，
+    // 从而错误地跳过恢复（"run still streaming, skip auto-continue"）。
+    const prev = streamingCountRef.current
+    const next = Math.max(0, typeof updater === 'function' ? updater(prev) : updater)
+    streamingCountRef.current = next
+    setStreamingCount(next)
   }, [])
   const [backendStatus, setBackendStatus] = useState('')
   // 跟踪当前是否处于错误状态，防止后台任务 lifecycle 事件覆盖错误提示
@@ -1138,7 +1141,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
                     const m: ChatMessage = {
                       id: runId,
                       role: 'assistant',
-                      content: latest,
+                      content: latest || '（响应超时，正在尝试恢复…）',
                       toolCalls: toolCallsBufferRef.current.length > 0 ? [...toolCallsBufferRef.current] : undefined,
                       timestamp: Date.now(),
                       status: 'done',
@@ -1318,6 +1321,25 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 空内容不创建消息，避免空白气泡（但有工具调用时仍然推送）
       // 例外：如果是对 /compact 命令的响应，则创建压缩完成消息
       if (!text && !(toolCallsBufferRef.current.length > 0) && !isCompactResponse) {
+        // 兜底：如果用户此前已看到分段消息（工具调用前提交的文本），直接 return 是安全的；
+        // 但若没有任何已显示内容，静默 return 会导致"加载消失、界面空白、什么都没有"。
+        // 此时推送一条友好的中断消息，让 auto-continue 能接管恢复，避免会话卡死。
+        if (!hasCommittedSegments) {
+          const fallbackMsg: ChatMessage = {
+            id: runId,
+            role: 'assistant',
+            content: 'AI 暂未返回有效内容，可能遇到了临时问题，正在尝试恢复…',
+            thinking: '',
+            toolCalls: undefined,
+            timestamp: Date.now(),
+            status: 'done',
+            taskStatus: 'interrupted',
+            agentId: chatAgentId,
+            sessionKey,
+          }
+          finalRunIdsRef.current.set(runId, 'interrupted')
+          onMessageStream.current?.(fallbackMsg)
+        }
         resetActiveRunState(activeRunIdRef, agentLifecycleRunIdRef, phaseRef, toolCallsBufferRef, committedSegmentRunIdsRef, lastSegmentAccumulatedTextRef, finalRunIdsRef)
         return
       }
@@ -1340,14 +1362,19 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // - 有 agent 回复或工具调用 → 'completed'
       // - 完全失败（无回复且无工具调用）→ 'failed'
       const stopReason = payload.stopReason as string | undefined
-      const hasAgentReply = text && text.trim().length > 0
       const hasToolCalls = toolCallsBufferRef.current.length > 0
       // Check if any tool call in this run failed
       const hasFailedTool = toolCallsBufferRef.current.some((tc) => tc.isError)
+      // 当 final 的 text 为空时，完整文本可能已在工具调用前作为分段消息（seg-*）提交。
+      // 此时用最后一次分段的累积文本判断 agent 是否有实质回复，避免把"已换方式并成功
+      // 调用新工具"的 run 误判为 interrupted（导致状态显示错误并触发无效 auto-continue）。
+      const committedText = hasCommittedSegments ? (lastSegmentAccumulatedTextRef.current ?? '') : ''
+      const fullRunText = (text && text.trim().length > 0) ? text : committedText
+      const hasAgentReply = fullRunText.trim().length > 0
       // W15 fix: handle more stopReason values
       // If a tool failed and the agent didn't provide substantive follow-up text,
       // treat as interrupted so auto-continue can kick in
-      const toolFailedWithoutRecovery = hasFailedTool && (!hasAgentReply || text.trim().length < 50)
+      const toolFailedWithoutRecovery = hasFailedTool && (!hasAgentReply || fullRunText.trim().length < 50)
       const taskStatus: TaskStatus = stopReason === 'aborted' || stopReason === 'length'
         ? 'interrupted'
         : stopReason === 'error'
