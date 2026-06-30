@@ -19,8 +19,10 @@
 # ─────────────────────────────────────────────────────────────
 
 !macro customInit
-  ; 杀掉旧的 鲁南千易.exe 进程（失败也不影响安装继续）
-  nsExec::ExecToLog 'taskkill /F /IM 鲁南千易.exe'
+  ; 杀掉旧的 鲁南千易.exe 进程及其子进程（/T 确保杀掉 gateway node.exe 子进程）
+  nsExec::ExecToLog 'taskkill /F /T /IM 鲁南千易.exe'
+  ; 杀掉从 bundled 目录运行的 node.exe（主进程退出后可能残留的孤儿 gateway 进程）
+  nsExec::ExecToLog 'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name=''node.exe''\" | Where-Object { $$_.ExecutablePath -like ''*bundled*'' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"'
   ; 杀掉占用 39527 端口的 gateway 进程
   nsExec::ExecToLog 'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 39527 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $$_.OwningProcess -Force -ErrorAction SilentlyContinue }"'
 
@@ -45,14 +47,25 @@
   ${If} ${FileExists} "$INSTDIR\resources\bundled"
     ; 若上次升级中断残留了备份，优先保留既有备份，不覆盖
     ${IfNot} ${FileExists} "$R9"
-      ClearErrors
-      Rename "$INSTDIR\resources\bundled" "$R9"
-      ${If} ${Errors}
+      ; Rename 可能因文件句柄未及时释放而失败，重试几次
+      StrCpy $0 0
+      backup_retry:
         ClearErrors
-        DetailPrint "备份 bundled 目录失败，跳过备份。"
-      ${Else}
-        DetailPrint "已备份 bundled 目录到 $R9"
-      ${EndIf}
+        Rename "$INSTDIR\resources\bundled" "$R9"
+        ${IfNot} ${Errors}
+          DetailPrint "已备份 bundled 目录到 $R9"
+          Goto backup_done
+        ${EndIf}
+        ClearErrors
+        IntOp $0 $0 + 1
+        ${If} $0 < 5
+          Sleep 1000
+          Goto backup_retry
+        ${EndIf}
+        ; 重试耗尽，备份失败 — 必须中止，否则旧卸载器会删掉 bundled
+        MessageBox MB_OK|MB_ICONSTOP "备份 bundled 目录失败，可能仍有进程占用该目录。$\n请手动关闭所有相关程序后重新运行升级安装包。"
+        Quit
+      backup_done:
     ${Else}
       DetailPrint "检测到既有备份 $R9，跳过备份。"
     ${EndIf}
