@@ -919,6 +919,9 @@ function App() {
             console.log('[app] interrupted: max retries reached, stop', { sid, retryCount })
           } else if (isRecoveringRef.current) {
             console.log('[app] interrupted: already recovering, skip', { sid })
+          } else if (isStreamingRef.current) {
+            // 旧 run 还在进行中（流式超时兜底误触发），跳过重试避免"继续"排队
+            console.log('[app] interrupted: run still streaming, skip auto-continue', { sid })
           } else {
             autoRetryCountRef.current.set(sid, retryCount + 1)
             isRecoveringRef.current = true

@@ -1439,7 +1439,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           const playfulPrefix = retryCount === 1
             ? '哎呀，工具返回了个错误：'
             : retryCount === 2
-              ? '这种方式也不行：'
+              ? '这种方式也不行：😶'
               : retryCount === 3
                 ? '工具又又又报错了 😮‍💨'
                 : '工具还是不行 😭'
@@ -1454,7 +1454,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           onMessageStream.current?.({
             id: `${runId}-err`,
             role: 'assistant',
-            content: `${playfulPrefix}\n${errorMessage}\n${playfulSuffix}`,
+            content: `${playfulPrefix}\n\n${errorMessage}\n\n${playfulSuffix}`,
             thinking: '',
             timestamp: Date.now(),
             status: 'done',
