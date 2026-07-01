@@ -41,6 +41,9 @@ export class GatewayManager {
   /** 登录态 access token，仅驻留主进程内存，用于注入网关子进程环境 */
   private runtimeAccessToken: string | null = null
 
+  /** 手动开关：true = 调试模式，端口有 Gateway 则直接复用不重启；false = 始终重启 */
+  private gatewayDebugSkipRestart = false
+
   // 操作锁：所有生命周期操作串行执行，杜绝并发启动
   private opLock: Promise<void> = Promise.resolve()
 
@@ -161,6 +164,19 @@ export class GatewayManager {
     // 先检测端口是否已被占用（已有 Gateway 在运行）
     const portInUse = await this.isPortInUse(this.opts.port)
     if (portInUse) {
+      // 调试模式：如果已有可用的 Gateway，直接复用，不重启进程
+      if (this.gatewayDebugSkipRestart) {
+        const isGateway = await this.isRealGateway(this.opts.port)
+        if (isGateway) {
+          this.log('info', `[调试模式] 端口 ${this.opts.port} 上运行着可用的 Gateway，直接复用（跳过重启）`)
+          this.externalGateway = true
+          this.setState('ready')
+          this.startHealthCheck()
+          return
+        }
+        this.log('info', `[调试模式] 端口 ${this.opts.port} 被占用但不是 Gateway，尝试终止...`)
+      }
+
       // 尝试终止残留的旧网关进程，确保使用最新配置
       this.log('info', `检测到端口 ${this.opts.port} 被占用，正在终止旧进程...`)
       await this.killProcessOnPort(this.opts.port)
