@@ -40,35 +40,59 @@
     Quit
   ${EndIf}
 
-  ; ── 备份 bundled 目录（升级时旧卸载器会清空 $INSTDIR）──
-  ; 备份到 $INSTDIR 的同级目录，保证同盘符 Rename 可瞬时完成
+  ; ── 处理上次升级中断的残留备份 ──
+  ; 临时备份目录存在，说明上次升级在备份后、还原前中断了
   StrCpy $R9 "$INSTDIR\..\lunanqianyi_bundled_upgrade_tmp"
 
-  ${If} ${FileExists} "$INSTDIR\resources\bundled"
-    ; 若上次升级中断残留了备份，优先保留既有备份，不覆盖
-    ${IfNot} ${FileExists} "$R9"
-      ; Rename 可能因文件句柄未及时释放而失败，重试几次
-      StrCpy $0 0
-      backup_retry:
+  ${If} ${FileExists} "$R9"
+    ${If} ${FileExists} "$INSTDIR\resources\bundled"
+      ; 源和备份都在（异常状态），删除残留备份，保留源
+      RMDir /r "$R9"
+      DetailPrint "清理上次升级残留的备份目录"
+    ${Else}
+      ; 源不存在、备份存在 → 上次升级中断，先还原备份让机器恢复可用
+      ClearErrors
+      CreateDirectory "$INSTDIR\resources"
+      Rename "$R9" "$INSTDIR\resources\bundled"
+      IfErrors 0 restore_prev_ok
         ClearErrors
-        Rename "$INSTDIR\resources\bundled" "$R9"
-        ${IfNot} ${Errors}
-          DetailPrint "已备份 bundled 目录到 $R9"
-          Goto backup_done
-        ${EndIf}
+        ; 还原失败，中止安装（bundled 至少还在临时目录，没丢）
+        MessageBox MB_OK|MB_ICONSTOP "检测到上次升级中断，但还原 bundled 备份失败。$\n请手动将以下目录移动到指定位置后重新运行安装：$\n  源: $R9$\n  目标: $INSTDIR\resources\bundled"
+        Quit
+      restore_prev_ok:
+        DetailPrint "已还原上次中断的 bundled 备份"
+    ${EndIf}
+  ${EndIf}
+
+  ; ── 备份 bundled 目录（升级时旧卸载器会清空 $INSTDIR）──
+  ${If} ${FileExists} "$INSTDIR\resources\bundled"
+    ; Rename 可能因文件句柄未及时释放而失败，重试几次
+    StrCpy $0 0
+    backup_retry:
+      ClearErrors
+      Rename "$INSTDIR\resources\bundled" "$R9"
+      IfErrors 0 backup_verify
         ClearErrors
         IntOp $0 $0 + 1
         ${If} $0 < 5
           Sleep 1000
           Goto backup_retry
         ${EndIf}
-        ; 重试耗尽，备份失败 — 必须中止，否则旧卸载器会删掉 bundled
+        ; Rename 持续失败 — 必须中止，否则旧卸载器会删掉 bundled
         MessageBox MB_OK|MB_ICONSTOP "备份 bundled 目录失败，可能仍有进程占用该目录。$\n请手动关闭所有相关程序后重新运行升级安装包。"
         Quit
-      backup_done:
-    ${Else}
-      DetailPrint "检测到既有备份 $R9，跳过备份。"
-    ${EndIf}
+
+    backup_verify:
+      ; Rename 未报错，但仍需验证：备份目录存在 且 源目录已不存在
+      ; 仅当两者都满足才算"正确移动"，否则视为失败中止
+      ${If} ${FileExists} "$R9"
+      ${AndIfNot} ${FileExists} "$INSTDIR\resources\bundled"
+        DetailPrint "已备份 bundled 目录到 $R9"
+      ${Else}
+        ; 状态异常（部分移动/源未清空），中止以保证 bundled 不被删除
+        MessageBox MB_OK|MB_ICONSTOP "备份 bundled 目录后校验失败，安装已中止。$\n备份: $R9$\n源: $INSTDIR\resources\bundled"
+        Quit
+      ${EndIf}
   ${EndIf}
 !macroend
 

@@ -148,6 +148,7 @@ type SessionAction =
   | { type: 'UPDATE'; id: string; updates: Partial<ChatSession> }
   | { type: 'UPSERT_MESSAGE'; sessionId: string; message: ChatMessage }
   | { type: 'MARK_STREAMING_AS'; sessionId: string; taskStatus: TaskStatus }
+  | { type: 'CLEAR_STREAMING_PLACEHOLDERS'; sessionId: string }
   | { type: 'MARK_USER_MESSAGE_COMPLETE'; sessionId: string; userMessageId?: string }
   | { type: 'SEND_USER_MESSAGE'; sessionId: string; message: ChatMessage; title?: string }
   | { type: 'CLEAR_MODEL_OVERRIDES' }
@@ -227,6 +228,17 @@ function sessionReducer(state: ChatSession[], action: SessionAction): ChatSessio
             ? { ...m, status: 'done' as const, taskStatus: action.taskStatus }
             : m
         )
+        return { ...s, messages, updatedAt: Date.now() }
+      })
+    case 'CLEAR_STREAMING_PLACEHOLDERS':
+      return state.map((s) => {
+        if (s.id !== action.sessionId) return s
+        // 清除残留的 placeholder streaming 消息（auto_compacting/starting 等空内容消息）
+        const messages = s.messages.filter((m) => {
+          if (m.status !== 'streaming') return true
+          const isEmptyPlaceholder = !m.content?.trim() && (m.taskStatus === 'auto_compacting' || m.taskStatus === 'starting')
+          return !isEmptyPlaceholder
+        })
         return { ...s, messages, updatedAt: Date.now() }
       })
     case 'MARK_USER_MESSAGE_COMPLETE':
@@ -468,12 +480,14 @@ function App() {
   }, [])
 
   const startWaiting = useCallback(() => {
+    isWaitingRef.current = true
     setIsWaiting(true)
     if (waitingTimerRef.current) clearTimeout(waitingTimerRef.current)
     startTimeoutTimer()
   }, [startTimeoutTimer])
 
   const stopWaiting = useCallback(() => {
+    isWaitingRef.current = false
     setIsWaiting(false)
     if (waitingTimerRef.current) {
       clearTimeout(waitingTimerRef.current)
@@ -551,7 +565,10 @@ function App() {
     const sid = activeSessionIdRef.current
     if (sid) {
       const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
+      // 立即停止等待并重置恢复状态，确保用户可以立即发新消息
       stopWaiting()
+      isRecoveringRef.current = false
+      autoRetryCountRef.current.delete(sid)
       try {
         const result = await ws.abortSession(sid, session?.agentId)
         if (!result.success) {
@@ -560,6 +577,10 @@ function App() {
       } catch (err) {
         console.error('[app] abort error:', err)
       }
+    } else {
+      // 无活跃会话也要停止等待状态
+      stopWaiting()
+      isRecoveringRef.current = false
     }
   }, [ws, stopWaiting])
 
@@ -907,32 +928,57 @@ function App() {
       if (msg.status === 'done' || msg.status === 'error') {
         // A6 fix: if this is a stale message from a previous run, don't touch timer state
         const isStaleRun = lastActiveRunIdRef.current && msg.id !== lastActiveRunIdRef.current
-        if (isStaleRun && (msg.taskStatus === 'retrying' || msg.taskStatus === 'user_aborted')) {
+        if (isStaleRun && (msg.taskStatus === 'retrying' || msg.taskStatus === 'user_aborted' || msg.taskStatus === 'interrupted' || msg.taskStatus === 'failed')) {
           console.log('[app] onMessageStream: stale run message, ignoring timer state', { sid, msgId: msg.id, activeRunId: lastActiveRunIdRef.current })
         } else
-        if (msg.taskStatus === 'interrupted') {
-          // A2 fix: interrupted 时直接启动延迟自动继续，不再依赖保留旧定时器
-          console.log('[app] onMessageStream: taskStatus=interrupted, scheduling auto-continue', { sid, msgId: msg.id })
+        if (msg.taskStatus === 'interrupted' || msg.taskStatus === 'failed') {
+          // auto-continue：interrupted（LLM 超时/工具失败）和 failed（session 锁超时/网络错误）
+          // 都是瞬时错误，尝试自动恢复。user_aborted（用户主动停止）和 completed 不在此列。
+          // 互斥由 isRecoveringRef + MAX_AUTO_RETRIES 保证，不再检查 streamingCount
+          // （final 的 onMessageStream 在 cleanupStreamBuffers 之前调用，streamingCount 可能还没递减）。
+          console.log('[app] onMessageStream: taskStatus, scheduling auto-continue', { sid, msgId: msg.id, taskStatus: msg.taskStatus })
           stopWaiting()
           const retryCount = autoRetryCountRef.current.get(sid) ?? 0
           if (retryCount >= MAX_AUTO_RETRIES) {
             console.log('[app] interrupted: max retries reached, stop', { sid, retryCount })
           } else if (isRecoveringRef.current) {
             console.log('[app] interrupted: already recovering, skip', { sid })
-          } else if (ws.streamingCountRef.current > 0) {
-            // 旧 run 还在进行中（流式超时兜底误触发），跳过重试避免"继续"排队。
-            // 用同步 ref 而非 isStreamingRef(state)：onMessageStream 在 useWebSocket
-            // 内同步调用，此时 React 可能尚未重渲染，isStreamingRef.current 仍是旧值，
-            // 会误判为"还在 streaming"而跳过本应触发的 auto-continue（导致聊天卡住）。
-            console.log('[app] interrupted: run still streaming, skip auto-continue', { sid })
           } else {
+            // final 已区分 user_aborted（用户主动中止，不 auto-continue）和 interrupted
+            // （LLM 超时/工具失败，需 auto-continue）。此处只处理 interrupted，
+            // 不再检查 streamingCount：final 的 onMessageStream 在 cleanupStreamBuffers
+            // 之前调用，streamingCount 可能还没递减，检查会导致 auto-continue 被误跳过。
+            // 互斥由 isRecoveringRef + MAX_AUTO_RETRIES 保证。
             autoRetryCountRef.current.set(sid, retryCount + 1)
             isRecoveringRef.current = true
             const session = sessionsRef.current?.find((s: { id: string }) => s.id === sid)
             const agentId = session?.agentId
+            // 根据重试次数递进提示，让 AI 知道上次失败了需要换方法
+            const retryPrompt = retryCount === 0
+              ? '继续'  // 第一次重试：简单继续
+              : retryCount === 1
+                ? '上次执行失败了，请换一种方法重新完成任务，确保真正完成'
+                : '已经失败多次了，请仔细检查后用完全不同的方法重试，务必完成任务'
+            // 给用户显示重试提示（通过 UPSERT_MESSAGE 推送一条提示消息）
+            const retryHint = retryCount === 0
+              ? '遇到临时问题，正在自动重试…'
+              : retryCount === 1
+                ? '上次方法失败了，正在换一种方式重试…'
+                : '多次失败，正在尝试最后的方法重试…'
+            dispatch({ type: 'UPSERT_MESSAGE', sessionId: sid, message: {
+              id: `${msg.id}-retry`,
+              role: 'assistant',
+              content: retryHint,
+              timestamp: Date.now(),
+              status: 'done',
+              taskStatus: 'retrying',
+              agentId: session?.agentId,
+              sessionKey: sid,
+            }})
+            console.log('[app] auto-continue retry hint:', { sid, retryCount, retryHint })
             setTimeout(() => {
               if (!wsConnectedRef.current || !gatewayReadyRef.current) { isRecoveringRef.current = false; return }
-              void ws.sendMessage(sid, '继续', undefined, agentId, session?.modelOverride).then((ack) => {
+              void ws.sendMessage(sid, retryPrompt, undefined, agentId, session?.modelOverride).then((ack) => {
                 if (ack) {
                   registerRunBinding(ack, sid, undefined)
                   startWaiting()
@@ -966,7 +1012,9 @@ function App() {
             widgetTaskCompleteRef.current(true, msg.content || '任务已完成')
           }
         } else if (msg.status === 'error') {
-          if (!msg.agentId || msg.agentId === 'main') {
+          // 只有不可恢复的失败才触发 widget 失败通知；
+          // failed/interrupted 会 auto-continue，不显示失败通知避免与重试矛盾
+          if ((!msg.agentId || msg.agentId === 'main') && msg.taskStatus !== 'failed' && msg.taskStatus !== 'interrupted') {
             widgetTaskCompleteRef.current(false, msg.content || '任务执行失败')
           }
         }
@@ -993,6 +1041,12 @@ function App() {
 
   ws.onStreamStart.current = useCallback(() => {
     stopWaiting()
+    // 清除 lifecycle.start 超时推送的 auto_compacting streaming 消息
+    // （5秒超时推送的 taskStatus='auto_compacting' 消息，lifecycle.start 到达后应被清除）
+    const sid = activeSessionIdRef.current
+    if (sid) {
+      dispatch({ type: 'CLEAR_STREAMING_PLACEHOLDERS', sessionId: sid })
+    }
   }, [stopWaiting])
 
   ws.onBackendDisconnected.current = useCallback(async (reason: string) => {
@@ -1262,10 +1316,16 @@ function App() {
     autoRetryCountRef.current.set(sessionId, count + 1)
     isRecoveringRef.current = true
     console.log('[app] post-final error: auto-continue', { sessionId, retryCount: count + 1, errorMessage: errorMessage?.slice(0, 100) })
+    // 根据重试次数递进提示，让 AI 知道上次失败了需要换方法
+    const retryPrompt = count === 0
+      ? '继续'
+      : count === 1
+        ? '上次执行失败了，请换一种方法重新完成任务，确保真正完成'
+        : '已经失败多次了，请仔细检查后用完全不同的方法重试，务必完成任务'
     setTimeout(() => {
       const session = sessionsRef.current?.find((s) => s.id === sessionId)
       if (!session || !ws.connected || gateway.state !== 'ready') { isRecoveringRef.current = false; return }
-      void ws.sendMessage(sessionId, '继续', undefined, session.agentId, session.modelOverride).then((ack) => {
+      void ws.sendMessage(sessionId, retryPrompt, undefined, session.agentId, session.modelOverride).then((ack) => {
         registerRunBinding(ack, sessionId, undefined)
         // A5 fix: start timeout timer for the recovery run
         startWaiting()
@@ -1596,14 +1656,23 @@ function App() {
   }, [ws, gateway.state, startWaiting, registerRunBinding])
   sendContinueSilentlyRef.current = sendContinueSilently
 
-  const handleSetupComplete = useCallback(async () => {
+  const handleSetupComplete = useCallback(async (workspaceOverride?: string) => {
     try {
-      const ok = await setup.saveConfig()
+      const ok = await setup.saveConfig(workspaceOverride ? { workspace: workspaceOverride } : undefined)
       if (ok) {
         setShowSetup(false)
         void loadAgentWorkspaceMap()
         window.electronAPI.config.getAvailableModels().then(setAvailableModels).catch(() => {})
-        await gateway.start()
+        // 网关已在运行时必须 restart 才能加载新配置（如更换后的工作区），
+        // 否则 doStart 对 'ready' 状态直接返回，agent 仍用旧工作区
+        const g = gatewayRef.current
+        if (g && (g.state === 'ready' || g.state === 'starting' || g.state === 'restarting')) {
+          clearOfflineQueueRef.current?.()
+          await g.restart()
+          setWsReconnectKey((k) => k + 1)
+        } else {
+          await gateway.start()
+        }
       }
     } catch (err) {
       console.error('Setup completion failed:', err)
@@ -1812,7 +1881,9 @@ function App() {
                 onNext={async (workspace) => {
                   setup.updateConfig({ workspace })
                   // 直接完成设置，跳过 gateway 和 complete 步骤
-                  await handleSetupComplete()
+                  // 传入 workspace 作为 override，避免 updateConfig 的异步 setState
+                  // 尚未生效时 saveConfig 闭包读到旧工作区
+                  await handleSetupComplete(workspace)
                 }}
               />
             )}
@@ -2124,24 +2195,15 @@ function App() {
                   <p className="settings-value settings-workspace-path">{settingsWorkspace}</p>
                   <button
                     className="btn-folder-picker"
-                    onClick={async () => {
-                      try {
-                        const selected = await window.electronAPI.dialog.selectFolder(settingsWorkspace || undefined)
-                        if (selected) {
-                          setSettingsWorkspace(selected)
-                          const res = await window.electronAPI.config.saveWorkspace(selected)
-                          if (res.ok) {
-                            setup.updateConfig({ workspace: selected })
-                            void loadAgentWorkspaceMap()
-                            await restartGateway()
-                          }
-                        }
-                      } catch (err) {
-                        console.error('工作区设置失败:', err)
-                      }
+                    onClick={() => {
+                      // 跳转到向导页面完成工作区切换：向导会创建种子模板文件
+                      // （BOOTSTRAP.md 等），避免新工作区缺少模板导致网关报错
+                      setShowSettings(false)
+                      setup.setStep('workspace')
+                      setShowSetup(true)
                     }}
                   >
-                    选择文件夹
+                    更换工作区
                   </button>
                 </div>
               </div>

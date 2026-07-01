@@ -346,6 +346,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const activeRunIdRef = useRef<string | null>(null)
   const isAutoAbortRef = useRef(false)
   const isFrontendTimeoutRef = useRef(false)
+  // 标记前端是否发起了 abort（用户点停止/前端超时）。final 处理据此区分：
+  // 前端发起的 abort → 'user_aborted'（不触发 auto-continue）
+  // 网关主动 abort（LLM 超时等）→ 'interrupted'（触发 auto-continue）
+  const abortInitiatedRef = useRef(false)
   const directiveRunIdsRef = useRef<Set<string>>(new Set())
   // 记录每个会话最近一次已确认的 runId，供 abort 等非 chat 事件兜底关联
   const lastRunIdBySessionRef = useRef<Map<string, string>>(new Map())
@@ -809,6 +813,9 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           lastSegmentAccumulatedTextRef.current = null
           // W4 fix: clear finalRunIdsRef when a new run starts, preventing stale entries
           finalRunIdsRef.current.clear()
+          // 重置 abort 标记：新 run 开始时，之前的 abort（可能因网络断开未收到 final/aborted）
+          // 不应影响本 run 的 taskStatus 决策
+          abortInitiatedRef.current = false
           phaseRef.current = 'thinking'
           // 用 agent 事件的 runId 提前设置 activeRunIdRef
           // 这样后续的 tool.start/end 事件能关联到正确的消息
@@ -841,10 +848,19 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
             clearTimeout(lifecycleStartTimeoutRef.current)
             lifecycleStartTimeoutRef.current = null
           }
-          phaseRef.current = 'idle'
-          setBackendStatus('')
-          // agent 活动结束时减少 streamingCount
-          syncStreamingCount((c) => Math.max(0, c - 1))
+          // 防止 stale run 的延迟 end 事件干扰新 run：
+          // 如果 agentRunId 不为空且与当前 activeRunIdRef 不匹配，
+          // 说明这是已 abort 的旧 run 的延迟事件，跳过 streamingCount 递减，
+          // 避免把新 run 的 streamingCount 错误清零导致 UI 卡住。
+          const isStaleLifecycleEnd = agentRunId && activeRunIdRef.current && agentRunId !== activeRunIdRef.current
+          if (isStaleLifecycleEnd) {
+            console.log('[ws] lifecycle.end: stale runId, skipping streamingCount decrement', { agentRunId, activeRunId: activeRunIdRef.current })
+          } else {
+            phaseRef.current = 'idle'
+            setBackendStatus('')
+            // agent 活动结束时减少 streamingCount
+            syncStreamingCount((c) => Math.max(0, c - 1))
+          }
         }
       } else if (stream === 'compaction') {
         if (phase === 'start') {
@@ -1316,7 +1332,15 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // 修复: 当只有 thinking delta (无 text delta) 时，streamBuffer 未设置
       // 但 streamingCount 已在 thinking 分支中递增，需要同步递减
       // 同时确保 /compact 命令响应也能正确减少 streamingCount
-      if (hadStream || hadTimer || isCompactResponse) syncStreamingCount((c) => Math.max(0, c - 1))
+      // 防止 stale run 的延迟 final 事件干扰新 run：
+      // 如果 runId 与当前 activeRunIdRef 不匹配，说明是已 abort 的旧 run，
+      // 跳过 streamingCount 递减避免把新 run 的计数清零。
+      const isStaleFinal = activeRunIdRef.current && runId !== activeRunIdRef.current && agentLifecycleRunIdRef.current && runId !== agentLifecycleRunIdRef.current
+      if (isStaleFinal) {
+        console.log('[ws] final: stale runId, skipping streamingCount decrement', { runId, activeRunId: activeRunIdRef.current })
+      } else if (hadStream || hadTimer || isCompactResponse) {
+        syncStreamingCount((c) => Math.max(0, c - 1))
+      }
 
       // 空内容不创建消息，避免空白气泡（但有工具调用时仍然推送）
       // 例外：如果是对 /compact 命令的响应，则创建压缩完成消息
@@ -1358,7 +1382,8 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       }
 
       // taskStatus 决策：
-      // - stopReason='aborted'（LLM 超时/网关中断）→ 'interrupted'（不显示"已完成"）
+      // - stopReason='aborted' 且前端发起 abort → 'user_aborted'（不触发 auto-continue）
+      // - stopReason='aborted' 且网关主动 abort（LLM 超时等）→ 'interrupted'（触发 auto-continue）
       // - 有 agent 回复或工具调用 → 'completed'
       // - 完全失败（无回复且无工具调用）→ 'failed'
       const stopReason = payload.stopReason as string | undefined
@@ -1375,8 +1400,12 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       // If a tool failed and the agent didn't provide substantive follow-up text,
       // treat as interrupted so auto-continue can kick in
       const toolFailedWithoutRecovery = hasFailedTool && (!hasAgentReply || fullRunText.trim().length < 50)
+      // 区分前端主动 abort 与网关主动 abort（LLM 超时等）：
+      // abortInitiatedRef 在 abortSession 中置 true，这里读取后重置防止跨 run 泄漏。
+      const isUserAbort = abortInitiatedRef.current
+      abortInitiatedRef.current = false
       const taskStatus: TaskStatus = stopReason === 'aborted' || stopReason === 'length'
-        ? 'interrupted'
+        ? (isUserAbort ? 'user_aborted' : 'interrupted')
         : stopReason === 'error'
           ? 'failed'
           : toolFailedWithoutRecovery
@@ -1433,6 +1462,13 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         onContextOverflow.current?.(sessionKey)
       }
     } else if (state === 'error') {
+      // 防止 stale run 的延迟 error 事件干扰新 run
+      if (activeRunIdRef.current && runId !== activeRunIdRef.current && agentLifecycleRunIdRef.current && runId !== agentLifecycleRunIdRef.current) {
+        console.log('[ws] error: stale runId, skipping', { runId, activeRunId: activeRunIdRef.current })
+        cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
+        finalRunIdsRef.current.delete(runId)
+        return
+      }
       // 对齐官方 UI：error 事件在顶部弹窗提示错误，不影响最终消息展示。
       // error 事件的 payload.message 通常是错误文本（如 "⚠️ 🛠️ ... failed"），
       // 不作为 agent 回复显示。后续 final 事件会显示 agent 的完整回复。
@@ -1461,6 +1497,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
           // App.tsx 的 interrupted 路径已经会触发 auto-continue。
           // post-final error 不再调用 onToolFailure，避免同一次超时触发两次重试。
           console.log('[ws] post-final error but final was interrupted, auto-continue already handled by interrupted path, skipping', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120), finalTaskStatus })
+          hasErrorRef.current = false
+          setBackendStatus('')
+        } else if (finalTaskStatus === 'user_aborted') {
+          // 用户主动中止，不应触发 auto-continue
+          console.log('[ws] post-final error but final was user_aborted, skipping', { runId, sessionKey, rawErrorMsg: rawErrorMsg.slice(0, 120), finalTaskStatus })
           hasErrorRef.current = false
           setBackendStatus('')
         } else {
@@ -1600,6 +1641,13 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       }
       // W7: do not call onRunEnd in error handler, final event will do it
     } else if (state === 'aborted') {
+      // 防止 stale run 的延迟 aborted 事件干扰新 run
+      if (activeRunIdRef.current && runId !== activeRunIdRef.current && agentLifecycleRunIdRef.current && runId !== agentLifecycleRunIdRef.current) {
+        console.log('[ws] aborted: stale runId, skipping', { runId, activeRunId: activeRunIdRef.current })
+        cleanupStreamBuffers(runId, streamThrottleRef, lastPushedLenRef, idleCountRef, streamBufferRef, thinkingBufferRef, syncStreamingCount)
+        finalRunIdsRef.current.delete(runId)
+        return
+      }
       // W8: skip if already finalized
       if (finalRunIdsRef.current.has(runId)) {
         console.log('[ws] aborted event skipped: runId already finalized', { runId, sessionKey })
@@ -1613,6 +1661,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       const wasAutoAbort = isAutoAbortRef.current
       isFrontendTimeoutRef.current = false
       isAutoAbortRef.current = false
+      abortInitiatedRef.current = false
       let text: string
       if (wasFrontendTimeout) {
         text = '抱歉让你久等了，我接着完成'
@@ -1868,6 +1917,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         content: `发送失败: ${translateError(err instanceof Error ? err.message : String(err))}`,
         timestamp: Date.now(),
         status: 'error',
+        taskStatus: 'failed',
         agentId: agentId,
         sessionKey: normalizeSessionKey(builtSessionKey) || sessionKey,
       }
@@ -1879,6 +1929,10 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
   const abortSession = useCallback(async (sessionKey: string, agentId?: string, isAuto = false, isFrontendTimeout = false): Promise<{ success: boolean; error?: string }> => {
     isAutoAbortRef.current = isAuto
     isFrontendTimeoutRef.current = isFrontendTimeout
+    // 只有用户手动停止（非 auto、非 timeout）才标记为 user_aborted。
+    // auto abort（后端断线等）和 frontend timeout 不设此标记，
+    // 避免后续 final 的 aborted 被误判为用户主动中止而阻止 auto-continue。
+    abortInitiatedRef.current = !isAuto && !isFrontendTimeout
     const client = clientRef.current
     if (!client) {
       return { success: false, error: 'WebSocket 未连接' }
@@ -1916,6 +1970,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
         abortParams.agentId = agentId
       }
       await client.request('chat.abort', abortParams)
+      // 清除 lifecycle.start 超时定时器，防止 abort 后定时器仍触发推送假 streaming 消息
+      if (lifecycleStartTimeoutRef.current) {
+        clearTimeout(lifecycleStartTimeoutRef.current)
+        lifecycleStartTimeoutRef.current = null
+      }
       syncStreamingCount(0)
       streamBufferRef.current.clear()
       thinkingBufferRef.current.clear()
@@ -1925,6 +1984,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
+      hasErrorRef.current = false
       setBackendStatus('')
       emitTelemetry({
         event_name: 'chat_abort_result',
@@ -1943,6 +2003,11 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       console.error('[ws] chat.abort failed:', err)
       // 监听场景：chat.abort 请求执行失败
       const errorMessage = err instanceof Error ? err.message : String(err)
+      // 清除 lifecycle.start 超时定时器
+      if (lifecycleStartTimeoutRef.current) {
+        clearTimeout(lifecycleStartTimeoutRef.current)
+        lifecycleStartTimeoutRef.current = null
+      }
       syncStreamingCount(0)
       streamBufferRef.current.clear()
       thinkingBufferRef.current.clear()
@@ -1952,6 +2017,7 @@ export function useWebSocket({ url, token, enabled, userId, reconnectKey }: UseW
       activeRunIdRef.current = null
       agentLifecycleRunIdRef.current = null
       phaseRef.current = 'idle'
+      hasErrorRef.current = false
       setBackendStatus('')
       emitTelemetry({
         event_name: 'chat_abort_result',

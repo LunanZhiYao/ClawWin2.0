@@ -229,7 +229,7 @@ interface UseSetupReturn {
   clearError: () => void
   setStep: (step: SetupStep) => void
   updateConfig: (partial: Partial<SetupConfig>) => void
-  saveConfig: () => Promise<boolean>
+  saveConfig: (overrides?: Partial<SetupConfig>) => Promise<boolean>
   startGateway: () => Promise<void>
   /** 登录等场景写入 openclaw 后，重新把磁盘配置合并进向导 state */
   hydrateFromOpenclawDisk: () => Promise<void>
@@ -290,11 +290,13 @@ export function useSetup(): UseSetupReturn {
     setConfig((prev) => ({ ...prev, ...partial }))
   }, [])
 
-  const saveConfig = useCallback(async (): Promise<boolean> => {
+  const saveConfig = useCallback(async (overrides?: Partial<SetupConfig>): Promise<boolean> => {
     setSaveError(null)
     setIsSaving(true)
     try {
-      const cfg = config
+      // 合并 overrides，避免调用方刚 updateConfig（异步 setState）后立即 saveConfig 时
+      // 闭包中的 config 仍是旧值（典型场景：设置向导 workspace 步骤的 onNext）
+      const cfg = { ...config, ...overrides }
       // 模型配置可选（用户可能选择"之后再配置"）
       const hasModel = !!(cfg.provider && cfg.modelId && cfg.modelName && cfg.apiKey)
 
